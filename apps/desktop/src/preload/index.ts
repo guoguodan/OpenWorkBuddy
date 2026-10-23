@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('openwb', {
     }
   },
   artifact: {
-    open: (target: string) => ipcRenderer.invoke('artifact.open', target)
+    preview: (input: unknown) => ipcRenderer.invoke('artifact.preview', input)
   },
   memory: {
     list: (scope?: string) => ipcRenderer.invoke('memory.list', scope),

@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
+import { openExternal, openHtmlPreview, openImagePreview, openWithSystem, resolvePreview, type PreviewTarget } from './preview.js'
 
 app.setName('OpenWorkBuddy')
 
@@ -86,17 +87,27 @@ ipcMain.handle('conversation.history', async (_e, conversationId?: string) => {
   )
 })
 
-ipcMain.handle('artifact.open', async (_e, target: string) => {
+ipcMain.handle('artifact.preview', async (_e, input: PreviewTarget & { confirmedUrl?: boolean }) => {
   await daemonReady
-  if (typeof target !== 'string' || !target) throw new Error('非法交付物路径')
+  if (!input || typeof input.kind !== 'string') throw new Error('非法预览请求')
   const workspace = resolvedWorkspace ?? resolveWorkspace()
-  const abs = path.resolve(workspace, target)
-  if (abs !== workspace && !abs.startsWith(workspace + path.sep)) {
-    throw new Error(`路径越界: ${target}`)
+  const resolved = await resolvePreview(workspace, input, { confirmedUrl: input.confirmedUrl === true })
+  const title = typeof input.title === 'string' && input.title ? input.title : '预览'
+  switch (resolved.mode) {
+    case 'html-window':
+      await openHtmlPreview(resolved.absolutePath!, title, resolved.csp)
+      break
+    case 'image-window':
+      await openImagePreview(resolved.absolutePath!, title)
+      break
+    case 'browser':
+      await openExternal(resolved.url!)
+      break
+    case 'system':
+      await openWithSystem(resolved.absolutePath!)
+      break
   }
-  const error = await shell.openPath(abs)
-  if (error) throw new Error(error)
-  return { path: abs }
+  return resolved
 })
 
 ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string }) => {

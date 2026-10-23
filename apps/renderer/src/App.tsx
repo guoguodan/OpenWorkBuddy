@@ -306,12 +306,20 @@ export default function App() {
 
   const openArtifact = async (artifact: ArtifactInfo) => {
     try {
-      if (artifact.kind === 'url') {
-        if (artifact.url) window.open(artifact.url, '_blank', 'noopener')
-        return
-      }
-      if (!artifact.path) return
-      await window.openwb.artifact.open(artifact.path)
+      if (artifact.kind === 'url' && !artifact.url) return
+      if (artifact.kind !== 'url' && !artifact.path) return
+      const confirmedUrl =
+        artifact.kind === 'url'
+          ? window.confirm(`即将用系统浏览器打开外部链接:\n${artifact.url}\n\n只在你信任该地址时继续。`)
+          : false
+      if (artifact.kind === 'url' && !confirmedUrl) return
+      await window.openwb.artifact.preview({
+        kind: artifact.kind,
+        ...(artifact.path ? { path: artifact.path } : {}),
+        ...(artifact.url ? { url: artifact.url } : {}),
+        title: artifact.title,
+        ...(confirmedUrl ? { confirmedUrl: true } : {})
+      })
     } catch (err) {
       note('system', `打开交付物失败: ${(err as Error).message}`)
     }

@@ -91,7 +91,13 @@ interface Window {
       remove: (id: string) => Promise<{ id: string }>
     }
     artifact: {
-      open: (target: string) => Promise<{ path: string }>
+      preview: (input: {
+        kind: 'file' | 'html' | 'url' | 'image'
+        path?: string
+        url?: string
+        title?: string
+        confirmedUrl?: boolean
+      }) => Promise<{ mode: string; size?: number; sha256?: string }>
     }
     plugins: {
       list: () => Promise<{ plugins: PluginSnapshotInfo[] }>
