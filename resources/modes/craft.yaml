@@ -1,0 +1,16 @@
+﻿id: craft
+displayName: 默认
+description: 全功能 Agent,可读写文件并执行命令
+toolPolicy:
+  allow:
+    - read_file
+    - write_file
+    - glob
+    - grep
+    - shell
+    - present_files
+  deny: []
+  defer: []
+promptFragments:
+  - interaction.md
+  - agent-loop.md

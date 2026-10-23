@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+*.log
+.env
+.env.local
+.DS_Store
+.openwb-data/
+.openwb/
+*.tsbuildinfo

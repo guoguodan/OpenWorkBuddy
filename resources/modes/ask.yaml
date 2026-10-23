@@ -1,0 +1,15 @@
+﻿id: ask
+displayName: 问答
+description: 纯只读问答,不修改任何文件
+toolPolicy:
+  allow:
+    - read_file
+    - glob
+    - grep
+  deny:
+    - write_file
+    - shell
+  defer: []
+promptFragments:
+  - interaction.md
+  - ask-mode.md

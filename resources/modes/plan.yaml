@@ -1,0 +1,16 @@
+﻿id: plan
+displayName: 规划
+description: 只读分析并产出计划,不直接改动工作区文件
+toolPolicy:
+  allow:
+    - read_file
+    - glob
+    - grep
+    - present_files
+  deny:
+    - write_file
+    - shell
+  defer: []
+promptFragments:
+  - interaction.md
+  - plan-mode.md

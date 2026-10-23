@@ -1,0 +1,16 @@
+﻿id: expert
+displayName: 专家
+description: 以指定专家身份只读分析
+toolPolicy:
+  allow:
+    - read_file
+    - glob
+    - grep
+    - present_files
+  deny:
+    - write_file
+    - shell
+  defer: []
+promptFragments:
+  - interaction.md
+  - expert-mode.md

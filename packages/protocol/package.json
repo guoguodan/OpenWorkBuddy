@@ -1,0 +1,12 @@
+﻿{
+    "private":  true,
+    "name":  "@openwb/protocol",
+    "version":  "0.0.1",
+    "dependencies":  {
+                         "zod":  "^3.25.76"
+                     },
+    "scripts":  {
+                    "lint":  "eslint .",
+                    "test":  "vitest run --passWithNoTests"
+                }
+}

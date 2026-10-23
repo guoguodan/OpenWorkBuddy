@@ -1,0 +1,11 @@
+﻿id: quick
+displayName: 快速
+description: 不调用任何工具,只做纯文本回答
+toolPolicy:
+  allow: []
+  deny:
+    - "*"
+  defer: []
+promptFragments:
+  - interaction.md
+  - quick-mode.md
