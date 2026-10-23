@@ -14,6 +14,7 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
+  seq?: number
   createdAt?: string
   streaming?: boolean
 }
@@ -24,6 +25,8 @@ interface ChatViewProps {
   artifacts: ArtifactInfo[]
   modeLabel: string
   busy: boolean
+  /** 从全局搜索跳转过来时,需要滚到并高亮的消息序号;nonce 让同一序号可重复触发 */
+  focusRequest?: { seq: number; nonce: number } | null
   onOpenArtifact: (artifact: ArtifactInfo) => void
 }
 
@@ -52,7 +55,15 @@ function ToolRows({ tools }: { tools: ToolCall[] }) {
   )
 }
 
-export function ChatView({ messages, tools, artifacts, modeLabel, busy, onOpenArtifact }: ChatViewProps) {
+export function ChatView({
+  messages,
+  tools,
+  artifacts,
+  modeLabel,
+  busy,
+  focusRequest,
+  onOpenArtifact
+}: ChatViewProps) {
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
 
@@ -68,6 +79,16 @@ export function ChatView({ messages, tools, artifacts, modeLabel, busy, onOpenAr
   }, [])
 
   useEffect(() => {
+    const el = ref.current
+    if (!el || !focusRequest) return
+    const target = el.querySelector<HTMLElement>(`[data-seq="${focusRequest.seq}"]`)
+    if (!target) return
+    // 跳转要压过"贴底"逻辑,否则滚到目标后又被拉回最后一条。
+    stick.current = false
+    target.scrollIntoView({ block: 'center' })
+  }, [focusRequest, messages])
+
+  useEffect(() => {
     if (!stick.current) return
     const el = ref.current
     if (el) el.scrollTop = el.scrollHeight
@@ -80,7 +101,11 @@ export function ChatView({ messages, tools, artifacts, modeLabel, busy, onOpenAr
           {messages.map((m, idx) => {
             const isLast = idx === messages.length - 1
             return (
-              <div key={m.id} className={`owb-msg owb-msg--${m.role}`}>
+              <div
+                key={m.id}
+                className={`owb-msg owb-msg--${m.role}${m.seq !== undefined && m.seq === focusRequest?.seq ? ' owb-msg--focused' : ''}`}
+                data-seq={m.seq}
+              >
                 <Avatar role={m.role} />
                 <div className="owb-msg__body">
                   <div className="owb-msg__header">

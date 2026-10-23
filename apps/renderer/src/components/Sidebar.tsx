@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react'
 import {
   IconBrain,
   IconChat,
@@ -28,8 +27,8 @@ interface SidebarProps {
   memoryCount: number
   model: string
   skillCount: number
-  focusSearchToken: number
   onToggleCollapse: () => void
+  onOpenSearch: () => void
   onToggleTheme: () => void
   onNew: () => void
   onSelect: (id: string) => void
@@ -65,8 +64,8 @@ export function Sidebar({
   memoryCount,
   model,
   skillCount,
-  focusSearchToken,
   onToggleCollapse,
+  onOpenSearch,
   onToggleTheme,
   onNew,
   onSelect,
@@ -75,18 +74,7 @@ export function Sidebar({
   onOpenSkills,
   onOpenConnectors
 }: SidebarProps) {
-  const [query, setQuery] = useState('')
-  const searchRef = useRef<HTMLInputElement>(null)
-  const filtered = query.trim()
-    ? conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()))
-    : conversations
-
-  useEffect(() => {
-    if (focusSearchToken > 0) {
-      searchRef.current?.focus()
-      searchRef.current?.select()
-    }
-  }, [focusSearchToken])
+  const filtered = conversations
 
   return (
     <aside className={`owb-sidebar${collapsed ? ' owb-sidebar--collapsed' : ''}`}>
@@ -107,16 +95,10 @@ export function Sidebar({
       </div>
 
       <div className="owb-sidebar__search">
-        <div className="owb-search-pill">
+        <button type="button" className="owb-search-pill" onClick={onOpenSearch} title="全局搜索 (Ctrl+K)">
           <IconSearch size={15} />
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索会话"
-            aria-label="搜索会话"
-          />
-        </div>
+          <span className="owb-search-pill__placeholder">搜索会话</span>
+        </button>
       </div>
 
       <nav className="owb-sidebar__nav">
@@ -145,7 +127,7 @@ export function Sidebar({
       <div className="owb-sidebar__list">
         {filtered.length === 0 && (
           <div className="owb-conv-empty">
-            {query ? '没有匹配的会话' : '还没有会话'}
+            还没有会话
           </div>
         )}
         {filtered.map((c) => (

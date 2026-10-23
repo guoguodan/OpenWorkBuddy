@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('openwb', {
   skills: {
     list: () => ipcRenderer.invoke('skills.list')
   },
+  search: {
+    query: (query: string) => ipcRenderer.invoke('search.query', query)
+  },
   workspace: {
     info: () => ipcRenderer.invoke('workspace.info'),
     open: () => ipcRenderer.invoke('workspace.open')

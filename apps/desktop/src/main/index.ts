@@ -69,6 +69,12 @@ ipcMain.handle('modes.list', async () => {
   return request<{ modes: unknown[] }>({ cmd: 'modes.list' })
 })
 
+ipcMain.handle('search.query', async (_e, query: string) => {
+  await daemonReady
+  if (typeof query !== 'string') throw new Error('非法搜索词')
+  return request<{ query: string; groups: unknown[] }>({ cmd: 'search.query', query })
+})
+
 ipcMain.handle('skills.list', async () => {
   await daemonReady
   return request<{ skills: unknown[]; issues: unknown[] }>({ cmd: 'skills.list' })

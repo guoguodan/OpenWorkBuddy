@@ -59,6 +59,24 @@ interface ArtifactInfoLike {
   sha256?: string | null
 }
 
+interface SearchHitInfo {
+  group: 'message' | 'artifact' | 'task'
+  id: string
+  conversationId: string
+  conversationTitle: string
+  seq: number | null
+  title: string
+  snippet: string
+  role?: string
+  createdAt: string
+}
+
+interface SearchGroupInfo {
+  group: 'message' | 'artifact' | 'task'
+  total: number
+  items: SearchHitInfo[]
+}
+
 interface Window {
   openwb: {
     modes: {
@@ -73,6 +91,9 @@ interface Window {
         skills: Array<{ name: string; description: string; scope: string }>
         issues: Array<{ path: string; reason: string }>
       }>
+    }
+    search: {
+      query: (q: string) => Promise<{ query: string; groups: SearchGroupInfo[] }>
     }
     conversation: {
       send: (input: { text: string; mode?: string; conversationId?: string }) => Promise<void>

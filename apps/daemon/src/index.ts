@@ -26,6 +26,7 @@ import {
   insertArtifacts,
   countArtifactsByTask,
   listArtifactsByConversation,
+  search,
   createConversation,
   createTask,
   deleteConversation,
@@ -1119,6 +1120,21 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       conversationId: id,
       messages: listMessages(db, id),
       artifacts: listArtifactsByConversation(db, id)
+    })
+    return true
+  }
+
+  if (msg.cmd === 'search.query') {
+    const query = typeof msg.query === 'string' ? msg.query.slice(0, 200) : ''
+    if (query.trim().length === 0) {
+      emit({ ...base, type: 'search.result', query, groups: [] })
+      return true
+    }
+    if (!dbHandle) throw new Error('DB_UNAVAILABLE')
+    emit({
+      ...base,
+      type: 'search.result',
+      ...search(dbHandle.raw, query)
     })
     return true
   }

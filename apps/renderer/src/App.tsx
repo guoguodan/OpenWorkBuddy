@@ -6,6 +6,7 @@ import { ContentHeader } from './components/ContentHeader'
 import { InfoPanel, type SkillInfo } from './components/InfoPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { MemoryPanel, type MemoryItem } from './components/MemoryPanel'
+import { SearchPanel, type SearchGroup, type SearchHit } from './components/SearchPanel'
 import { Sidebar, type ConversationSummary } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { WelcomeView } from './components/WelcomeView'
@@ -73,9 +74,10 @@ export default function App() {
   const [showMemory, setShowMemory] = useState(false)
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [panel, setPanel] = useState<'skills' | 'connectors' | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [focusTarget, setFocusTarget] = useState<{ seq: number; nonce: number } | null>(null)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
   const [theme, setTheme] = useState<'light' | 'dark'>(readTheme)
-  const [focusSearchToken, setFocusSearchToken] = useState(0)
   const streaming = useRef(false)
   const activeConversation = useRef('')
 
@@ -120,6 +122,7 @@ export default function App() {
             id: m.id,
             role: m.role === 'user' ? 'user' : 'assistant',
             text: content?.text ?? '',
+            seq: m.seq,
             createdAt: m.createdAt
           } satisfies ChatMessage
         })
@@ -266,6 +269,7 @@ export default function App() {
     if (busy) return
     setConversationId(id)
     activeConversation.current = id
+    setFocusTarget(null)
     setTools([])
     setNotices([])
     await loadHistory(id)
@@ -278,6 +282,7 @@ export default function App() {
     setConversationId(r.conversationId)
     activeConversation.current = r.conversationId
     setMessages([])
+    setFocusTarget(null)
     setTools([])
     setNotices([])
     await loadConversations(r.conversationId)
@@ -325,6 +330,34 @@ export default function App() {
     }
   }
 
+  const runSearch = async (q: string): Promise<SearchGroup[]> => {
+    const r = await window.openwb.search.query(q)
+    return (r.groups ?? []) as SearchGroup[]
+  }
+
+  const jumpToHit = async (hit: SearchHit) => {
+    if (!hit.conversationId) return
+    if (hit.conversationId !== activeConversation.current) {
+      if (busy) {
+        note('system', '任务运行中,结束后再跳转到其他会话。')
+        return
+      }
+      await switchConversation(hit.conversationId)
+    }
+    if (hit.seq !== null) setFocusTarget({ seq: hit.seq, nonce: Date.now() })
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+
   const composer = (showModes: boolean, autoFocus = false) => (
     <Composer
       value={input}
@@ -349,7 +382,7 @@ export default function App() {
         theme={theme}
         onToggleCollapse={() => setCollapsed((v) => !v)}
         onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-        onFocusSearch={() => setFocusSearchToken((v) => v + 1)}
+        onFocusSearch={() => setSearchOpen(true)}
         onClearInput={() => setInput('')}
         onToggleMemory={() => {
           setShowMemory((v) => !v)
@@ -368,8 +401,8 @@ export default function App() {
           memoryCount={memories.length}
           model={model}
           skillCount={skills.length}
-          focusSearchToken={focusSearchToken}
           onToggleCollapse={() => setCollapsed((v) => !v)}
+          onOpenSearch={() => setSearchOpen(true)}
           onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
           onNew={() => void newConversation()}
           onSelect={(id) => void switchConversation(id)}
@@ -410,6 +443,7 @@ export default function App() {
                   artifacts={artifacts}
                   modeLabel={modeLabel}
                   busy={busy}
+                  focusRequest={focusTarget}
                   onOpenArtifact={(a) => void openArtifact(a)}
                 />
                 <div className="owb-chat__input">
@@ -455,6 +489,13 @@ export default function App() {
           onClose={() => setPanel(null)}
         />
       ) : null}
+
+      <SearchPanel
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onQuery={runSearch}
+        onJump={(hit) => void jumpToHit(hit)}
+      />
     </div>
   )
 }
