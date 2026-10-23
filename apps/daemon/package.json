@@ -24,10 +24,12 @@
         "@openwb/plugins": "workspace:*",
         "@openwb/skills": "workspace:*",
         "@openwb/tools": "workspace:*",
+        "@openwb/workflow": "workspace:*",
         "ai": "^4.3.19",
         "better-sqlite3": "^13.0.3",
         "dotenv": "^18.0.9",
         "drizzle-orm": "^0.45.4",
+        "rrule": "^2.8.1",
         "yaml": "^2.9.1",
         "zod": "^3.25.76"
     }

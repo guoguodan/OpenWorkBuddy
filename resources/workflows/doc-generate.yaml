@@ -1,0 +1,70 @@
+schemaVersion: 1
+id: doc-generate
+name: 文档生成
+description: 大纲、分节撰写、合并导出
+mode: craft
+limits:
+  maxDurationSec: 900
+  maxModelCalls: 30
+inputs:
+  - name: topic
+    required: true
+    description: 文档主题
+  - name: audience
+    required: false
+    description: 读者对象
+    default: 工程团队
+outputs:
+  - name: document
+    kind: file
+    path: reports/{{run.id}}/document.md
+phases:
+  - id: outline
+    title: 大纲
+    parallel: false
+    steps:
+      - id: sections
+        type: prompt
+        prompt: |
+          为主题「{{inputs.topic}}」面向「{{inputs.audience}}」设计 3-5 个章节。
+          只输出 JSON:{"sections":[{"title":"...","goal":"..."}]}
+        save_as: outline
+        output: json
+        schema:
+          type: object
+          required: [sections]
+          properties:
+            sections:
+              type: array
+              minItems: 3
+              maxItems: 5
+              items:
+                type: object
+                required: [title, goal]
+                properties:
+                  title: { type: string }
+                  goal: { type: string }
+  - id: write
+    title: 分节撰写
+    parallel: true
+    fanout: "{{steps.outline.sections}}"
+    steps:
+      - id: write-one
+        type: prompt
+        prompt: |
+          撰写章节「{{item.title}}」,写作目标:{{item.goal}}。
+          主题:{{inputs.topic}};读者:{{inputs.audience}}
+        save_as: bodies
+        output: markdown
+  - id: assemble
+    title: 合并导出
+    parallel: false
+    steps:
+      - id: merge
+        type: prompt
+        prompt: |
+          合并成完整文档,保留章节标题,加入简短导语。
+          大纲:{{steps.outline | json}}
+          正文:{{steps.bodies | join("\n\n") | truncate(60000)}}
+        save_as: document
+        output: markdown

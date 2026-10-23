@@ -58,6 +58,7 @@ import {
 } from '@openwb/plugins'
 import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
 import { summarizeToolResult, toToolFailure } from './tool-summary.js'
+import { WorkflowService } from './workflows/service.js'
 
 const WORKSPACE = resolve(process.env.OPENWB_WORKSPACE ?? process.cwd())
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
@@ -90,6 +91,7 @@ async function resolveResourceDir(envValue: string | undefined, name: string): P
 
 const MODES_DIR = await resolveResourceDir(process.env.OPENWB_MODES_DIR, 'modes')
 const PROMPTS_DIR = await resolveResourceDir(process.env.OPENWB_PROMPTS_DIR, 'prompts')
+const WORKFLOWS_DIR = await resolveResourceDir(process.env.OPENWB_WORKFLOWS_DIR, 'workflows')
 const SKILLS_DIR = process.env.OPENWB_SKILLS_DIR
 // 内置技能与模式目录同级:resources/modes -> resources/skills
 const BUNDLED_SKILLS_DIR =
@@ -434,6 +436,36 @@ function requireDb() {
   return dbHandle.db
 }
 
+/**
+ * 工作流/自动化服务。
+ * 放在 requireDb 之后、命令处理之前:命令只做参数校验与转发,
+ * 真正的编排、落盘、调度都在服务内,避免 index.ts 继续膨胀。
+ */
+const workflowService: WorkflowService | null = dbHandle
+  ? new WorkflowService({
+      db: dbHandle.db,
+      workspaceId,
+      workspaceRoot: WORKSPACE,
+      dataDir: DATA_DIR,
+      builtinDir: WORKFLOWS_DIR,
+      registry,
+      emit: (event) => emit(event),
+      log: (message) => process.stderr.write(`${message}\n`),
+      runAutomationPrompt: async ({ conversationId, prompt, modeId }) => {
+        // WM-AUTO-03:新会话、空上下文;不读取任何历史消息。
+        // 但审计链必须完整:先把 prompt 写成 user 消息,再执行。
+        appendMessage(requireDb(), {
+          conversationId,
+          role: 'user',
+          content: { text: prompt }
+        })
+        const mode = resolveMode(modeId)
+        const status = await runAgent({ text: prompt, mode, conversationId })
+        return { status }
+      }
+    })
+  : null
+
 function conversationOrThrow(id: string) {
   const conv = getConversation(requireDb(), id)
   if (!conv) throw new Error(`会话不存在: ${id}`)
@@ -464,7 +496,10 @@ async function appendRunLog(
   }
 }
 
-async function runMock(input: RunInput, prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt }) {
+async function runMock(
+  input: RunInput,
+  prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt }
+): Promise<'done'> {
   const db = requireDb()
   const taskId = createTask(db, { conversationId: input.conversationId, title: input.text.slice(0, 80) || '未命名任务' })
   transitionTask(db, taskId, 'running')
@@ -519,7 +554,7 @@ async function runMock(input: RunInput, prepared: { system: string; modeTools: s
       toolCalls: 1
     })
     emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
-    return
+    return 'done'
   }
 
   const canRead = isToolAllowed(input.mode, 'read_file')
@@ -557,9 +592,10 @@ async function runMock(input: RunInput, prepared: { system: string; modeTools: s
   appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: canRead ? 1 : 0 })
   await appendRunLog(db, { conversationId: input.conversationId, text: input.text, modeId: input.mode.id, toolCalls: canRead ? 1 : 0 })
   emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+  return 'done'
 }
 
-async function runAgent(input: RunInput) {
+async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
   const db = requireDb()
   const { text, mode, conversationId } = input
 
@@ -587,12 +623,11 @@ async function runAgent(input: RunInput) {
     prepared = await prepareMode(mode, injected.text)
   } catch (err) {
     emit({ type: 'error', code: 'PROMPT_FAILED', message: (err as Error).message, retryable: false })
-    return
+    return 'failed'
   }
 
   if (MOCK) {
-    await runMock(input, prepared)
-    return
+    return await runMock(input, prepared)
   }
 
   skills.reset()
@@ -744,6 +779,7 @@ async function runAgent(input: RunInput) {
       },
       ...(activeSkill ? { skill: activeSkill } : {})
     })
+    return 'done'
   } catch (err) {
     const message = (err as Error).message
     appendMessage(db, {
@@ -759,6 +795,7 @@ async function runAgent(input: RunInput) {
     }
     appendEvent(db, conversationId, 'run.failed', { taskId, message: message.slice(0, 300) })
     emit({ type: 'error', code: 'AGENT_FAILED', message, retryable: true })
+    return 'failed'
   }
 }
 
@@ -997,6 +1034,104 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     return true
   }
 
+  if (msg.cmd === 'workflow.list') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    const result = await workflowService.list()
+    emit({ ...base, type: 'workflow.list', ...result })
+    return true
+  }
+
+  if (msg.cmd === 'workflow.run') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    if (typeof msg.workflowId !== 'string' || msg.workflowId.length === 0) throw new Error('缺少 workflowId')
+    const conversationId = resolveConversationId(msg.conversationId)
+    const inputs =
+      msg.inputs !== null && typeof msg.inputs === 'object' && !Array.isArray(msg.inputs)
+        ? (msg.inputs as Record<string, unknown>)
+        : {}
+    const started = await workflowService.start({
+      workflowId: msg.workflowId,
+      inputs,
+      conversationId,
+      ...(typeof msg.runId === 'string' && msg.runId.length > 0 ? { runId: msg.runId } : {}),
+      ...(msg.resume === true ? { resume: true } : {})
+    })
+    emit({ ...base, type: 'workflow.queued', ...started, conversationId })
+    return true
+  }
+
+  if (msg.cmd === 'workflow.resume') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    if (typeof msg.runId !== 'string' || msg.runId.length === 0) throw new Error('缺少 runId')
+    const conversationId = resolveConversationId(msg.conversationId)
+    const started = await workflowService.resume(msg.runId, conversationId)
+    emit({ ...base, type: 'workflow.queued', ...started, conversationId, resume: true })
+    return true
+  }
+
+  if (msg.cmd === 'workflow.cancel') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    if (typeof msg.runId !== 'string' || msg.runId.length === 0) throw new Error('缺少 runId')
+    const cancelled = workflowService.cancel(msg.runId)
+    emit({ ...base, type: 'workflow.cancelled', runId: msg.runId, cancelled })
+    return true
+  }
+
+  if (msg.cmd === 'automation.list') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    emit({ ...base, type: 'automation.list', automations: workflowService.listAutomations() })
+    return true
+  }
+
+  if (msg.cmd === 'automation.create') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    if (typeof msg.name !== 'string' || msg.name.length === 0) throw new Error('缺少 name')
+    if (typeof msg.prompt !== 'string' || msg.prompt.length === 0) throw new Error('缺少 prompt')
+    if (msg.scheduleType !== 'once' && msg.scheduleType !== 'rrule') throw new Error('scheduleType 必须是 once 或 rrule')
+    const created = workflowService.createAutomation({
+      workspaceId,
+      name: msg.name,
+      scheduleType: msg.scheduleType,
+      prompt: msg.prompt,
+      modeId: typeof msg.modeId === 'string' ? msg.modeId : 'craft',
+      ...(typeof msg.rrule === 'string' ? { rrule: msg.rrule } : {}),
+      ...(typeof msg.scheduledAt === 'string' ? { scheduledAt: msg.scheduledAt } : {}),
+      ...(typeof msg.timezone === 'string' ? { timezone: msg.timezone } : {}),
+      ...(typeof msg.validUntil === 'string' ? { validUntil: msg.validUntil } : {}),
+      ...(typeof msg.nextRunAt === 'string' ? { nextRunAt: msg.nextRunAt } : {}),
+      ...(msg.enabled === false ? { enabled: false } : {})
+    })
+    emit({ ...base, type: 'automation.created', automation: created })
+    return true
+  }
+
+  if (msg.cmd === 'automation.toggle') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    if (typeof msg.id !== 'string') throw new Error('缺少 id')
+    if (typeof msg.enabled !== 'boolean') throw new Error('缺少 enabled')
+    workflowService.updateAutomation(msg.id, { enabled: msg.enabled })
+    emit({ ...base, type: 'automation.updated', id: msg.id, enabled: msg.enabled })
+    return true
+  }
+
+  if (msg.cmd === 'automation.delete') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    if (typeof msg.id !== 'string') throw new Error('缺少 id')
+    workflowService.deleteAutomation(msg.id)
+    emit({ ...base, type: 'automation.deleted', id: msg.id })
+    return true
+  }
+
+  if (msg.cmd === 'automation.scan') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    const claimed = await workflowService.scan(
+      typeof msg.now === 'string' ? msg.now : undefined,
+      { startup: msg.startup === true }
+    )
+    emit({ ...base, type: 'automation.scanned', claimed })
+    return true
+  }
+
   return false
 }
 
@@ -1089,6 +1224,8 @@ process.stdin.on('end', () => {
   }
   void queue
     .finally(async () => {
+      // 先取消并等待后台工作流/自动化落盘,再关数据库
+      await workflowService?.shutdown()
       await pluginRuntime.stopAll()
       dbHandle?.raw.close()
     })
@@ -1111,3 +1248,7 @@ emit({
   skills: skills.list().map((s) => ({ name: s.name, description: s.description })),
   plugins: pluginStatusList()
 })
+
+// 启动补跑放在 ready 之后:桌面端先看到可交互界面,补跑在后台进行。
+// 验收脚本需要手动控制时钟,因此允许用 OPENWB_AUTOMATION_AUTOSTART=0 关闭。
+if (process.env.OPENWB_AUTOMATION_AUTOSTART !== '0') workflowService?.startScheduler()

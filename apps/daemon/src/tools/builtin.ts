@@ -124,25 +124,43 @@ export const shellTool: ToolDescriptor<z.infer<typeof shellParams>, { code: numb
       const child = spawn(command, args, { cwd: ctx.workspaceRoot, shell: false })
       let stdout = ''
       let stderr = ''
+      let settled = false
+      const finish = (fn: () => void) => {
+        if (settled) return
+        settled = true
+        ctx.signal?.removeEventListener('abort', onAbort)
+        fn()
+      }
+      // 取消必须真的杀掉子进程:只改数据库状态不算"停下"
+      const onAbort = () => {
+        child.kill()
+        finish(() => rej(new Error('已取消')))
+      }
+      if (ctx.signal) {
+        if (ctx.signal.aborted) onAbort()
+        else ctx.signal.addEventListener('abort', onAbort, { once: true })
+      }
       child.stdout.on('data', (b) => { stdout += String(b) })
       child.stderr.on('data', (b) => { stderr += String(b) })
       child.on('error', (err) => {
-        const code = (err as NodeJS.ErrnoException).code
-        if (code === 'ENOENT') {
-          rej(
-            new Error(
-              `命令 "${command}" 在本机不存在(ENOENT)。Windows 下没有 ls/cat/rm 等 Unix 命令;列目录用 glob(pattern="*"),读文件用 read_file。`
+        finish(() => {
+          const code = (err as NodeJS.ErrnoException).code
+          if (code === 'ENOENT') {
+            rej(
+              new Error(
+                `命令 "${command}" 在本机不存在(ENOENT)。Windows 下没有 ls/cat/rm 等 Unix 命令;列目录用 glob(pattern="*"),读文件用 read_file。`
+              )
             )
-          )
-          return
-        }
-        rej(err)
+            return
+          }
+          rej(err)
+        })
       })
-      child.on('close', (code) => res({
+      child.on('close', (code) => finish(() => res({
         code,
         stdout: stdout.slice(0, 20000),
         stderr: stderr.slice(0, 8000)
-      }))
+      })))
     })
   }
 }

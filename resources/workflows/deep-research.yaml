@@ -1,0 +1,85 @@
+schemaVersion: 1
+id: deep-research
+name: 深度研究
+description: 多角度检索、抓取、交叉核验后产出带来源引用的报告
+mode: craft
+limits:
+  maxDurationSec: 900
+  maxModelCalls: 40
+inputs:
+  - name: question
+    required: true
+    description: 要研究的问题
+outputs:
+  - name: report
+    kind: file
+    path: reports/{{run.id}}/report.md
+phases:
+  - id: scope
+    title: 拆解
+    parallel: false
+    steps:
+      - id: angles
+        type: prompt
+        prompt: |
+          把问题拆成 5 个互补的检索角度。每个角度给出 1 句检索式。
+          只输出 JSON,不要任何解释文字。
+          问题:{{inputs.question}}
+        save_as: angles
+        output: json
+        schema:
+          type: object
+          required: [angles]
+          properties:
+            angles:
+              type: array
+              minItems: 3
+              maxItems: 5
+              items: { type: string }
+  - id: search
+    title: 检索
+    parallel: true
+    fanout: "{{steps.angles.angles}}"
+    steps:
+      - id: search-one
+        type: tool
+        tool: web_search
+        args:
+          query: "{{item}}"
+          limit: 8
+        save_as: results
+        retry: { maxAttempts: 2, backoffMs: 50 }
+  - id: fetch
+    title: 抓取
+    parallel: false
+    steps:
+      - id: fetch-pages
+        type: tool
+        tool: web_fetch
+        args:
+          urls: "{{steps.results | flatten | unique | limit(15)}}"
+        save_as: pages
+  - id: verify
+    title: 核验
+    parallel: false
+    steps:
+      - id: cross-check
+        type: prompt
+        prompt: |
+          对每条论断用 3 个独立来源交叉验证,标注 supported / contradicted / unknown。
+          检索结果:{{steps.results | json | truncate(20000)}}
+          抓取正文:{{steps.pages | json | truncate(40000)}}
+        save_as: verification
+        output: markdown
+  - id: synthesize
+    title: 汇总
+    parallel: false
+    steps:
+      - id: write-report
+        type: prompt
+        prompt: |
+          基于核验结果写报告,每条结论附来源链接。不确定的明确标注。
+          问题:{{inputs.question}}
+          核验:{{steps.verification}}
+        save_as: report
+        output: markdown

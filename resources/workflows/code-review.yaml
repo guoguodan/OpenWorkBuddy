@@ -1,0 +1,61 @@
+schemaVersion: 1
+id: code-review
+name: 代码审查
+description: 读取工作区变更,逐文件审查后汇总风险
+mode: craft
+limits:
+  maxDurationSec: 600
+  maxModelCalls: 30
+inputs:
+  - name: focus
+    required: false
+    description: 关注的方面,例如并发、安全、错误处理
+    default: 正确性与可维护性
+outputs:
+  - name: report
+    kind: file
+    path: reports/{{run.id}}/code-review.md
+phases:
+  - id: collect
+    title: 读取变更
+    parallel: false
+    steps:
+      - id: list-files
+        type: tool
+        tool: glob
+        args:
+          pattern: "**/*.{ts,tsx,js,jsx}"
+          limit: 40
+        save_as: files
+  - id: review
+    title: 逐文件审查
+    parallel: true
+    fanout: "{{steps.files | limit(6)}}"
+    steps:
+      - id: read-one
+        type: tool
+        tool: read_file
+        args:
+          path: "{{item}}"
+        save_as: file-content
+      - id: review-one
+        type: prompt
+        prompt: |
+          审查文件 {{item}}。只报告真实风险,标注严重度(P0/P1/P2)与行号线索。
+          关注:{{inputs.focus}}
+          文件内容:
+          {{steps.file-content | truncate(20000)}}
+        save_as: findings
+        output: markdown
+  - id: summarize
+    title: 汇总风险
+    parallel: false
+    steps:
+      - id: merge
+        type: prompt
+        prompt: |
+          把逐文件审查结果合并成一份按风险排序的报告。
+          文件:{{steps.files | json | truncate(4000)}}
+          发现:{{steps.findings | join("\n\n---\n\n") | truncate(40000)}}
+        save_as: report
+        output: markdown
