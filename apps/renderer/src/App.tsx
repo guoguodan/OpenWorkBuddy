@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView'
+import { Composer } from './components/Composer'
+import { ContentHeader } from './components/ContentHeader'
+import { InfoPanel, type SkillInfo } from './components/InfoPanel'
+import { MemoryPanel, type MemoryItem } from './components/MemoryPanel'
+import { Sidebar, type ConversationSummary } from './components/Sidebar'
+import { TopBar } from './components/TopBar'
+import { WelcomeView } from './components/WelcomeView'
+import { IconCheck, IconSparkle, IconTool } from './components/Icons'
+import './styles/tokens.css'
+import './styles/app.css'
 
-type ToolEvent = { callId: string; name: string; ok: boolean | null; summary: string }
 type ModeInfo = { id: string; displayName: string; description: string }
-type ConversationInfo = { id: string; title: string; modeId: string; updatedAt: string; lastSeq: number }
-type MemoryItem = {
-  id: string
-  scope: string
-  kind: string
-  content: string
-  tokens: number
-  createdAt: string
-}
 type MemoryBlock = { scope: string; count: number; truncated: number; ids: string[] }
+
 type AgentEvent = {
   type: string
   text?: string
@@ -25,53 +27,96 @@ type AgentEvent = {
   modeId?: string
   displayName?: string
   conversationId?: string
+  workspace?: string
   blocks?: MemoryBlock[]
   truncatedTotal?: number
   usage?: { input?: number; output?: number }
+  skills?: SkillInfo[]
+  allowedTools?: string[] | null
 }
 
-interface ChatLine {
-  role: 'user' | 'assistant' | 'system'
+interface SystemLine {
+  id: string
+  kind: 'system' | 'skill' | 'tools' | 'memory' | 'usage'
   text: string
 }
 
+const THEME_KEY = 'owb.theme'
+const COLLAPSE_KEY = 'owb.sidebar.collapsed'
+
+function readTheme(): 'light' | 'dark' {
+  const saved = localStorage.getItem(THEME_KEY)
+  if (saved === 'light' || saved === 'dark') return saved
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function baseName(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] ?? path
+}
+
 export default function App() {
-  const [lines, setLines] = useState<ChatLine[]>([])
-  const [tools, setTools] = useState<ToolEvent[]>([])
-  const [availableTools, setAvailableTools] = useState<string[]>([])
-  const [skill, setSkill] = useState<{ name: string; allowedTools: string[] | null } | null>(null)
-  const [toolsKnown, setToolsKnown] = useState(false)
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [tools, setTools] = useState<ToolCall[]>([])
+  const [notices, setNotices] = useState<SystemLine[]>([])
   const [modes, setModes] = useState<ModeInfo[]>([])
   const [mode, setMode] = useState('craft')
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
-  const [conversations, setConversations] = useState<ConversationInfo[]>([])
+  const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [conversationId, setConversationId] = useState('')
   const [memories, setMemories] = useState<MemoryItem[]>([])
-  const [memoryNotice, setMemoryNotice] = useState('')
-  const [usage, setUsage] = useState<string>('')
   const [showMemory, setShowMemory] = useState(false)
+  const [skills, setSkills] = useState<SkillInfo[]>([])
+  const [panel, setPanel] = useState<'skills' | 'connectors' | null>(null)
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
+  const [theme, setTheme] = useState<'light' | 'dark'>(readTheme)
+  const [focusSearchToken, setFocusSearchToken] = useState(0)
   const streaming = useRef(false)
+  const activeConversation = useRef('')
+
+  const model = 'OpenAI 兼容'
+  // 工具读写的是真实目录,界面必须显示它,否则"查当前目录"会被误解成应用安装目录。
+  const [workspacePath, setWorkspacePath] = useState('')
+  const workspaceLabel = workspacePath ? baseName(workspacePath) : '工作区'
+  const modeLabel = modes.find((m) => m.id === mode)?.displayName ?? mode
+  const currentTitle = conversations.find((c) => c.id === conversationId)?.title ?? '新会话'
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem(THEME_KEY, theme)
+  }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0')
+  }, [collapsed])
+
+  const note = useCallback((kind: SystemLine['kind'], text: string) => {
+    setNotices((list) => [...list, { id: `${kind}-${Date.now()}-${list.length}`, kind, text }])
+  }, [])
 
   const loadConversations = useCallback(async (selectId?: string) => {
     const r = await window.openwb.conversation.list()
     setConversations(r.conversations)
     const target = selectId ?? r.conversationId
     setConversationId(target)
+    activeConversation.current = target
     return target
   }, [])
 
   const loadHistory = useCallback(async (id: string) => {
     const r = await window.openwb.conversation.history(id)
-    setLines(
+    setMessages(
       r.messages
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => {
           const content = m.content as { text?: string } | null
           return {
+            id: m.id,
             role: m.role === 'user' ? 'user' : 'assistant',
-            text: content?.text ?? JSON.stringify(m.content)
-          }
+            text: content?.text ?? '',
+            createdAt: m.createdAt
+          } satisfies ChatMessage
         })
     )
   }, [])
@@ -82,6 +127,12 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // ready 帧在本监听注册前就已发出,工作区路径必须主动拉一次。
+    void window.openwb.workspace
+      .info()
+      .then((r) => setWorkspacePath(r.path))
+      .catch(() => undefined)
+
     void window.openwb.modes
       .list()
       .then((r) => {
@@ -90,7 +141,7 @@ export default function App() {
           setMode(r.modes[0]!.id)
         }
       })
-      .catch((err: Error) => setLines((l) => [...l, { role: 'system', text: `[错误] 模式加载失败: ${err.message}` }]))
+      .catch((err: Error) => note('system', `[错误] 模式加载失败: ${err.message}`))
 
     void (async () => {
       try {
@@ -98,63 +149,81 @@ export default function App() {
         if (id) await loadHistory(id)
         await loadMemories()
       } catch (err) {
-        setLines((l) => [...l, { role: 'system', text: `[错误] 历史加载失败: ${(err as Error).message}` }])
+        note('system', `[错误] 历史加载失败: ${(err as Error).message}`)
       }
     })()
+
+    void window.openwb.skills
+      .list()
+      .then((r) => setSkills(r.skills))
+      .catch(() => undefined)
 
     return window.openwb.conversation.onEvent((raw: unknown) => {
       const e = raw as AgentEvent
       if (e.type === 'text.start') {
         streaming.current = true
-        setLines((l) => [...l, { role: 'assistant', text: '' }])
+        setMessages((list) => [
+          ...list,
+          { id: `a-${Date.now()}-${list.length}`, role: 'assistant', text: '', streaming: true }
+        ])
       } else if (e.type === 'delta' && streaming.current && e.text) {
-        setLines((l) => {
-          const next = [...l]
-          const last = next[next.length - 1]
-          if (last && last.role === 'assistant') {
-            next[next.length - 1] = { ...last, text: last.text + e.text }
+        setMessages((list) => {
+          const next = [...list]
+          for (let i = next.length - 1; i >= 0; i--) {
+            const item = next[i]!
+            if (item.role === 'assistant') {
+              next[i] = { ...item, text: item.text + e.text }
+              break
+            }
           }
           return next
         })
       } else if (e.type === 'skill.activated') {
-        setSkill({ name: e.name ?? '', allowedTools: (e as { allowedTools?: string[] | null }).allowedTools ?? null })
+        const narrowed = e.allowedTools
+        note('skill', `已加载技能: ${e.name ?? ''}${narrowed ? `(收窄为 ${narrowed.join(', ')})` : '(未额外收窄工具)'}`)
       } else if (e.type === 'memory.injected') {
         const truncated = e.truncatedTotal ?? 0
         const counts = (e.blocks ?? []).map((b) => `${b.scope}:${b.count}`).join(' ')
-        setMemoryNotice(
-          [
-            counts ? `已注入记忆 ${counts}` : '本轮无记忆注入',
-            truncated > 0 ? `已截断 ${truncated} 条` : ''
-          ]
+        note(
+          'memory',
+          [counts ? `已注入记忆 ${counts}` : '本轮无记忆注入', truncated > 0 ? `已截断 ${truncated} 条` : '']
             .filter(Boolean)
             .join(' · ')
         )
       } else if (e.type === 'tools.available') {
-        setAvailableTools(e.names ?? [])
-        setToolsKnown(true)
+        note('tools', `本轮可用工具: ${e.names?.length ? e.names.join(', ') : '(无)'}`)
       } else if (e.type === 'tool.started') {
-        setTools((t) => [...t, { callId: e.callId ?? '', name: e.name ?? '', ok: null, summary: '' }])
+        setTools((list) => [
+          ...list,
+          { callId: e.callId ?? '', name: e.name ?? '', ok: null, summary: '' }
+        ])
       } else if (e.type === 'tool.finished') {
-        setTools((t) =>
-          t.map((x) => (x.callId === e.callId ? { ...x, ok: e.ok ?? false, summary: e.summary ?? '' } : x))
+        setTools((list) =>
+          list.map((x) => (x.callId === e.callId ? { ...x, ok: e.ok ?? false, summary: e.summary ?? '' } : x))
         )
+      } else if (e.type === 'ready' && e.workspace) {
+        setWorkspacePath(e.workspace)
       } else if (e.type === 'conversation.ready' && e.conversationId) {
         setConversationId(e.conversationId)
+        activeConversation.current = e.conversationId
       } else if (e.type === 'done') {
         streaming.current = false
         setBusy(false)
+        setMessages((list) =>
+          list.map((m, i) => (i === list.length - 1 && m.role === 'assistant' ? { ...m, streaming: false } : m))
+        )
         if (e.usage && (e.usage.input || e.usage.output)) {
-          setUsage(`本轮回合计费: 输入 ${e.usage.input ?? 0} / 输出 ${e.usage.output ?? 0} token (接口返回)`)
+          note('usage', `本轮回合计费: 输入 ${e.usage.input ?? 0} / 输出 ${e.usage.output ?? 0} token (接口返回)`)
         }
-        void loadConversations(conversationId || undefined).catch(() => {})
-        void loadMemories().catch(() => {})
+        void loadConversations(activeConversation.current || undefined).catch(() => undefined)
+        void loadMemories().catch(() => undefined)
       } else if (e.type === 'error') {
         streaming.current = false
         setBusy(false)
-        setLines((l) => [...l, { role: 'system', text: `[错误] ${e.code}: ${e.message}` }])
+        note('system', `[错误] ${e.code}: ${e.message}`)
       }
     })
-  }, [conversationId, loadConversations, loadHistory, loadMemories])
+  }, [loadConversations, loadHistory, loadMemories, note])
 
   const send = async () => {
     const text = input.trim()
@@ -162,12 +231,11 @@ export default function App() {
     setBusy(true)
     setInput('')
     setTools([])
-    setAvailableTools([])
-    setToolsKnown(false)
-    setSkill(null)
-    setUsage('')
-    setMemoryNotice('')
-    setLines((l) => [...l, { role: 'user', text: `我(${mode}): ${text}` }])
+    setNotices([])
+    setMessages((list) => [
+      ...list,
+      { id: `u-${Date.now()}-${list.length}`, role: 'user', text, createdAt: new Date().toISOString() }
+    ])
     try {
       await window.openwb.conversation.send({
         text,
@@ -177,16 +245,16 @@ export default function App() {
     } catch (err) {
       streaming.current = false
       setBusy(false)
-      setLines((l) => [...l, { role: 'system', text: `[错误] 发送失败: ${(err as Error).message}` }])
+      note('system', `[错误] 发送失败: ${(err as Error).message}`)
     }
   }
 
   const switchConversation = async (id: string) => {
     if (busy) return
     setConversationId(id)
+    activeConversation.current = id
     setTools([])
-    setSkill(null)
-    setUsage('')
+    setNotices([])
     await loadHistory(id)
     await loadMemories()
   }
@@ -195,9 +263,10 @@ export default function App() {
     if (busy) return
     const r = await window.openwb.conversation.create({ title: '新会话', mode })
     setConversationId(r.conversationId)
-    setLines([])
+    activeConversation.current = r.conversationId
+    setMessages([])
     setTools([])
-    setSkill(null)
+    setNotices([])
     await loadConversations(r.conversationId)
   }
 
@@ -213,118 +282,133 @@ export default function App() {
     await loadMemories()
   }
 
+  const openWorkspace = async () => {
+    try {
+      const r = await window.openwb.workspace.open()
+      if (r.path) setWorkspacePath(r.path)
+    } catch (err) {
+      note('system', `打开工作区失败: ${(err as Error).message}`)
+    }
+  }
+
+  const composer = (showModes: boolean, autoFocus = false) => (
+    <Composer
+      value={input}
+      busy={busy}
+      mode={mode}
+      modes={modes}
+      showModes={showModes}
+      autoFocus={autoFocus}
+      placeholder={
+        mode === 'quick' ? '问点什么,快速模式不调用工具' : '描述你的任务,Enter 发送 / Shift+Enter 换行'
+      }
+      onChange={setInput}
+      onSend={() => void send()}
+      onModeChange={setMode}
+    />
+  )
+
   return (
-    <div style={{ fontFamily: 'system-ui', padding: 16, maxWidth: 1000, margin: '0 auto' }}>
-      <h1 style={{ fontSize: 18 }}>OpenWorkBuddy</h1>
+    <div className="owb-shell">
+      <TopBar
+        collapsed={collapsed}
+        theme={theme}
+        onToggleCollapse={() => setCollapsed((v) => !v)}
+        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        onFocusSearch={() => setFocusSearchToken((v) => v + 1)}
+        onClearInput={() => setInput('')}
+        onToggleMemory={() => {
+          setShowMemory((v) => !v)
+          void loadMemories()
+        }}
+        onOpenWorkspace={openWorkspace}
+      />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-        {modes.map((m) => (
-          <button
-            key={m.id}
-            title={m.description}
-            onClick={() => setMode(m.id)}
-            disabled={busy}
-            style={{
-              padding: '4px 10px',
-              border: mode === m.id ? '2px solid #2563eb' : '1px solid #ccc',
-              background: mode === m.id ? '#eff6ff' : '#fff',
-              cursor: busy ? 'not-allowed' : 'pointer'
-            }}
-          >
-            {m.displayName}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>
-        {modes.find((m) => m.id === mode)?.description ?? ''}
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'stretch' }}>
-        <select
-          value={conversationId}
-          onChange={(e) => void switchConversation(e.target.value)}
-          disabled={busy}
-          style={{ padding: 6, maxWidth: 240 }}
-          title="历史会话"
-        >
-          {conversations.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.title} ({c.lastSeq})
-            </option>
-          ))}
-        </select>
-        <button onClick={() => void newConversation()} disabled={busy}>新会话</button>
-        <button
-          onClick={() => void removeConversation(conversationId)}
-          disabled={busy || !conversationId}
-        >
-          删除会话
-        </button>
-        <button onClick={() => { setShowMemory((v) => !v); void loadMemories() }}>
-          {showMemory ? '收起记忆' : '记忆'} ({memories.length})
-        </button>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void send() }}
-          placeholder="试试:读取 package.json 并告诉我依赖数量"
-          style={{ flex: 1, padding: 8 }}
+      <div className="owb-app">
+        <Sidebar
+          conversations={conversations}
+          activeId={conversationId}
+          busy={busy}
+          collapsed={collapsed}
+          theme={theme}
+          memoryCount={memories.length}
+          model={model}
+          skillCount={skills.length}
+          focusSearchToken={focusSearchToken}
+          onToggleCollapse={() => setCollapsed((v) => !v)}
+          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+          onNew={() => void newConversation()}
+          onSelect={(id) => void switchConversation(id)}
+          onDelete={(id) => void removeConversation(id)}
+          onToggleMemory={() => {
+            setShowMemory((v) => !v)
+            void loadMemories()
+          }}
+          onOpenSkills={() => setPanel('skills')}
+          onOpenConnectors={() => setPanel('connectors')}
         />
-        <button onClick={() => void send()} disabled={busy}>{busy ? '执行中…' : '发送'}</button>
-      </div>
 
-      {showMemory && (
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 10, marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: '#666', marginBottom: 6 }}>
-            记忆正文来自磁盘文件,这里是可检索索引;删除会同时从文件移除。
+        <main className="owb-main">
+          <ContentHeader
+            title={currentTitle}
+            modeLabel={modeLabel}
+            workspaceLabel={workspaceLabel}
+            workspacePath={workspacePath}
+            busy={busy}
+          />
+
+          <div className="owb-main__body">
+            {messages.length === 0 ? (
+              <WelcomeView
+                modes={modes}
+                mode={mode}
+                busy={busy}
+                onModeChange={setMode}
+                onQuickAction={(text) => setInput(text)}
+              >
+                {composer(false, true)}
+              </WelcomeView>
+            ) : (
+              <>
+                <ChatView messages={messages} tools={tools} modeLabel={modeLabel} busy={busy} />
+                <div className="owb-chat__input">
+                  {notices.length > 0 ? (
+                    <div className="owb-notices">
+                      {notices.map((n) => (
+                        <div
+                          key={n.id}
+                          className={`owb-status${n.kind === 'system' ? ' owb-status--error' : n.kind === 'skill' ? ' owb-status--skill' : ' owb-status--info'}`}
+                        >
+                          {n.kind === 'skill' ? <IconTool size={13} /> : null}
+                          {n.kind === 'tools' ? <IconCheck size={13} /> : null}
+                          {n.kind === 'usage' ? <IconSparkle size={13} /> : null}
+                          <span>{n.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {composer(true)}
+                </div>
+              </>
+            )}
           </div>
-          {memories.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>(暂无记忆)</div>}
-          {memories.map((m) => (
-            <div key={m.id} style={{ fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0' }}>
-              <span style={{ color: '#7c3aed', minWidth: 70 }}>{m.scope}</span>
-              <span style={{ color: '#999', minWidth: 70 }}>{m.kind}</span>
-              <span style={{ flex: 1 }}>{m.content}</span>
-              <button onClick={() => void removeMemory(m.id)}>删除</button>
-            </div>
-          ))}
-        </div>
-      )}
 
-      {memoryNotice && (
-        <div style={{ fontSize: 12, color: '#0369a1', marginBottom: 8 }}>{memoryNotice}</div>
-      )}
-
-      {skill && (
-        <div style={{ fontSize: 12, color: '#7c3aed', marginBottom: 8 }}>
-          已加载技能: {skill.name}
-          {skill.allowedTools ? `(收窄为 ${skill.allowedTools.join(', ')})` : '(未额外收窄工具)'}
-        </div>
-      )}
-
-      {toolsKnown && (
-        <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
-          本轮可用工具: {availableTools.length > 0 ? availableTools.join(', ') : '(无)'}
-        </div>
-      )}
-
-      {tools.map((t) => (
-        <div key={t.callId} style={{ fontSize: 12, color: '#666' }}>
-          {t.ok === null ? '调用中' : t.ok ? '已完成' : '失败'} · {t.name}
-          {t.summary ? ` · ${t.summary}` : ''}
-        </div>
-      ))}
-
-      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
-        {lines.map((l, i) => (
-          <div key={i} style={{ color: l.role === 'system' ? '#b91c1c' : undefined }}>{l.text}</div>
-        ))}
+          {showMemory ? (
+            <MemoryPanel items={memories} onDelete={(id) => void removeMemory(id)} onClose={() => setShowMemory(false)} />
+          ) : null}
+        </main>
       </div>
 
-      {usage && <div style={{ fontSize: 11, color: '#999', marginTop: 8 }}>{usage}</div>}
+      {panel ? (
+        <InfoPanel
+          kind={panel}
+          skills={skills}
+          model={model}
+          workspace={workspacePath || workspaceLabel}
+          onOpenWorkspace={() => void openWorkspace()}
+          onClose={() => setPanel(null)}
+        />
+      ) : null}
     </div>
   )
 }

@@ -4,6 +4,13 @@ contextBridge.exposeInMainWorld('openwb', {
   modes: {
     list: () => ipcRenderer.invoke('modes.list')
   },
+  skills: {
+    list: () => ipcRenderer.invoke('skills.list')
+  },
+  workspace: {
+    info: () => ipcRenderer.invoke('workspace.info'),
+    open: () => ipcRenderer.invoke('workspace.open')
+  },
   conversation: {
     send: (input: unknown) => ipcRenderer.invoke('conversation.send', input),
     list: () => ipcRenderer.invoke('conversation.list'),

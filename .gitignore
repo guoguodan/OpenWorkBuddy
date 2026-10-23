@@ -8,3 +8,8 @@ out/
 .openwb-data/
 .openwb/
 *.tsbuildinfo
+
+# 本地运行产物:数据库、截图、默认/临时工作区
+.data/
+workspace-demo/
+

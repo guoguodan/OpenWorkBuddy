@@ -109,20 +109,35 @@ const shellParams = z.object({
 
 export const shellTool: ToolDescriptor<z.infer<typeof shellParams>, { code: number | null; stdout: string; stderr: string }> = {
   name: 'shell',
-  description: '在工作区执行一条命令。参数以数组传入,不经过 shell 解释,因此不支持管道与重定向。',
+  description: '在工作区执行一条外部命令(直接 spawn,不经过 shell 解释,不支持管道与重定向)。只适合 pnpm/node/git 等真实可执行文件;列目录请用 glob。',
   parameters: shellParams,
   effects: { writesFilesystem: true, accessesNetwork: true, mayIncurCost: false },
   async execute({ command, args = [] }, ctx: ToolContext) {
     const { spawn } = await import('node:child_process')
     const forbidden = /^(cmd|cmd\.exe|powershell|powershell\.exe|pwsh|bash|sh)$/i
-    if (forbidden.test(command)) throw new Error('禁止通过 shell 二次包装执行命令')
+    if (forbidden.test(command)) {
+      throw new Error(
+        `不允许把 ${command} 当壳再套一层命令。本工具已经是执行器:直接传可执行文件名与参数数组,例如 {"command":"node","args":["-v"]}。`
+      )
+    }
     return await new Promise((res, rej) => {
       const child = spawn(command, args, { cwd: ctx.workspaceRoot, shell: false })
       let stdout = ''
       let stderr = ''
       child.stdout.on('data', (b) => { stdout += String(b) })
       child.stderr.on('data', (b) => { stderr += String(b) })
-      child.on('error', rej)
+      child.on('error', (err) => {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'ENOENT') {
+          rej(
+            new Error(
+              `命令 "${command}" 在本机不存在(ENOENT)。Windows 下没有 ls/cat/rm 等 Unix 命令;列目录用 glob(pattern="*"),读文件用 read_file。`
+            )
+          )
+          return
+        }
+        rej(err)
+      })
       child.on('close', (code) => res({
         code,
         stdout: stdout.slice(0, 20000),

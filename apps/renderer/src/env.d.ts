@@ -34,6 +34,16 @@ declare global {
       modes: {
         list: () => Promise<{ modes: Array<{ id: string; displayName: string; description: string }> }>
       }
+      workspace: {
+        info: () => Promise<{ path: string }>
+        open: () => Promise<{ path: string }>
+      }
+      skills: {
+        list: () => Promise<{
+          skills: Array<{ name: string; description: string; scope: string }>
+          issues: Array<{ path: string; reason: string }>
+        }>
+      }
       conversation: {
         send: (input: { text: string; mode?: string; conversationId?: string }) => Promise<void>
         list: () => Promise<{ conversations: ConversationInfo[]; conversationId: string }>

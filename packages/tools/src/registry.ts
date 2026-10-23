@@ -1,4 +1,12 @@
-﻿import type { z } from 'zod'
+import type { z } from 'zod'
+
+const BUILTIN_NAME_RE = /^[a-z][a-z0-9_]*$/
+/** 插件工具用 <plugin>__<tool>;插件名允许短横线,工具名保持下划线 */
+const PLUGIN_NAME_RE = /^[a-z0-9][a-z0-9-]*__[a-z][a-z0-9_]*$/
+
+export function isValidToolName(name: string): boolean {
+  return BUILTIN_NAME_RE.test(name) || PLUGIN_NAME_RE.test(name)
+}
 
 export interface ToolEffects {
   writesFilesystem: boolean
@@ -15,6 +23,8 @@ export interface ToolDescriptor<TInput = unknown, TOutput = unknown> {
   name: string
   description: string
   parameters: z.ZodType<TInput>
+  /** 插件工具携带原始 JSON Schema;有值时优先于 parameters 交给模型 */
+  inputSchema?: unknown
   effects: ToolEffects
   execute: (input: TInput, ctx: ToolContext) => Promise<TOutput>
 }
@@ -25,11 +35,15 @@ export class ToolRegistry {
   private readonly tools = new Map<string, AnyToolDescriptor>()
 
   register<TInput, TOutput>(tool: ToolDescriptor<TInput, TOutput>): void {
-    if (!/^[a-z][a-z0-9_]*$/.test(tool.name)) {
-      throw new Error(`非法工具名: ${tool.name}(只允许小写字母、数字、下划线)`)
+    if (!isValidToolName(tool.name)) {
+      throw new Error(`非法工具名: ${tool.name}(内置工具只允许小写字母、数字、下划线;插件工具为 <plugin>__<tool>)`)
     }
     if (this.tools.has(tool.name)) throw new Error(`工具重复注册: ${tool.name}`)
     this.tools.set(tool.name, tool)
+  }
+
+  unregister(name: string): boolean {
+    return this.tools.delete(name)
   }
 
   has(name: string): boolean {

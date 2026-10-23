@@ -108,8 +108,8 @@ try {
 
   const submit = async (text) => {
     await evaluate(`(() => {
-      const input = document.querySelector('input')
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      const input = document.querySelector('textarea[data-testid="composer-input"]')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
       setter.call(input, ${JSON.stringify(text)})
       input.dispatchEvent(new Event('input', { bubbles: true }))
       return input.value
@@ -141,21 +141,21 @@ try {
     return false
   }
 
-  let buttons = []
+  let modeLabels = []
   for (let i = 0; i < 60; i++) {
-    buttons = await evaluate(`Array.from(document.querySelectorAll('button')).map((b) => b.textContent)`)
-    if (buttons.length >= 6) break
+    modeLabels = await evaluate(`Array.from(document.querySelectorAll('[role="tab"]')).map((b) => b.textContent)`)
+    if (modeLabels.length >= 5) break
     await sleep(250)
   }
-  // P4 之后按钮里多了会话/记忆控制,这里只校验前五个模式按钮的顺序
   check(
-    JSON.stringify(buttons.slice(0, 5)) === JSON.stringify(['默认', '规划', '问答', '专家', '快速']),
+    JSON.stringify(modeLabels) === JSON.stringify(['默认', '规划', '问答', '专家', '快速']),
     'mode-buttons-order',
-    JSON.stringify(buttons)
+    JSON.stringify(modeLabels)
   )
+  const buttons = await evaluate(`Array.from(document.querySelectorAll('button')).map((b) => b.textContent)`)
   check(buttons.includes('新会话') && buttons.some((b) => b.startsWith('记忆')), 'p4-controls-visible', JSON.stringify(buttons))
-  const hasSelect = await evaluate(`!!document.querySelector('select')`)
-  check(hasSelect, 'conversation-select-visible')
+  const convCount = await evaluate(`document.querySelectorAll('[data-testid="conversation-item"]').length`)
+  check(convCount >= 1, 'conversation-list-visible', String(convCount))
 
   // P3: 让模型加载内置技能,界面应出现"已加载技能"且工具被收窄
   await clickMode('默认')
@@ -179,9 +179,9 @@ try {
     await waitBusy()
     const idle = await waitIdle()
     const body = await evaluate('document.body.innerText')
-    const active = await evaluate(`Array.from(document.querySelectorAll('button')).filter((b) => b.style.border.startsWith('2px')).map((b) => b.textContent)`)
+    const active = await evaluate(`Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]')).map((b) => b.textContent.trim())`)
     check(idle, `${c.mode}-finished`, '等待超时')
-    check(JSON.stringify(active) === JSON.stringify([c.label]), `${c.mode}-active-button`, JSON.stringify(active))
+    check(active.length >= 1 && active.every((x) => x === c.label), `${c.mode}-active-button`, JSON.stringify(active))
     check(body.includes(c.tools), `${c.mode}-tools-line`, body.match(/本轮可用工具: .*/)?.[0] ?? '(missing)')
   }
 
@@ -211,7 +211,7 @@ try {
   const memoryBody = await evaluate('document.body.innerText')
   check(/记忆/.test(memoryBody), 'memory-panel-opens')
   const memoryRows = await evaluate(
-    `Array.from(document.querySelectorAll('button')).filter((b) => b.textContent === '删除').length`
+    `Array.from(document.querySelectorAll('button[aria-label="删除这条记忆"]')).length`
   )
   check(memoryRows > 0, 'memory-rows-listed', String(memoryRows))
   const notice = memoryBody.match(/已注入记忆[^\n]*/)?.[0] ?? ''
@@ -269,7 +269,7 @@ try {
       await sleep(500)
     }
     check(body2.includes('p2-craft'), 'history-restored-after-restart', body2.slice(-500))
-    const options = await evaluate2(`Array.from(document.querySelectorAll('option')).length`)
+    const options = await evaluate2(`document.querySelectorAll('[data-testid="conversation-item"]').length`)
     check(options >= 1, 'conversation-list-restored', String(options))
   } finally {
     ws2?.close()

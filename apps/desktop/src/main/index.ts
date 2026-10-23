@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
@@ -49,9 +49,28 @@ function request<T>(payload: Record<string, unknown>, timeoutMs = 10_000): Promi
   })
 }
 
+let resolvedWorkspace: string | null = null
+
+ipcMain.handle('workspace.info', async () => {
+  await daemonReady
+  return { path: resolvedWorkspace ?? resolveWorkspace() }
+})
+
+ipcMain.handle('workspace.open', async () => {
+  await daemonReady
+  const target = resolvedWorkspace ?? resolveWorkspace()
+  await shell.openPath(target)
+  return { path: target }
+})
+
 ipcMain.handle('modes.list', async () => {
   await daemonReady
   return request<{ modes: unknown[] }>({ cmd: 'modes.list' })
+})
+
+ipcMain.handle('skills.list', async () => {
+  await daemonReady
+  return request<{ skills: unknown[]; issues: unknown[] }>({ cmd: 'skills.list' })
 })
 
 ipcMain.handle('conversation.list', async () => {
@@ -142,6 +161,8 @@ function attachDaemonOutput() {
       }
 
       if (event.type === 'ready') {
+        const ws = (event as { workspace?: unknown }).workspace
+        if (typeof ws === 'string' && ws) resolvedWorkspace = ws
         resolveReady?.()
         resolveReady = null
         win?.webContents.send('agent.event', event)
@@ -182,15 +203,35 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, '../renderer/index.html'))
 }
 
+/** 桌面端由 apps/desktop 启动,资源目录相对构建产物上溯到仓库根 */
+function resolveBundleRoot(): string {
+  if (process.env.OPENWB_BUNDLE_ROOT) return path.resolve(process.env.OPENWB_BUNDLE_ROOT)
+  // __dirname = <root>/apps/desktop/out/main
+  return path.resolve(__dirname, '../../../..')
+}
+
+/** 没有显式工作区时,给用户一个可写且有意义的默认目录,而不是应用安装目录 */
+function resolveWorkspace(): string {
+  if (process.env.OPENWB_WORKSPACE) return path.resolve(process.env.OPENWB_WORKSPACE)
+  return path.join(app.getPath('documents'), 'OpenWorkBuddy')
+}
+
 function startDaemon() {
   const entry = process.env.OPENWB_DAEMON_ENTRY
   if (!entry) throw new Error('缺少 OPENWB_DAEMON_ENTRY,daemon 未构建')
+  const bundleRoot = resolveBundleRoot()
   daemon = spawn(process.execPath, [path.resolve(entry)], {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       OPENWB_DATA_DIR: resolveDataDir(),
-      OPENWB_PROTOCOL: String(PROTOCOL_VERSION)
+      OPENWB_PROTOCOL: String(PROTOCOL_VERSION),
+      // daemon 的 cwd 是 Electron 的 cwd,不能拿它当工作区;
+      // 这里显式下发,避免打包后资源和数据库落到应用安装目录。
+      OPENWB_WORKSPACE: resolveWorkspace(),
+      OPENWB_MODES_DIR: path.join(bundleRoot, 'resources/modes'),
+      OPENWB_PROMPTS_DIR: path.join(bundleRoot, 'resources/prompts'),
+      OPENWB_BUNDLED_SKILLS_DIR: path.join(bundleRoot, 'resources/skills')
     },
     stdio: ['pipe', 'pipe', 'pipe']
   })

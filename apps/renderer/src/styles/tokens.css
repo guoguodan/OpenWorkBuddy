@@ -1,0 +1,140 @@
+/*
+ * 设计令牌:数值来自 WorkBuddy 5.8.3 渲染层 tokens CSS 的实测值
+ * (--wb-* 变量、圆角、阴影、字号、行高、动效曲线)。
+ * 仅取本产品需要的子集,不与上游品牌资产共用。
+ */
+
+:root {
+  --owb-brand-1: #dff7f2;
+  --owb-brand-2: #bff0e6;
+  --owb-brand-3: #9fe8d9;
+  --owb-brand-4: #80e1cd;
+  --owb-brand-5: #60d9c0;
+  --owb-brand-7: #40d1b3;
+  --owb-brand-8: #00c29a;
+  --owb-brand-9: #009273;
+  --owb-brand-10: #00614d;
+
+  --owb-gray-1: #fafafa;
+  --owb-gray-2: #f7f7f7;
+  --owb-gray-3: #f2f2f2;
+  --owb-gray-4: #ebebeb;
+  --owb-gray-5: #e6e6e6;
+
+  --owb-blue-5: #4f86ff;
+  --owb-blue-8: #2563eb;
+  --owb-red-7: #e85c5c;
+  --owb-red-8: #f64041;
+  --owb-orange-7: #ff8420;
+  --owb-green-8: #0cbf5b;
+  --owb-purple-6: #7c5cfc;
+
+  --owb-radius-xs: 2px;
+  --owb-radius-sm: 4px;
+  --owb-radius-md: 6px;
+  --owb-radius-lg: 8px;
+  --owb-radius-xl: 12px;
+  --owb-radius-2xl: 16px;
+  --owb-radius-3xl: 20px;
+  --owb-radius-4xl: 24px;
+  --owb-radius-full: 9999px;
+
+  --owb-font-size-2: 10px;
+  --owb-font-size-3: 12px;
+  --owb-font-size-4: 13px;
+  --owb-font-size-5: 14px;
+  --owb-font-size-6: 16px;
+  --owb-font-size-7: 18px;
+  --owb-font-size-8: 20px;
+  --owb-font-size-9: 24px;
+
+  --owb-line-4-2: 18px;
+  --owb-line-5: 20px;
+  --owb-line-5-2: 22px;
+  --owb-line-6: 24px;
+  --owb-line-7: 28px;
+
+  --owb-titlebar-height: 56px;
+  --owb-titlebar-height-compact: 40px;
+  --owb-sidebar-width: 264px;
+  --owb-sidebar-width-collapsed: 60px;
+  --owb-content-max: 848px;
+  --owb-content-max-wide: 1008px;
+
+  --owb-motion-fast: 160ms;
+  --owb-motion-medium: 260ms;
+  --owb-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --owb-ease-emphasized: cubic-bezier(0.32, 0, 0.24, 1);
+  --owb-ease-pop: cubic-bezier(0.25, 0.8, 0.3, 1);
+
+  --owb-shadow-card: 0 1px 2px #0000000a;
+  --owb-shadow-popup: 0 12px 32px #0000001a;
+  --owb-shadow-elevated: 0 18px 44px #0f172a1a;
+  --owb-shadow-composer: 0 16px 32px -8px #00000008, 0 2px 4px -4px #0000000f;
+  --owb-shadow-segment: 0 1px 4px #0000000d;
+
+  color-scheme: light;
+}
+
+/* 亮色 */
+:root,
+:root[data-theme='light'] {
+  --owb-app-bg: #ffffff;
+  --owb-sidebar-bg: #f7f7f7;
+  --owb-bg-primary: #ffffff;
+  --owb-bg-secondary: #f7f7f7;
+  --owb-bg-tertiary: #ebebeb;
+  --owb-bg-hover: color-mix(in srgb, #000000 5%, transparent);
+  --owb-bg-active: color-mix(in srgb, #000000 8%, transparent);
+  --owb-bg-card: #ffffff;
+  --owb-bg-elevated: #ffffff;
+  --owb-bg-input: linear-gradient(180deg, #f0f0f0 0%, #f5f5f5 100%);
+  --owb-bg-user-bubble: #f2f2f2;
+  --owb-bg-code: #f7f7f7;
+
+  --owb-text-primary: #000000;
+  --owb-text-secondary: #5d5d5d;
+  --owb-text-tertiary: #8a9099;
+  --owb-text-disabled: #b3b3b3;
+  --owb-text-on-brand: #ffffff;
+
+  --owb-border-subtle: #f2f2f2;
+  --owb-border-default: color-mix(in srgb, #000000 8%, transparent);
+  --owb-border-strong: #dedede;
+  --owb-border-focus: #009273;
+
+  --owb-scrollbar-thumb: #00000033;
+  --owb-scrollbar-thumb-hover: #0000004d;
+}
+
+/* 暗色 */
+:root[data-theme='dark'] {
+  --owb-app-bg: #141414;
+  --owb-sidebar-bg: #1f1f1f;
+  --owb-bg-primary: #1f1f1f;
+  --owb-bg-secondary: #242424;
+  --owb-bg-tertiary: #2d2d2d;
+  --owb-bg-hover: color-mix(in srgb, #ffffff 6%, transparent);
+  --owb-bg-active: color-mix(in srgb, #ffffff 10%, transparent);
+  --owb-bg-card: #242424;
+  --owb-bg-elevated: #2d2d2d;
+  --owb-bg-input: linear-gradient(180deg, #292929 0%, #242424 100%);
+  --owb-bg-user-bubble: #2d2d2d;
+  --owb-bg-code: #1a1a1a;
+
+  --owb-text-primary: #ffffff;
+  --owb-text-secondary: #ffffffb3;
+  --owb-text-tertiary: #ffffff80;
+  --owb-text-disabled: #ffffff4d;
+  --owb-text-on-brand: #ffffff;
+
+  --owb-border-subtle: #ffffff0f;
+  --owb-border-default: #ffffff24;
+  --owb-border-strong: #ffffff33;
+  --owb-border-focus: #00c29a;
+
+  --owb-scrollbar-thumb: #ffffff33;
+  --owb-scrollbar-thumb-hover: #ffffff4d;
+
+  color-scheme: dark;
+}
