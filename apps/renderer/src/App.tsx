@@ -3,6 +3,7 @@ import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView
 import { Composer } from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
 import { InfoPanel, type SkillInfo } from './components/InfoPanel'
+import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { MemoryPanel, type MemoryItem } from './components/MemoryPanel'
 import { Sidebar, type ConversationSummary } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
@@ -399,9 +400,14 @@ export default function App() {
         </main>
       </div>
 
-      {panel ? (
+      {panel === 'connectors' ? (
+        <ConnectorsPanel
+          onClose={() => setPanel(null)}
+          onNotify={(kind, text) => note(kind === 'info' ? 'tools' : 'system', text)}
+        />
+      ) : panel === 'skills' ? (
         <InfoPanel
-          kind={panel}
+          kind="skills"
           skills={skills}
           model={model}
           workspace={workspacePath || workspaceLabel}

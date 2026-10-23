@@ -11,6 +11,15 @@ contextBridge.exposeInMainWorld('openwb', {
     info: () => ipcRenderer.invoke('workspace.info'),
     open: () => ipcRenderer.invoke('workspace.open')
   },
+  plugins: {
+    list: () => ipcRenderer.invoke('plugins.list'),
+    install: (input: unknown) => ipcRenderer.invoke('plugins.install', input),
+    uninstall: (name: string) => ipcRenderer.invoke('plugins.uninstall', name),
+    retry: (name: string) => ipcRenderer.invoke('plugins.retry', name),
+    probe: (name: string) => ipcRenderer.invoke('plugins.probe', name),
+    setEnabled: (input: unknown) => ipcRenderer.invoke('plugins.setEnabled', input),
+    pickDir: () => ipcRenderer.invoke('plugins.pickDir')
+  },
   conversation: {
     send: (input: unknown) => ipcRenderer.invoke('conversation.send', input),
     list: () => ipcRenderer.invoke('conversation.list'),

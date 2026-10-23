@@ -64,6 +64,10 @@ export function IconLoader({ size = 14, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="M12 3a9 9 0 1 0 9 9" /></svg>
 }
 
+export function IconRefresh({ size = 14, className }: IconProps) {
+  return <svg {...base(size)} className={className}><path d="M20 12a8 8 0 1 1-2.6-5.9" /><path d="M20 4v4.5h-4.5" /></svg>
+}
+
 export function IconChevron({ size = 14, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="m6 9.5 6 6 6-6" /></svg>
 }

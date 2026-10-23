@@ -1,5 +1,3 @@
-export {}
-
 interface ConversationInfo {
   id: string
   title: string
@@ -17,6 +15,28 @@ interface MemoryItemInfo {
   createdAt: string
 }
 
+interface PluginToolInfo {
+  name: string
+  description: string
+  highCredit: boolean
+}
+
+interface PluginSnapshotInfo {
+  name: string
+  displayName: string
+  version: string
+  kind: 'connector' | 'expert'
+  state: 'unloaded' | 'starting' | 'ready' | 'reconnecting' | 'disabled' | 'crashed'
+  enabled: boolean
+  attempts: number
+  lastError: string | null
+  tools: PluginToolInfo[]
+  pids: number[]
+  warnings: string[]
+  verifiedPublisher: boolean
+  permissions: string[]
+}
+
 interface HistoryMessage {
   id: string
   seq: number
@@ -28,34 +48,45 @@ interface HistoryMessage {
   createdAt: string
 }
 
-declare global {
-  interface Window {
-    openwb: {
-      modes: {
-        list: () => Promise<{ modes: Array<{ id: string; displayName: string; description: string }> }>
-      }
-      workspace: {
-        info: () => Promise<{ path: string }>
-        open: () => Promise<{ path: string }>
-      }
-      skills: {
-        list: () => Promise<{
-          skills: Array<{ name: string; description: string; scope: string }>
-          issues: Array<{ path: string; reason: string }>
-        }>
-      }
-      conversation: {
-        send: (input: { text: string; mode?: string; conversationId?: string }) => Promise<void>
-        list: () => Promise<{ conversations: ConversationInfo[]; conversationId: string }>
-        history: (conversationId?: string) => Promise<{ messages: HistoryMessage[]; conversationId: string }>
-        create: (input?: { title?: string; mode?: string }) => Promise<{ conversationId: string }>
-        remove: (conversationId: string) => Promise<{ conversationId: string }>
-        onEvent: (cb: (e: unknown) => void) => () => void
-      }
-      memory: {
-        list: (scope?: string) => Promise<{ items: MemoryItemInfo[] }>
-        remove: (id: string) => Promise<{ id: string }>
-      }
+interface Window {
+  openwb: {
+    modes: {
+      list: () => Promise<{ modes: Array<{ id: string; displayName: string; description: string }> }>
+    }
+    workspace: {
+      info: () => Promise<{ path: string }>
+      open: () => Promise<{ path: string }>
+    }
+    skills: {
+      list: () => Promise<{
+        skills: Array<{ name: string; description: string; scope: string }>
+        issues: Array<{ path: string; reason: string }>
+      }>
+    }
+    conversation: {
+      send: (input: { text: string; mode?: string; conversationId?: string }) => Promise<void>
+      list: () => Promise<{ conversations: ConversationInfo[]; conversationId: string }>
+      history: (conversationId?: string) => Promise<{ messages: HistoryMessage[]; conversationId: string }>
+      create: (input?: { title?: string; mode?: string }) => Promise<{ conversationId: string }>
+      remove: (conversationId: string) => Promise<{ conversationId: string }>
+      onEvent: (cb: (e: unknown) => void) => () => void
+    }
+    memory: {
+      list: (scope?: string) => Promise<{ items: MemoryItemInfo[] }>
+      remove: (id: string) => Promise<{ id: string }>
+    }
+    plugins: {
+      list: () => Promise<{ plugins: PluginSnapshotInfo[] }>
+      install: (input: { sourceDir: string; confirmShell?: boolean }) => Promise<{ plugin: PluginSnapshotInfo | null }>
+      uninstall: (name: string) => Promise<{ name: string }>
+      retry: (name: string) => Promise<{ plugin: PluginSnapshotInfo | null }>
+      probe: (name: string) => Promise<{ ok: boolean; tools: number; error?: string }>
+      setEnabled: (input: {
+        name: string
+        enabled: boolean
+        confirmShell?: boolean
+      }) => Promise<{ plugin: PluginSnapshotInfo | null }>
+      pickDir: () => Promise<{ path: string | null }>
     }
   }
 }

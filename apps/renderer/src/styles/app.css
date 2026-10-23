@@ -607,6 +607,43 @@ input, textarea { font-family: inherit; }
 }
 .owb-infopanel__action:hover { color: var(--owb-text-primary); border-color: var(--owb-border-strong, var(--owb-border-subtle)); }
 .owb-infopanel__empty { padding: 12px 4px; font-size: 12px; color: var(--owb-text-tertiary); }
+.owb-infopanel__action--primary { color: var(--owb-brand-9); border-color: var(--owb-brand-8); }
+
+/* 连接器 */
+.owb-connector__toolbar { display: flex; gap: 8px; }
+.owb-connector__toolbar .owb-infopanel__action { margin-top: 0; display: inline-flex; align-items: center; gap: 5px; }
+.owb-plugin__state {
+  font-size: 11px; padding: 1px 8px; border-radius: var(--owb-radius-full);
+  background: var(--owb-bg-tertiary); color: var(--owb-text-tertiary);
+}
+.owb-plugin__state--ok { background: color-mix(in srgb, #2f9e63 14%, transparent); color: #2f9e63; }
+.owb-plugin__state--busy { background: color-mix(in srgb, #c98a1a 16%, transparent); color: #a9740f; }
+.owb-plugin__state--off { background: color-mix(in srgb, #c2413a 14%, transparent); color: #c2413a; }
+.owb-plugin__meta {
+  display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px;
+  color: var(--owb-text-tertiary); margin-top: 2px;
+}
+.owb-plugin__mono { font-family: 'SFMono-Regular', Consolas, monospace; }
+.owb-plugin__perms { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.owb-plugin__perm {
+  font-size: 10px; padding: 1px 6px; border-radius: var(--owb-radius-sm);
+  background: var(--owb-bg-tertiary); color: var(--owb-text-secondary);
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+.owb-plugin__perm--danger { background: color-mix(in srgb, #c2413a 14%, transparent); color: #c2413a; }
+.owb-plugin__warn { margin-top: 6px; font-size: 11px; color: #a9740f; }
+.owb-plugin__error { margin-top: 6px; font-size: 11px; color: #c2413a; word-break: break-word; }
+.owb-plugin__tools { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.owb-plugin__tool {
+  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  color: var(--owb-text-secondary);
+}
+.owb-plugin__tag {
+  font-size: 10px; padding: 0 5px; border-radius: var(--owb-radius-sm);
+  background: color-mix(in srgb, #c98a1a 16%, transparent); color: #a9740f;
+}
+.owb-plugin__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.owb-plugin__actions .owb-infopanel__action { margin-top: 0; }
 
 .owb-conv-empty {
   padding: 10px; font-size: 12px; color: var(--owb-text-tertiary);

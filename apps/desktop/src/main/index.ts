@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
@@ -110,6 +110,65 @@ ipcMain.handle('memory.delete', async (_e, id: string) => {
   await daemonReady
   if (typeof id !== 'string' || !id) throw new Error('非法记忆 ID')
   return request<{ id: string }>({ cmd: 'memory.delete', id })
+})
+
+ipcMain.handle('plugins.list', async () => {
+  await daemonReady
+  return request<{ plugins: unknown[] }>({ cmd: 'plugins.list' })
+})
+
+ipcMain.handle('plugins.install', async (_e, input: { sourceDir?: string; confirmShell?: boolean }) => {
+  await daemonReady
+  if (typeof input?.sourceDir !== 'string' || !input.sourceDir) throw new Error('缺少插件目录')
+  // 安装要复制并启动子进程,10s 默认超时不够
+  return request<{ plugin: unknown }>(
+    { cmd: 'plugins.install', sourceDir: input.sourceDir, ...(input.confirmShell ? { confirmShell: true } : {}) },
+    120_000
+  )
+})
+
+ipcMain.handle('plugins.uninstall', async (_e, name: string) => {
+  await daemonReady
+  if (typeof name !== 'string' || !name) throw new Error('非法插件名')
+  return request<{ name: string }>({ cmd: 'plugins.uninstall', name })
+})
+
+ipcMain.handle('plugins.retry', async (_e, name: string) => {
+  await daemonReady
+  if (typeof name !== 'string' || !name) throw new Error('非法插件名')
+  return request<{ plugin: unknown }>({ cmd: 'plugins.retry', name }, 60_000)
+})
+
+ipcMain.handle('plugins.probe', async (_e, name: string) => {
+  await daemonReady
+  if (typeof name !== 'string' || !name) throw new Error('非法插件名')
+  return request<{ ok: boolean; tools: number; error?: string }>({ cmd: 'plugins.probe', name }, 60_000)
+})
+
+ipcMain.handle(
+  'plugins.setEnabled',
+  async (_e, input: { name?: string; enabled?: boolean; confirmShell?: boolean }) => {
+    await daemonReady
+    if (typeof input?.name !== 'string' || !input.name) throw new Error('非法插件名')
+    if (typeof input.enabled !== 'boolean') throw new Error('缺少 enabled')
+    return request<{ plugin: unknown }>(
+      {
+        cmd: 'plugins.setEnabled',
+        name: input.name,
+        enabled: input.enabled,
+        ...(input.confirmShell ? { confirmShell: true } : {})
+      },
+      60_000
+    )
+  }
+)
+
+ipcMain.handle('plugins.pickDir', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '选择插件目录(需包含 plugin.json)',
+    properties: ['openDirectory']
+  })
+  return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
 })
 
 ipcMain.handle('conversation.send', async (_e, input: { text?: string; mode?: string; conversationId?: string }) => {

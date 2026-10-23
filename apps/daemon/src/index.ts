@@ -54,10 +54,10 @@ import {
   discoverPlugins,
   installPlugin,
   uninstallPlugin,
-  PluginInstallError,
-  type PluginSnapshot
+  PluginInstallError
 } from '@openwb/plugins'
 import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
+import { summarizeToolResult, toToolFailure } from './tool-summary.js'
 
 const WORKSPACE = resolve(process.env.OPENWB_WORKSPACE ?? process.cwd())
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
@@ -388,61 +388,6 @@ type ExecutableTool = Tool<any, any> & {
   execute: (args: any, options: ToolExecutionOptions) => PromiseLike<any>
 }
 
-/**
- * 工具失败必须是「可回填的结果」,而不是让整轮对话崩掉。
- *
- * AI SDK v4 里 execute 抛错会终止整个 streamText:模型收不到失败原因,
- * 客户端也收不到 tool.finished,工具行会永远停在转圈。这里统一包成
- * { ok: false, error } 交给模型,由它决定重试或换一种做法。
- */
-export interface ToolFailure {
-  ok: false
-  error: string
-  code: string
-}
-
-function isToolFailure(value: unknown): value is ToolFailure {
-  return Boolean(
-    value && typeof value === 'object' && (value as { ok?: unknown }).ok === false &&
-      typeof (value as { error?: unknown }).error === 'string'
-  )
-}
-
-function toToolFailure(err: unknown): ToolFailure {
-  const message = err instanceof Error ? err.message : String(err)
-  const code = (err as { code?: unknown })?.code
-  return { ok: false, error: message, code: typeof code === 'string' ? code : 'TOOL_FAILED' }
-}
-
-/**
- * 把工具返回值压成界面能读的一行。原始 JSON 直接甩到界面上很像报错,
- * 而且 shell 的非零退出码在语义上也应当算失败。
- */
-function summarizeToolResult(name: string, result: unknown): { ok: boolean; summary: string } {
-  if (isToolFailure(result)) return { ok: false, summary: result.error }
-  if (name === 'load_skill') return { ok: true, summary: '技能已加载' }
-
-  if (name === 'shell' && result && typeof result === 'object') {
-    const r = result as { code?: number | null; stdout?: string; stderr?: string }
-    const output = (r.stdout || r.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(0, 2).join(' / ')
-    return {
-      ok: r.code === 0,
-      summary: `退出码 ${r.code ?? 'null'}${output ? ` · ${output.slice(0, 140)}` : ''}`
-    }
-  }
-  if (name === 'read_file' && typeof result === 'string') {
-    return { ok: true, summary: `${Buffer.byteLength(result, 'utf8')} 字节` }
-  }
-  if (name === 'write_file' && typeof result === 'string') return { ok: true, summary: result }
-  if (Array.isArray(result)) {
-    return { ok: true, summary: result.length > 0 ? `${result.length} 项` : '无结果' }
-  }
-  if (result && typeof result === 'object' && 'presented' in result) {
-    return { ok: true, summary: `已呈现 ${(result as { presented: number }).presented} 个文件` }
-  }
-  return { ok: true, summary: JSON.stringify(result).slice(0, 140) }
-}
-
 function buildTools(mode: ModePolicy, allowedNames: string[]) {
   const allowed = new Set(allowedNames)
   const result: Record<string, ExecutableTool> = {}
@@ -527,8 +472,57 @@ async function runMock(input: RunInput, prepared: { system: string; modeTools: s
   emit({ type: 'text.start' })
   emit({ type: 'tools.available', names: modeTools(input.mode) })
   const callId = 'mock-call-1'
-  const canRead = isToolAllowed(input.mode, 'read_file')
   let reply = ''
+
+  // 离线验收要覆盖"插件工具调用结果回填":mock 不做真实模型决策,
+  // 优先识别文本里显式写出的 <插件>__<工具>;若只写了短名(如"调用 echo"),
+  // 则按已就绪插件的原始工具名反查,且只在唯一命中时调用,避免误调同名工具。
+  const explicitCall =
+    input.mode.id === PLUGIN_TOOL_MODE
+      ? /\b([a-z0-9][a-z0-9-]*__[a-z][a-z0-9_]*)\b/.exec(input.text)
+      : null
+  const tokens = new Set(input.text.toLowerCase().split(/[^a-z0-9_-]+/).filter(Boolean))
+  const suffixMatches =
+    explicitCall || input.mode.id !== PLUGIN_TOOL_MODE
+      ? []
+      : pluginRuntime
+          .availableTools()
+          .filter((tool) => tokens.has(tool.originalName.toLowerCase()))
+  const toolName =
+    explicitCall?.[1] ?? (suffixMatches.length === 1 ? suffixMatches[0]!.name : undefined)
+  if (toolName) {
+    emit({ type: 'tool.started', callId, name: toolName })
+    try {
+      const result = await pluginRuntime.callTool(toolName, { text: 'p5-hello' })
+      const { ok, summary } = summarizeToolResult(toolName, result)
+      emit({ type: 'tool.finished', callId, ok, summary })
+      reply = `[mock:${input.mode.id}] 插件工具 ${toolName} 返回: ${summary}`
+    } catch (err) {
+      emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
+      reply = `[mock:${input.mode.id}] 插件工具 ${toolName} 调用失败: ${(err as Error).message}`
+    }
+    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    appendMessage(db, {
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: { text: reply },
+      model: 'mock'
+    })
+    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    await writeTrace(TRACE_DIR, mockTrace)
+    transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
+    await appendRunLog(db, {
+      conversationId: input.conversationId,
+      text: input.text,
+      modeId: input.mode.id,
+      toolCalls: 1
+    })
+    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+    return
+  }
+
+  const canRead = isToolAllowed(input.mode, 'read_file')
   if (canRead) {
     emit({ type: 'tool.started', callId, name: 'read_file' })
     try {
@@ -770,9 +764,21 @@ async function runAgent(input: RunInput) {
 
 /** 串行处理,避免两个请求同时写库与写 stdout 帧 */
 let queue: Promise<void> = Promise.resolve()
-function enqueue(job: () => Promise<void>): void {
+/**
+ * 串行处理,避免两个请求同时写库与写 stdout 帧。
+ *
+ * 出错时必须带上 requestId:主进程按 requestId 匹配应答,不带就永远等不到,
+ * 调用方只能等到 10s 超时,拿到的是"请求超时"而不是真实原因。
+ */
+function enqueue(job: () => Promise<void>, requestId?: unknown): void {
   queue = queue.then(job).catch((err) => {
-    emit({ type: 'error', code: 'HANDLER_FAILED', message: (err as Error).message, retryable: false })
+    emit({
+      ...(requestId !== undefined ? { requestId } : {}),
+      type: 'error',
+      code: 'HANDLER_FAILED',
+      message: (err as Error).message,
+      retryable: false
+    })
   })
 }
 
@@ -819,14 +825,24 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     })
     const shell = installed.manifest.permissions.includes('shell')
     const enabled = !shell
-    upsertPlugin(db, {
-      kind: installed.manifest.kind,
-      name: installed.name,
-      version: installed.manifest.version,
-      enabled,
-      permissions: installed.manifest.permissions,
-      manifest: installed.manifest
-    })
+    try {
+      upsertPlugin(db, {
+        kind: installed.manifest.kind,
+        name: installed.name,
+        version: installed.manifest.version,
+        enabled,
+        permissions: installed.manifest.permissions,
+        manifest: installed.manifest
+      })
+    } catch (err) {
+      // 文件已落盘但库没写进去 = 半装状态:下次启动会被当成"数据库缺失"的孤儿目录。
+      // 这里必须回滚文件,让磁盘与数据库保持同一次成功或同一次失败。
+      await uninstallPlugin(PLUGINS_DIR, installed.name).catch(() => undefined)
+      throw new PluginInstallError(
+        'database',
+        `写入插件记录失败,已回滚安装: ${(err as Error).message}`
+      )
+    }
     pluginRuntime.register(
       { name: installed.name, dir: installed.dir, manifest: installed.manifest, warnings: installed.warnings, verifiedPublisher: installed.verifiedPublisher },
       { enabled }
@@ -865,6 +881,13 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     deletePlugin(db, msg.name)
     syncPluginTools()
     emit({ ...base, type: 'plugins.uninstalled', name: msg.name })
+    return true
+  }
+
+  if (msg.cmd === 'plugins.probe') {
+    if (typeof msg.name !== 'string') throw new Error('缺少 name')
+    const result = await pluginRuntime.probe(msg.name)
+    emit({ ...base, type: 'plugins.probed', name: msg.name, ...result })
     return true
   }
 
@@ -1051,7 +1074,11 @@ process.stdin.on('data', (chunk: Buffer) => {
     emit({ type: 'error', code: 'BAD_FRAME', message: (err as Error).message, retryable: false })
     process.exit(4)
   }
-  for (const frame of frames) enqueue(() => handleFrame(frame))
+  for (const frame of frames) {
+    const requestId =
+      frame && typeof frame === 'object' ? (frame as { requestId?: unknown }).requestId : undefined
+    enqueue(() => handleFrame(frame), requestId)
+  }
 })
 
 process.stdin.on('end', () => {

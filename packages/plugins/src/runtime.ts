@@ -244,6 +244,8 @@ export class PluginRuntime {
       instance.servers = []
       instance.tools = []
       instance.healthFailures = 0
+      instance.failures = 0
+      instance.lastError = null
       this.setState(instance, 'ready')
       this.startHealthCheck(instance)
       return
@@ -329,6 +331,9 @@ export class PluginRuntime {
 
       instance.tools = collected
       instance.healthFailures = 0
+      // 成功启动必须清零失败计数:否则"崩溃-恢复-再崩溃"会很快撞到 3 次上限,
+      // 与"连续失败 3 次才降级"的语义不符。
+      instance.failures = 0
       instance.lastError = null
       this.setState(instance, 'ready')
       this.startHealthCheck(instance)
@@ -437,6 +442,44 @@ export class PluginRuntime {
     instance.failures = 0
     instance.attempts = 0
     await this.start(name)
+  }
+
+  /**
+   * 先启动一次并立即停掉,用于 UI 的"测试连接"。
+   *
+   * 与 setEnabled(true) 的区别:这里不改持久化的 enabled,
+   * 失败也不会累加崩溃计数——它只是一次探测,不该影响插件的生命周期判定。
+   */
+  async probe(name: string): Promise<{ ok: boolean; tools: number; error?: string }> {
+    const instance = this.instances.get(name)
+    if (!instance) throw new Error(`插件未登记: ${name}`)
+    const wasEnabled = instance.enabled
+    const wasState = instance.state
+    this.clearTimers(instance)
+    instance.stopping = true
+    await this.stopServers(instance.servers)
+    instance.servers = []
+    instance.stopping = false
+    instance.enabled = true
+    try {
+      await this.startOnce(instance)
+      const tools = instance.tools.length
+      return { ok: true, tools }
+    } catch (err) {
+      return { ok: false, tools: 0, error: (err as Error).message }
+    } finally {
+      this.clearTimers(instance)
+      instance.stopping = true
+      await this.stopServers(instance.servers)
+      instance.servers = []
+      instance.stopping = false
+      instance.enabled = wasEnabled
+      instance.state = wasEnabled ? 'unloaded' : 'disabled'
+      instance.attempts = 0
+      instance.failures = 0
+      instance.lastError = wasState === 'ready' ? null : instance.lastError
+      this.emit(instance)
+    }
   }
 
   async retry(name: string): Promise<void> {
