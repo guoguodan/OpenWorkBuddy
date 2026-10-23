@@ -33,6 +33,15 @@ const check = (ok, label, detail = '') => {
   }
 }
 
+/**
+ * 握手帧必须是 stdout 第一帧。
+ * 已装插件时插件会在启动阶段发 plugin.status;若 hello 晚发,桌面端会直接判协议错误。
+ */
+const checkHelloFirst = (r, label) => {
+  const first = r.events[0]
+  check(first?.type === 'hello', label, first?.type ?? '无事件')
+}
+
 const base = await mkdtemp(join(tmpdir(), 'owb-p5-'))
 const workspace = join(base, 'ws')
 const dataDir = join(base, 'data')
@@ -170,6 +179,7 @@ pluginNames.push('p5-echo')
 let r = await runSession([{ cmd: 'plugins.install', sourceDir: echoDir, requestId: 'i1' }], {
   waitFor: 'plugins.installed'
 })
+checkHelloFirst(r, '0a. 首帧是 hello')
 let installed = r.events.find((e) => e.type === 'plugins.installed')
 check(Boolean(installed), '1. 安装最小 MCP server', r.err.slice(-400))
 const snap = installed?.plugin

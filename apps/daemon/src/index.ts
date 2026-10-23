@@ -186,6 +186,13 @@ function emit(event: unknown) {
   process.stdout.write(encodeFrame(event))
 }
 
+/**
+ * 协议握手帧必须是 stdout 的第一帧。
+ * 插件启动、审批等路径都可能提前 emit,因此这里在定义 emit 后立即握手,
+ * 而不是等所有初始化完成再发——否则首帧会被 plugin.status 抢占。
+ */
+emit(helloFrame())
+
 const approvalBridge = new ApprovalBridge({
   emit: (event) => emit(event),
   newId: () => `apr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
@@ -320,7 +327,6 @@ try {
   assertRequiredModes(modes)
 } catch (err) {
   process.stderr.write(`[fatal] ${(err as Error).message}\n`)
-  emit(helloFrame())
   emit({ type: 'error', code: 'MODES_FAILED', message: (err as Error).message, retryable: false })
   process.exit(2)
 }
@@ -1962,7 +1968,6 @@ process.stdin.on('end', () => {
     .finally(() => process.exit(0))
 })
 
-emit(helloFrame())
 if (!dbHandle) {
   emit({ type: 'error', code: 'DB_UNAVAILABLE', message: fatal ?? '数据库未就绪', retryable: false })
 }
