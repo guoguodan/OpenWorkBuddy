@@ -9,8 +9,11 @@ toolPolicy:
     - grep
     - shell
     - present_files
+    - delete_files
+    - move_files
   deny: []
   defer: []
 promptFragments:
   - interaction.md
   - agent-loop.md
+  - personal-files.md

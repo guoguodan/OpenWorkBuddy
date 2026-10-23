@@ -98,7 +98,12 @@ async function main(): Promise<void> {
     const loaded = await loadWorkflowById(dirs, id)
     const normalized = normalizeInputs(loaded.manifest, inputs)
     const registry = new ToolRegistry()
-    for (const tool of builtinTools()) registry.register(tool)
+    // CLI 没有审批通道:破坏性文件工具必须从命令入口移除,
+    // 否则工作流一旦声明 delete_files 会走到执行器才发现无人可确认。
+    for (const tool of builtinTools()) {
+      if (tool.name === 'delete_files' || tool.name === 'move_files') continue
+      registry.register(tool)
+    }
 
     const controller = new AbortController()
     const onSignal = () => controller.abort(new Error('用户取消'))

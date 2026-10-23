@@ -4,6 +4,7 @@ import { classifyRisk, pluginNameFromTool, riskFromApprovalKind } from '../src/r
 import { decide, evaluate, summarizeArgs, type GateContext } from '../src/gate.js'
 import { InMemorySessionGrants, MemoryPersistentGrants, approvalExpiry } from '../src/grants.js'
 import { builtinRisk } from '../src/builtin-risk.js'
+import { classifyRisk as classifyRiskWith } from '../src/risk.js'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -229,7 +230,11 @@ describe('审批记忆', () => {
   it('always 授权持久化后不再询问,过期后重新询问', async () => {
     const persistentGrants = new MemoryPersistentGrants()
     let now = new Date('2026-01-01T00:00:00.000Z')
-    const requestApproval = vi.fn(async () => ({ approved: true, scope: 'always' as const }))
+    const scopesSeen: string[][] = []
+    const requestApproval = vi.fn(async (request: { scopes: string[] }) => {
+      scopesSeen.push(request.scopes)
+      return { approved: true, scope: 'always' as const }
+    })
     const ctx = context({
       persistentGrants,
       requestApproval,
@@ -265,9 +270,27 @@ describe('内置高危命令', () => {
     builtinRisk({ name: 'shell', arguments: { command, args } })
 
   it('无条件删除类命令命中', () => {
-    expect(shell('rm', ['-rf', 'build'])).toMatchObject({ kind: 'high-risk' })
+    expect(shell('rm', ['-rf', 'build'])).toMatchObject({ kind: 'blocked-command', code: 'USE_DELETE_TOOL' })
     expect(shell('C:/Windows/System32/format.com')).not.toBeNull()
     expect(shell('node', ['-e', 'rm'])).toBeNull()
+  })
+
+  it('删除类 shell 命令是拒绝而不是批准后执行', async () => {
+    const decision = await decide(
+      { name: 'shell', arguments: { command: 'rm', args: ['-rf', 'dist'] } },
+      context({
+        classifyRisk: async (name, args) => classifyRiskWith(
+          { name, arguments: args, effects: { writesFilesystem: true } },
+          {
+            workspaceRoot: 'C:/work',
+            resolveManifestTool: async () => null,
+            classifyPath: () => 'workspace',
+            builtinRisk
+          }
+        )
+      })
+    )
+    expect(decision).toMatchObject({ action: 'deny', code: 'USE_DELETE_TOOL', retryable: false })
   })
 
   it('git clean / git reset 命中,但 --grep 不误判', () => {
@@ -280,5 +303,112 @@ describe('内置高危命令', () => {
     expect(shell('reg', ['delete', 'HKCU\\Software\\x'])).toMatchObject({ kind: 'high-risk' })
     expect(shell('npm', ['unpublish', 'pkg'])).toMatchObject({ kind: 'high-risk' })
     expect(shell('npm', ['install'])).toBeNull()
+  })
+})
+
+describe('个人文件精确授权', () => {
+  const opts = { platform: 'win32' as const, home: 'C:/Users/me', systemRoots: ['C:/Windows'] }
+  const classify = async (target: string) =>
+    await classifyRisk(
+      { name: 'write_file', arguments: { path: target }, effects: { writesFilesystem: true } },
+      {
+        workspaceRoot: 'C:/work',
+        resolveManifestTool: async () => null,
+        classifyPath: (path, root) => classifyPath(path, root, opts)
+      }
+    )
+
+  it('同一个人目录下的不同文件不会共享授权组', async () => {
+    const a = await classify('C:/Users/me/Desktop/a.txt')
+    const b = await classify('C:/Users/me/Desktop/b.txt')
+    expect(a?.kind).toBe('personal-file')
+    expect(b?.kind).toBe('personal-file')
+    expect(a!.groupKey).not.toBe(b!.groupKey)
+    expect(a!.groupKey).toContain('path:personal:')
+  })
+
+  it('对 A 文件的会话授权不会放行 B 文件', async () => {
+    const sessionGrants = new InMemorySessionGrants()
+    const requestApproval = vi.fn(async () => ({ approved: true, scope: 'session' as const }))
+    const ctx = context({
+      sessionGrants,
+      requestApproval,
+      classifyRisk: async (name, args) =>
+        await classifyRiskWith(
+          { name, arguments: args, effects: { writesFilesystem: true } },
+          {
+            workspaceRoot: 'C:/work',
+            resolveManifestTool: async () => null,
+            classifyPath: (path, root) => classifyPath(path, root, opts)
+          }
+        )
+    })
+    // decide() 在本例里会自动批准两轮,因此用 evaluate() 验证第二轮确实还被要求确认。
+    expect((await evaluate({ name: 'write_file', arguments: { path: 'C:/Users/me/Desktop/a.txt' } }, ctx)).action).toBe('ask')
+    await decide({ name: 'write_file', arguments: { path: 'C:/Users/me/Desktop/a.txt' } }, ctx)
+    expect((await evaluate({ name: 'write_file', arguments: { path: 'C:/Users/me/Desktop/a.txt' } }, ctx)).action).toBe('allow')
+    expect((await evaluate({ name: 'write_file', arguments: { path: 'C:/Users/me/Desktop/b.txt' } }, ctx)).action).toBe('ask')
+    expect(requestApproval).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('删除/移动审批', () => {
+  const deps = {
+    workspaceRoot: 'C:/work',
+    resolveManifestTool: async () => null,
+    classifyPath: (path: string) => classifyPath(path, 'C:/work', {
+      platform: 'win32' as const,
+      home: 'C:/Users/me',
+      systemRoots: ['C:/Windows']
+    })
+  }
+
+  it('删除工作区内文件也必须审批,且只允许本次', async () => {
+    const risk = await classifyRiskWith(
+      { name: 'delete_files', arguments: { paths: ['a.txt', 'b.txt'] }, effects: { writesFilesystem: true } },
+      deps
+    )
+    expect(risk).toMatchObject({ kind: 'destructive', scopes: ['once'] })
+    expect(risk?.targets).toHaveLength(2)
+  })
+
+  it('删除清单不同则授权组不同', async () => {
+    const a = await classifyRiskWith(
+      { name: 'delete_files', arguments: { paths: ['a.txt'] }, effects: { writesFilesystem: true } },
+      deps
+    )
+    const b = await classifyRiskWith(
+      { name: 'delete_files', arguments: { paths: ['b.txt'] }, effects: { writesFilesystem: true } },
+      deps
+    )
+    expect(a?.groupKey).not.toBe(b?.groupKey)
+  })
+
+  it('删除系统目录直接拒绝,不进入审批', async () => {
+    const risk = await classifyRiskWith(
+      { name: 'delete_files', arguments: { paths: ['C:/Windows/System32/x.dll'] }, effects: { writesFilesystem: true } },
+      deps
+    )
+    expect(risk?.kind).toBe('system-path')
+  })
+
+  it('审批卡只给 once 选项,即使调用方请求 always 也不落库', async () => {
+    const persistentGrants = new MemoryPersistentGrants()
+    const scopesSeen: string[][] = []
+    const requestApproval = vi.fn(async (request: { scopes: string[] }) => {
+      scopesSeen.push(request.scopes)
+      return { approved: true, scope: 'always' as const }
+    })
+    const ctx = context({
+      persistentGrants,
+      requestApproval,
+      classifyRisk: async (name, args) =>
+        await classifyRiskWith(
+          { name, arguments: args, effects: { writesFilesystem: true } },
+          deps
+        )
+    })
+    await decide({ name: 'delete_files', arguments: { paths: ['a.txt'] } }, ctx)
+    expect(scopesSeen[0]).toEqual(['once'])
   })
 })

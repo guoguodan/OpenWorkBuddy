@@ -1,9 +1,11 @@
-import type { PathCategory } from './paths.js'
+import { createHash } from 'node:crypto'
+import { normalizePathForCompare, resolveTargetPath, type PathCategory } from './paths.js'
 
 export type RiskKind =
   | 'billing'
   | 'destructive'
   | 'high-risk'
+  | 'blocked-command'
   | 'personal-file'
   | 'system-path'
   | 'unknown'
@@ -16,10 +18,11 @@ export interface ManifestToolRisk {
 }
 
 export interface BuiltinRisk {
-  kind: 'high-risk'
+  kind: 'high-risk' | 'blocked-command'
   groupKey: string
   title: string
   detail: string
+  code?: string
 }
 
 export interface RiskAssessment {
@@ -33,6 +36,11 @@ export interface RiskAssessment {
   gateError?: boolean
   path?: string
   pathCategory?: PathCategory
+  /** 该风险允许的授权范围;删除/移动只允许 once,避免把一次确认变成长期免审 */
+  scopes?: Array<'once' | 'session' | 'always'>
+  /** 破坏性文件工具涉及的完整目标清单,用于生成精确的授权组 */
+  targets?: string[]
+  code?: string
 }
 
 export interface ToolCallView {
@@ -86,11 +94,28 @@ export function riskFromApprovalKind(
   }
 }
 
-const PATH_KEYS = ['path', 'file', 'filePath', 'filepath', 'target', 'targetPath', 'destination', 'source']
+const PATH_KEYS = [
+  'path',
+  'paths',
+  'file',
+  'filePath',
+  'filepath',
+  'target',
+  'targetPath',
+  'destination',
+  'source',
+  'from',
+  'to'
+]
+
+const FILE_DESTRUCTIVE_TOOLS = new Set(['delete_files', 'move_files'])
 
 function collectPaths(value: unknown, out: string[], depth = 0): void {
   if (depth > 4 || value === null || value === undefined) return
-  if (typeof value === 'string') return
+  if (typeof value === 'string') {
+    out.push(value)
+    return
+  }
   if (Array.isArray(value)) {
     for (const item of value.slice(0, 20)) collectPaths(item, out, depth + 1)
     return
@@ -99,6 +124,12 @@ function collectPaths(value: unknown, out: string[], depth = 0): void {
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     if (PATH_KEYS.includes(key) && typeof item === 'string' && item.length > 0) {
       out.push(item)
+      continue
+    }
+    if (PATH_KEYS.includes(key) && Array.isArray(item)) {
+      for (const entry of item) {
+        if (typeof entry === 'string' && entry.length > 0) out.push(entry)
+      }
       continue
     }
     if (typeof item === 'object') collectPaths(item, out, depth + 1)
@@ -150,7 +181,8 @@ export async function classifyRisk(call: ToolCallView, deps: ClassifyRiskDeps): 
       kind: builtin.kind,
       groupKey: builtin.groupKey,
       title: builtin.title,
-      detail: builtin.detail
+      detail: builtin.detail,
+      ...(builtin.code ? { code: builtin.code } : {})
     }
   }
 
@@ -159,6 +191,57 @@ export async function classifyRisk(call: ToolCallView, deps: ClassifyRiskDeps): 
 
   const paths: string[] = []
   collectPaths(call.arguments, paths)
+
+  // 删除/移动是显式的破坏性工具:即使目标在工作区内也要确认,且只允许本次授权。
+  // 组键包含完整目标,否则"对 A 文件始终允许"会变成"以后任意文件都能删"。
+  if (FILE_DESTRUCTIVE_TOOLS.has(call.name)) {
+    if (paths.length === 0) {
+      return {
+        kind: 'unknown',
+        groupKey: `builtin:${call.name}:empty`,
+        title: '破坏性操作缺少目标',
+        detail: '没有可确认的文件清单,按未知风险处理。',
+        gateError: true
+      }
+    }
+    const resolved: string[] = []
+    for (const target of paths) {
+      try {
+        const abs = resolveTargetPath(target, deps.workspaceRoot)
+        const category = deps.classifyPath(abs, deps.workspaceRoot)
+        if (category === 'system') {
+          return {
+            kind: 'system-path',
+            groupKey: 'path:system',
+            title: '禁止操作系统目录',
+            detail: `路径位于受保护的系统目录: ${abs}`,
+            path: abs,
+            pathCategory: category
+          }
+        }
+        resolved.push(normalizePathForCompare(abs))
+      } catch (err) {
+        return {
+          kind: 'unknown',
+          groupKey: 'path:unknown',
+          title: '无法判定文件位置',
+          detail: `路径分类异常,按未知风险处理: ${(err as Error).message}`,
+          gateError: true,
+          path: target
+        }
+      }
+    }
+    const digest = createHash('sha256').update([...resolved].sort().join('\u0000')).digest('hex').slice(0, 16)
+    return {
+      kind: 'destructive',
+      groupKey: `builtin:${call.name}:${digest}`,
+      title: call.name === 'delete_files' ? '要删除这些文件' : '要移动这些文件',
+      detail: `${call.name === 'delete_files' ? '删除' : '移动'}前会先备份,删除会送入系统回收站。共 ${resolved.length} 项,单批上限 10 项。`,
+      scopes: ['once'],
+      targets: resolved
+    }
+  }
+
   for (const target of paths) {
     let category: PathCategory
     try {
@@ -184,12 +267,14 @@ export async function classifyRisk(call: ToolCallView, deps: ClassifyRiskDeps): 
       }
     }
     if (category === 'personal' || category === 'other') {
+      const abs = resolveTargetPath(target, deps.workspaceRoot)
       return {
         kind: 'personal-file',
-        groupKey: `path:${category}`,
+        // 授权必须精确到目标路径:个人目录是一个集合,不是一次同意的单位。
+        groupKey: `path:${category}:${normalizePathForCompare(abs)}`,
         title: category === 'personal' ? '要修改你的个人文件' : '要修改工作区之外的文件',
-        detail: `目标不在工作区内,执行前需要确认: ${target}`,
-        path: target,
+        detail: `目标不在工作区内,执行前需要确认: ${abs}`,
+        path: abs,
         pathCategory: category
       }
     }

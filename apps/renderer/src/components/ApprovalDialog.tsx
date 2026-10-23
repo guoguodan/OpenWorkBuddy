@@ -15,6 +15,12 @@ export interface ApprovalRequestInfo {
   argsSummary: string
   path?: string
   pathCategory?: string
+  plan?: {
+    operation: 'delete' | 'move'
+    items: Array<{ path: string; kind: 'file' | 'directory'; size: number; destPath?: string }>
+    totalBytes: number
+    batchLimit: number
+  }
   scopes: ApprovalScope[]
   requestedAt: string
 }
@@ -37,6 +43,14 @@ const SCOPE_LABEL: Record<ApprovalScope, string> = {
   once: '仅本次',
   session: '本次会话',
   always: '始终允许(30 天)'
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '-'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 /** 审批卡只暴露与本次工具调用相关的信息,不提供"所有工具"批量授权。 */
@@ -114,6 +128,33 @@ export function ApprovalDialog({ request, onRespond }: ApprovalDialogProps) {
             <pre>{request.argsSummary}</pre>
           </div>
 
+          {request.plan ? (
+            <div className="owb-approval__plan" data-testid="approval-plan">
+              <div className="owb-approval__args-title">
+                {request.plan.operation === 'delete' ? '将删除以下内容' : '将移动以下内容'}
+                <span className="owb-approval__plan-count">
+                  {request.plan.items.length} / {request.plan.batchLimit} 项 · {formatBytes(request.plan.totalBytes)}
+                </span>
+              </div>
+              <ul className="owb-approval__plan-list">
+                {request.plan.items.map((item) => (
+                  <li key={item.path} className="owb-approval__plan-item">
+                    <span className="owb-approval__path" title={item.path}>{item.path}</span>
+                    <span className="owb-approval__plan-meta">
+                      {item.kind === 'directory' ? '目录' : '文件'} · {formatBytes(item.size)}
+                    </span>
+                    {item.destPath ? (
+                      <span className="owb-approval__plan-dest">→ {item.destPath}</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+              <p className="owb-approval__plan-note">
+                执行前会先备份到应用数据目录;删除会送入系统回收站。备份位置会在结果中给出。
+              </p>
+            </div>
+          ) : null}
+
           <fieldset className="owb-approval__scopes" disabled={busy}>
             <legend>授权范围</legend>
             {(request.scopes ?? []).map((item) => (
@@ -129,7 +170,11 @@ export function ApprovalDialog({ request, onRespond }: ApprovalDialogProps) {
               </label>
             ))}
           </fieldset>
-          <p className="owb-approval__note">授权只对同一工具组生效,不会放行其他工具。拒绝时本次操作不会执行。</p>
+          <p className="owb-approval__note">
+            授权只对同一工具组生效,不会放行其他工具。
+            {request.plan ? '删除/移动只允许本次确认,不能使用长期授权。' : ''}
+            拒绝时本次操作不会执行。
+          </p>
           {error ? <p className="owb-approval__error">{error}</p> : null}
         </div>
 

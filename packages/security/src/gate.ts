@@ -4,6 +4,21 @@ import type { RiskAssessment } from './risk.js'
 
 export type ApprovalScope = 'once' | 'session' | 'always'
 
+/** 审批卡里的完整操作清单:让用户看到"到底会动哪些文件",而不是只有参数 JSON。 */
+export interface ApprovalPlanItem {
+  path: string
+  kind: 'file' | 'directory'
+  size: number
+  destPath?: string
+}
+
+export interface ApprovalPlan {
+  operation: 'delete' | 'move'
+  items: ApprovalPlanItem[]
+  totalBytes: number
+  batchLimit: number
+}
+
 export interface ApprovalRequest {
   id: string
   callId: string | null
@@ -17,6 +32,7 @@ export interface ApprovalRequest {
   argsSummary: string
   path?: string
   pathCategory?: PathCategory
+  plan?: ApprovalPlan
   scopes: ApprovalScope[]
   requestedAt: string
 }
@@ -30,6 +46,8 @@ export interface GateContext {
   workspaceRoot: string
   conversationId: string
   callId?: string
+  /** 本次调用可附带的执行计划(破坏性文件操作由 daemon 预扫描生成) */
+  approvalPlan?: ApprovalPlan
   now?: () => Date
   ttlDays?: number
   modeAllows: (toolName: string) => boolean
@@ -118,6 +136,16 @@ export async function evaluate(
 
   if (risk.kind === 'unknown') return { action: 'ask', risk }
 
+  // 永久删除类 shell 命令没有"批准后执行"这一档:必须改用带备份与回收站的文件工具。
+  if (risk.kind === 'blocked-command') {
+    return {
+      action: 'deny',
+      code: risk.code ?? 'BLOCKED_COMMAND',
+      message: risk.detail,
+      retryable: false
+    }
+  }
+
   if (risk.kind === 'billing' || risk.kind === 'destructive' || risk.kind === 'high-risk') {
     if (await hasGrant(risk, ctx, now)) {
       // 已授权也必须再过模式边界:授权只回答"是否愿意",不扩大工具可见性。
@@ -177,7 +205,18 @@ export async function decide(
       argsSummary: summarizeArgs(call.arguments),
       ...(risk.path ? { path: risk.path } : {}),
       ...(risk.pathCategory ? { pathCategory: risk.pathCategory } : {}),
-      scopes: ['once', 'session', 'always'],
+      ...(ctx.approvalPlan
+        ? {
+            plan: {
+              operation: ctx.approvalPlan.operation,
+              items: ctx.approvalPlan.items,
+              totalBytes: ctx.approvalPlan.totalBytes,
+              batchLimit: ctx.approvalPlan.batchLimit
+            }
+          }
+        : {}),
+      // 删除/移动只允许"仅本次";长期授权会把一次同意变成任意文件免审。
+      scopes: risk.scopes ?? ['once', 'session', 'always'],
       requestedAt: now.toISOString()
     })
   } catch (err) {

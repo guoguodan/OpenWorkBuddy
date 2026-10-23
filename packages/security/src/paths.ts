@@ -32,6 +32,20 @@ export function normalizePathForCompare(input: string, platform: NodeJS.Platform
   return out.replace(/[\\/]+$/, '')
 }
 
+/** 把用户/模型给出的路径解析为绝对路径;相对路径按工作区根目录解析。 */
+export function resolveTargetPath(
+  target: string,
+  workspaceRoot: string,
+  platform: NodeJS.Platform = process.platform
+): string {
+  if (typeof target !== 'string' || target.trim().length === 0) throw new Error('路径不能为空')
+  if (target.includes('\0')) throw new Error('路径含非法字符')
+  // 用平台感知的 resolve 规则:在 Windows 上 C:/ 与 C:\ 等价。
+  const base = platform === 'win32' ? workspaceRoot.replace(/\//g, '\\') : workspaceRoot
+  const raw = platform === 'win32' ? target.replace(/\//g, '\\') : target
+  return isAbsolute(raw) ? resolve(raw) : resolve(base, raw)
+}
+
 function contains(parent: string, child: string, platform: NodeJS.Platform): boolean {
   const p = normalizePathForCompare(parent, platform)
   const c = normalizePathForCompare(child, platform)

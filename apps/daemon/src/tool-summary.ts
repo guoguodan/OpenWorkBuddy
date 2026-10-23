@@ -52,6 +52,16 @@ export function summarizeToolResult(name: string, result: unknown): { ok: boolea
     return { ok: true, summary: `${Buffer.byteLength(result, 'utf8')} 字节` }
   }
   if (name === 'write_file' && typeof result === 'string') return { ok: true, summary: result }
+  if ((name === 'delete_files' || name === 'move_files') && result && typeof result === 'object') {
+    const r = result as { deleted?: number; moved?: number; backupDir?: string }
+    const count = name === 'delete_files' ? r.deleted ?? 0 : r.moved ?? 0
+    const verb = name === 'delete_files' ? '已删除并送入回收站' : '已移动'
+    return {
+      ok: true,
+      // 备份路径必须出现在工具行里:用户不打开详情也能知道去哪找回文件。
+      summary: `${verb} ${count} 项 · 备份: ${r.backupDir ?? '(未知)'}`
+    }
+  }
   // 插件工具通常返回一段纯文本,按原样展示比一串转义 JSON 可读得多
   if (typeof result === 'string') {
     const oneLine = result.trim().replace(/\s+/g, ' ')

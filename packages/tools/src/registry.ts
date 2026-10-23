@@ -22,6 +22,8 @@ export interface ToolContext {
   conversationId?: string | null
   /** 由宿主注入的交付物写入器;缺省时工具只做校验,不落库(例如工作流步骤) */
   artifactSink?: ArtifactSink
+  /** 宿主在审批阶段生成并冻结的破坏性操作清单;工具只能执行它,不能自行改写 */
+  destructivePlan?: unknown
 }
 
 export interface ArtifactDraft {

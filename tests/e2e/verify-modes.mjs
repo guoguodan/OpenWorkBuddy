@@ -13,7 +13,7 @@ const root = resolve(here, '../..')
 const entry = resolve(root, 'apps/daemon/dist/index.js')
 
 const expected = {
-  craft: ['glob', 'grep', 'present_files', 'read_file', 'shell', 'write_file'],
+  craft: ['delete_files', 'glob', 'grep', 'move_files', 'present_files', 'read_file', 'shell', 'write_file'],
   plan: ['glob', 'grep', 'present_files', 'read_file'],
   ask: ['glob', 'grep', 'read_file'],
   expert: ['glob', 'grep', 'present_files', 'read_file'],

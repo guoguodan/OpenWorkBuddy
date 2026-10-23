@@ -65,7 +65,7 @@ import {
   ensureWorkspaceGitignore,
   listMemory
 } from '@openwb/memory'
-import { builtinTools } from './tools/builtin.js'
+import { builtinTools, configureDestructiveTools } from './tools/builtin.js'
 import {
   PluginRuntime,
   discoverPlugins,
@@ -79,11 +79,19 @@ import { WorkflowService } from './workflows/service.js'
 import { flushPending, normalizeSyncUrl, startSyncLoop, SyncError } from './sync/client.js'
 import {
   InMemorySessionGrants,
+  MAX_DESTRUCTIVE_BATCH,
+  MemoryTrashAdapter,
+  SecurityError,
   builtinRisk,
   classifyPath,
   classifyRisk,
   decide,
+  destructiveRequestFromTool,
+  inspectDestructiveRequest,
+  platformTrashAdapter,
+  type ApprovalPlan,
   type ApprovalRequest,
+  type DestructivePlan,
   type GateContext,
   type RiskAssessment
 } from '@openwb/security'
@@ -161,6 +169,15 @@ async function resolveDataDir(): Promise<string> {
 
 const DATA_DIR = await resolveDataDir()
 const DB_PATH = resolve(DATA_DIR, 'openwb.db')
+/** 破坏性操作备份:用户必须能从这里取回文件,因此放在可浏览的数据目录下。 */
+const DESTRUCTIVE_BACKUP_DIR = resolve(DATA_DIR, 'backups', 'destructive')
+configureDestructiveTools({
+  backupRoot: DESTRUCTIVE_BACKUP_DIR,
+  // 端到端测试不能真的清空开发机回收站;生产仍使用平台回收站。
+  ...(process.env.OPENWB_TRASH_FAKE === '1'
+    ? { trash: new MemoryTrashAdapter() }
+    : { trash: platformTrashAdapter() })
+})
 /** 已安装插件的根目录;数据库记录与磁盘目录必须同时存在 */
 const PLUGINS_DIR = resolve(DATA_DIR, 'plugins')
 const PLUGIN_DATA_DIR = resolve(DATA_DIR, 'plugin-data')
@@ -449,13 +466,15 @@ interface RunToolContext {
 function gateContextFor(
   mode: ModePolicy,
   conversationId: string,
-  callId?: string
+  callId?: string,
+  approvalPlan?: ApprovalPlan
 ): GateContext {
   const db = requireDb()
   return {
     workspaceRoot: WORKSPACE,
     conversationId,
     ...(callId ? { callId } : {}),
+    ...(approvalPlan ? { approvalPlan } : {}),
     ttlDays: APPROVAL_TTL_DAYS,
     modeAllows: (name) => modeAllowsTool(mode, name),
     classifyRisk: async (name, args) =>
@@ -506,10 +525,67 @@ async function executeGated(
   const args =
     input && typeof input === 'object' ? (input as Record<string, unknown>) : { value: input }
 
+  // 破坏性文件操作必须先形成完整清单:审批卡展示的是这份清单,执行器也会重新核对它。
+  let destructivePlan: DestructivePlan | undefined
+  let approvalPlan: ApprovalPlan | undefined
+  if (descriptorName === 'delete_files' || descriptorName === 'move_files') {
+    if (!isToolAllowed(mode, descriptorName)) {
+      throw new ToolError('MODE_DENIED', `当前模式不允许使用 ${descriptorName}`)
+    }
+    // 首轮扫描保护在"列清单"之前就生效:连计划都不允许生成,更不会触碰磁盘内容。
+    assertDestructiveAllowed(conversationId)
+    try {
+      const request = destructiveRequestFromTool(descriptorName, args)
+      destructivePlan = await inspectDestructiveRequest(request, { workspaceRoot: WORKSPACE })
+      approvalPlan = {
+        operation: destructivePlan.operation,
+        items: destructivePlan.items.map((item) => ({
+          path: item.path,
+          kind: item.kind,
+          size: item.size,
+          ...(item.destPath ? { destPath: item.destPath } : {})
+        })),
+        totalBytes: destructivePlan.totalBytes,
+        batchLimit: MAX_DESTRUCTIVE_BATCH
+      }
+    } catch (err) {
+      if (err instanceof SecurityError) {
+        emit({
+          type: 'approval.denied',
+          ...(ctx.callId ? { callId: ctx.callId } : {}),
+          toolName: descriptorName,
+          code: err.code,
+          message: err.message,
+          retryable: false
+        })
+        throw new ToolError(err.code, err.message)
+      }
+      throw err
+    }
+  }
+
+  // 删除/移动在 agent 循环里可能被同一轮多次调用:每轮只允许执行一次,避免"批准后追加删除"。
+  if (
+    (descriptorName === 'delete_files' || descriptorName === 'move_files') &&
+    destructiveCallsThisTurn.has(conversationId)
+  ) {
+    throw new ToolError(
+      'DESTRUCTIVE_ALREADY_RAN',
+      '本轮已经执行过一次删除/移动。请先向用户汇报结果,下一轮确认后再继续。'
+    )
+  }
+
   const decision = await decide(
     { name: descriptorName, arguments: args },
-    gateContextFor(mode, conversationId, ctx.callId)
+    gateContextFor(mode, conversationId, ctx.callId, approvalPlan)
   )
+  if (
+    (descriptorName === 'delete_files' || descriptorName === 'move_files') &&
+    decision.action === 'allow' &&
+    !destructiveCallsThisTurn.has(conversationId)
+  ) {
+    destructiveCallsThisTurn.add(conversationId)
+  }
   if (decision.action === 'deny') {
     emit({
       type: 'approval.denied',
@@ -527,6 +603,7 @@ async function executeGated(
   return await descriptor.execute(args, {
     workspaceRoot: WORKSPACE,
     ...(ctx.signal ? { signal: ctx.signal } : {}),
+    ...(destructivePlan ? { destructivePlan } : {}),
     ...(ctx.taskId ? { taskId: ctx.taskId } : {}),
     ...(ctx.taskId ? { conversationId } : {}),
     ...(ctx.taskId
@@ -675,6 +752,52 @@ interface RunInput {
   conversationId: string
 }
 
+/**
+ * WM-SEC-02:扫描类请求首轮只读。
+ *
+ * 仅靠提示词不足以阻止模型直接删除,因此在运行时记录"该会话刚刚收到清理类请求";
+ * 下一轮用户明确要求执行时解除。状态只影响破坏性文件工具,不影响正常读写。
+ */
+const scanOnlyTurns = new Map<string, number>()
+let conversationTurn = 0
+/** 当前轮用户原始输入按会话隔离:并发工作流不能把 A 会话的文本带到 B 会话。 */
+const activePromptByConversation = new Map<string, { text: string; turn: number }>()
+/** 每个会话每轮最多执行一次破坏性文件操作 */
+const destructiveCallsThisTurn = new Set<string>()
+
+const SCAN_INTENT = /(清理|清空|扫描|分析.*(磁盘|空间|文件)|释放.*(空间|磁盘)|找出.*(大文件|垃圾|重复)|disk\s*cleanup|free\s*(up\s*)?space)/i
+const SCAN_EXECUTION = /(执行|开始|确认|删除|清空|清理吧|动手|apply|execute|go ahead)/i
+
+export function isScanOnlyRequest(text: string): boolean {
+  // 同一条消息里即使写了"并删除",只要它本身是清理/扫描请求,本轮仍只允许报告。
+  // 否则模型可以用一句"清理磁盘并直接删除"绕过"首轮只读"。
+  return SCAN_INTENT.test(text)
+}
+
+function markScanTurn(conversationId: string, text: string): void {
+  conversationTurn++
+  activePromptByConversation.set(conversationId, { text, turn: conversationTurn })
+  destructiveCallsThisTurn.delete(conversationId)
+  if (isScanOnlyRequest(text)) scanOnlyTurns.set(conversationId, conversationTurn)
+}
+
+function assertDestructiveAllowed(conversationId: string): void {
+  const marked = scanOnlyTurns.get(conversationId)
+  if (marked === undefined) return
+  const active = activePromptByConversation.get(conversationId)
+  const text = active?.text ?? ''
+  // 只有"后续的新一轮"里明确要求执行,才解除首轮只读;
+  // 首轮自己夹带"删除"不算确认,必须先生成报告给用户看。
+  if (marked < conversationTurn && SCAN_EXECUTION.test(text)) {
+    scanOnlyTurns.delete(conversationId)
+    return
+  }
+  throw new ToolError(
+    'SCAN_REPORT_REQUIRED',
+    '这是清理/扫描类请求的第一轮:只允许产出报告,不会修改文件。请先给出完整清单,下一轮由用户明确要求后再执行。'
+  )
+}
+
 /** 任务结束后的工作区日志:失败只记 stderr,绝不影响任务结果 */
 async function appendRunLog(
   db: ReturnType<typeof requireDb>,
@@ -737,6 +860,96 @@ async function runMock(
     } catch (err) {
       emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
       reply = `[mock:${input.mode.id}] 插件工具 ${toolName} 调用失败: ${(err as Error).message}`
+    }
+    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    appendMessage(db, {
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: { text: reply },
+      model: 'mock'
+    })
+    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    await writeTrace(TRACE_DIR, mockTrace)
+    transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
+    await appendRunLog(db, {
+      conversationId: input.conversationId,
+      text: input.text,
+      modeId: input.mode.id,
+      toolCalls: 1
+    })
+    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+    return 'done'
+  }
+
+  // 离线验收 shell 参数语义:用真实工具与闸门执行,证明 args 按数组原样传递,
+  // 同时验证 rm/del 这类永久删除命令会被直接拒绝而不是弹审批。
+  const shellCall = input.mode.id === 'craft'
+    ? /shell\s*[:：]\s*(\{[^\n]*\})/.exec(input.text)
+    : null
+  if (shellCall) {
+    let payload: unknown
+    try {
+      payload = JSON.parse(shellCall[1]!)
+    } catch {
+      payload = { command: '__bad_json__' }
+    }
+    emit({ type: 'tool.started', callId, name: 'shell' })
+    try {
+      const result = await executeGated('shell', payload, input.mode, input.conversationId, {
+        taskId,
+        callId
+      })
+      const { ok, summary } = summarizeToolResult('shell', result)
+      emit({ type: 'tool.finished', callId, ok, summary })
+      reply = `[mock:${input.mode.id}] ${summary}`
+    } catch (err) {
+      emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
+      reply = `[mock:${input.mode.id}] 命令未执行: ${(err as Error).message}`
+    }
+    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    appendMessage(db, {
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: { text: reply },
+      model: 'mock'
+    })
+    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    await writeTrace(TRACE_DIR, mockTrace)
+    transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
+    await appendRunLog(db, {
+      conversationId: input.conversationId,
+      text: input.text,
+      modeId: input.mode.id,
+      toolCalls: 1
+    })
+    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+    return 'done'
+  }
+
+  // 离线验收破坏性链路:文本里显式给出 delete_files / move_files 时,按真实工具与闸门执行。
+  const destructiveCall = input.mode.id === 'craft'
+    ? /(delete_files|move_files)\s*[:,]?\s*(\[[\s\S]*\])/.exec(input.text)
+    : null
+  if (destructiveCall) {
+    const name = destructiveCall[1] as 'delete_files' | 'move_files'
+    let payload: unknown
+    try {
+      payload = JSON.parse(destructiveCall[2]!)
+    } catch {
+      payload = []
+    }
+    const args = name === 'delete_files' ? { paths: payload } : { items: payload }
+    emit({ type: 'tool.started', callId, name })
+    try {
+      const result = await executeGated(name, args, input.mode, input.conversationId, { taskId, callId })
+      const { ok, summary } = summarizeToolResult(name, result)
+      emit({ type: 'tool.finished', callId, ok, summary })
+      reply = `[mock:${input.mode.id}] ${summary}`
+    } catch (err) {
+      emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
+      reply = `[mock:${input.mode.id}] 破坏性操作未执行: ${(err as Error).message}`
     }
     for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
     appendMessage(db, {
@@ -883,6 +1096,8 @@ async function runMock(
 async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
   const db = requireDb()
   const { text, mode, conversationId } = input
+
+  markScanTurn(conversationId, text)
 
   emit({ type: 'mode.selected', modeId: mode.id, displayName: mode.displayName })
 

@@ -14,6 +14,19 @@ const DESTRUCTIVE_COMMANDS = new Set([
   'fdisk'
 ])
 
+/** 永久删除类命令:即使用户点了"允许",也不应通过 shell 执行。 */
+const PERMANENT_DELETE_COMMANDS = new Set([
+  'rm',
+  'rmdir',
+  'del',
+  'erase',
+  'format',
+  'diskpart',
+  'mkfs',
+  'dd',
+  'fdisk'
+])
+
 const DESTRUCTIVE_ARGS: Array<{ command: string; args: RegExp }> = [
   { command: 'git', args: /^(reset)$/ },
   { command: 'git', args: /^clean$/ },
@@ -38,6 +51,17 @@ export function builtinRisk(call: ToolCallView): BuiltinRisk | null {
     : []
 
   if (DESTRUCTIVE_COMMANDS.has(base)) {
+    if (PERMANENT_DELETE_COMMANDS.has(base)) {
+      return {
+        kind: 'blocked-command',
+        groupKey: `builtin:shell:${base}`,
+        title: '不能通过 shell 永久删除',
+        detail:
+          `检测到 ${base}。宿主只允许通过 delete_files 删除:它会先备份、送入系统回收站,并限制单批数量。` +
+          ' 请改用 delete_files。',
+        code: 'USE_DELETE_TOOL'
+      }
+    }
     return {
       kind: 'high-risk',
       groupKey: `builtin:shell:${base}`,

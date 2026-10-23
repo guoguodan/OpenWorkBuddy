@@ -2,6 +2,16 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, sep, dirname } from 'node:path'
 import { z } from 'zod'
 import type { ArtifactDraft, ToolDescriptor, ToolContext } from '@openwb/tools'
+import {
+  MAX_DESTRUCTIVE_BATCH,
+  SecurityError,
+  destructiveRequestFromTool,
+  executeDestructivePlan,
+  inspectDestructiveRequest,
+  platformTrashAdapter,
+  type DestructivePlan,
+  type TrashAdapter
+} from '@openwb/security'
 
 const MAX_READ_BYTES = 512 * 1024
 
@@ -165,6 +175,105 @@ export const shellTool: ToolDescriptor<z.infer<typeof shellParams>, { code: numb
   }
 }
 
+/** 破坏性文件工具的宿主依赖。测试可以注入假的回收站,生产默认使用系统回收站。 */
+export interface DestructiveToolsDeps {
+  backupRoot: string
+  trash?: TrashAdapter
+  home?: string
+  platform?: NodeJS.Platform
+  /** 在真正执行前拿到"已审批的计划";返回 null 表示调用方未携带审批计划 */
+}
+
+let destructiveDeps: DestructiveToolsDeps | null = null
+
+export function configureDestructiveTools(deps: DestructiveToolsDeps): void {
+  destructiveDeps = deps
+}
+
+function requireDestructiveDeps(): DestructiveToolsDeps {
+  if (!destructiveDeps) {
+    throw new SecurityError(
+      'DESTRUCTIVE_UNAVAILABLE',
+      '破坏性文件工具未初始化;本次没有执行任何操作。'
+    )
+  }
+  return destructiveDeps
+}
+
+function planFromContext(ctx: ToolContext): DestructivePlan | null {
+  const plan = ctx.destructivePlan
+  return plan && typeof plan === 'object' ? (plan as DestructivePlan) : null
+}
+
+async function runDestructive(
+  toolName: 'delete_files' | 'move_files',
+  args: Record<string, unknown>,
+  ctx: ToolContext
+) {
+  const deps = requireDestructiveDeps()
+  const request = destructiveRequestFromTool(toolName, args)
+  const fresh = await inspectDestructiveRequest(request, {
+    workspaceRoot: ctx.workspaceRoot,
+    ...(deps.home ? { home: deps.home } : {}),
+    ...(deps.platform ? { platform: deps.platform } : {})
+  })
+  const approved = planFromContext(ctx)
+  if (!approved) {
+    throw new SecurityError(
+      'APPROVAL_PLAN_MISSING',
+      '缺少审批时生成的清单,本次没有执行。请重新发起操作。'
+    )
+  }
+  const result = await executeDestructivePlan(approved, fresh, {
+    backupRoot: deps.backupRoot,
+    trash: deps.trash ?? platformTrashAdapter(deps.platform)
+  })
+  return {
+    operation: result.operation,
+    deleted: result.operation === 'delete' ? result.completed.length : 0,
+    moved: result.operation === 'move' ? result.completed.length : 0,
+    backupDir: result.backupDir,
+    manifestPath: result.manifestPath,
+    trash: result.trashKind,
+    items: result.completed
+  }
+}
+
+const deleteParams = z.object({
+  paths: z.array(z.string().min(1)).min(1).max(MAX_DESTRUCTIVE_BATCH)
+    .describe('要删除的路径,绝对路径或相对工作区;单批最多 10 项')
+})
+
+export const deleteFilesTool: ToolDescriptor<z.infer<typeof deleteParams>, Awaited<ReturnType<typeof runDestructive>>> = {
+  name: 'delete_files',
+  description:
+    '删除文件或目录:执行前会先备份并送入系统回收站,单批最多 10 项。' +
+    '清理/扫描类请求必须先出报告,下一轮再调用本工具。不要用 shell 的 rm/del 删除。',
+  parameters: deleteParams,
+  effects: { writesFilesystem: true, accessesNetwork: false, mayIncurCost: false },
+  async execute(input, ctx) {
+    return await runDestructive('delete_files', input as Record<string, unknown>, ctx)
+  }
+}
+
+const moveParams = z.object({
+  items: z.array(z.object({
+    from: z.string().min(1).describe('原路径'),
+    to: z.string().min(1).describe('新路径;父目录必须已存在,且不会覆盖已有文件')
+  })).min(1).max(MAX_DESTRUCTIVE_BATCH).describe('移动清单,单批最多 10 项')
+})
+
+export const moveFilesTool: ToolDescriptor<z.infer<typeof moveParams>, Awaited<ReturnType<typeof runDestructive>>> = {
+  name: 'move_files',
+  description:
+    '移动文件或目录:执行前会先备份,单批最多 10 项;目标已存在时拒绝覆盖。不要用 shell 的 mv/move 替代。',
+  parameters: moveParams,
+  effects: { writesFilesystem: true, accessesNetwork: false, mayIncurCost: false },
+  async execute(input, ctx) {
+    return await runDestructive('move_files', input as Record<string, unknown>, ctx)
+  }
+}
+
 const MAX_ARTIFACT_BYTES = 200 * 1024 * 1024
 
 const presentParams = z.object({
@@ -241,5 +350,14 @@ export const presentFilesTool: ToolDescriptor<PresentInput, { presented: number 
 }
 
 export function builtinTools(): Array<ToolDescriptor<any, any>> {
-  return [readFileTool, writeFileTool, globTool, grepTool, shellTool, presentFilesTool]
+  return [
+    readFileTool,
+    writeFileTool,
+    globTool,
+    grepTool,
+    shellTool,
+    presentFilesTool,
+    deleteFilesTool,
+    moveFilesTool
+  ]
 }
