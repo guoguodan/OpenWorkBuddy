@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Markdown } from '../lib/markdown'
 import { IconCheck, IconLoader, IconTool, IconX } from './Icons'
+import { ArtifactCards, type ArtifactInfo } from './ArtifactCards'
 
 export interface ToolCall {
   callId: string
@@ -20,8 +21,10 @@ export interface ChatMessage {
 interface ChatViewProps {
   messages: ChatMessage[]
   tools: ToolCall[]
+  artifacts: ArtifactInfo[]
   modeLabel: string
   busy: boolean
+  onOpenArtifact: (artifact: ArtifactInfo) => void
 }
 
 function Avatar({ role }: { role: 'user' | 'assistant' }) {
@@ -49,7 +52,7 @@ function ToolRows({ tools }: { tools: ToolCall[] }) {
   )
 }
 
-export function ChatView({ messages, tools, modeLabel, busy }: ChatViewProps) {
+export function ChatView({ messages, tools, artifacts, modeLabel, busy, onOpenArtifact }: ChatViewProps) {
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
 
@@ -100,6 +103,7 @@ export function ChatView({ messages, tools, modeLabel, busy }: ChatViewProps) {
                         <div className="owb-status"><span className="owb-status__dot" />正在思考…</div>
                       ) : null}
                       {isLast ? <ToolRows tools={tools} /> : null}
+                      {isLast ? <ArtifactCards artifacts={artifacts} onOpen={onOpenArtifact} /> : null}
                     </>
                   )}
                 </div>

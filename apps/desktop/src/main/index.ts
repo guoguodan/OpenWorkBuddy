@@ -81,9 +81,22 @@ ipcMain.handle('conversation.list', async () => {
 ipcMain.handle('conversation.history', async (_e, conversationId?: string) => {
   await daemonReady
   if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('非法会话 ID')
-  return request<{ messages: unknown[]; conversationId: string }>(
+  return request<{ messages: unknown[]; artifacts: unknown[]; conversationId: string }>(
     conversationId ? { cmd: 'conversation.history', conversationId } : { cmd: 'conversation.history' }
   )
+})
+
+ipcMain.handle('artifact.open', async (_e, target: string) => {
+  await daemonReady
+  if (typeof target !== 'string' || !target) throw new Error('非法交付物路径')
+  const workspace = resolvedWorkspace ?? resolveWorkspace()
+  const abs = path.resolve(workspace, target)
+  if (abs !== workspace && !abs.startsWith(workspace + path.sep)) {
+    throw new Error(`路径越界: ${target}`)
+  }
+  const error = await shell.openPath(abs)
+  if (error) throw new Error(error)
+  return { path: abs }
 })
 
 ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string }) => {

@@ -337,6 +337,23 @@ input, textarea { font-family: inherit; }
 .owb-tool__summary { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @keyframes owb-spin { to { transform: rotate(360deg); } }
 
+/* 交付卡片:交付物必须能点开,而不是只说"已生成" */
+.owb-artifacts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.owb-artifact {
+  display: flex; align-items: flex-start; gap: 10px;
+  width: min(360px, 100%); text-align: left;
+  padding: 10px 12px; border-radius: var(--owb-radius-lg);
+  background: var(--owb-bg-card); border: 1px solid var(--owb-border-subtle);
+  cursor: pointer; font: inherit;
+}
+.owb-artifact:hover { border-color: var(--owb-brand-6); background: var(--owb-bg-hover); }
+.owb-artifact__icon { color: var(--owb-brand-8); flex-shrink: 0; display: flex; }
+.owb-artifact__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.owb-artifact__title { font-size: 13px; font-weight: 600; color: var(--owb-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owb-artifact__desc { font-size: 12px; color: var(--owb-text-secondary); }
+.owb-artifact__meta { font-size: 11px; color: var(--owb-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owb-artifact__action { font-size: 12px; color: var(--owb-brand-9); flex-shrink: 0; align-self: center; }
+
 /* 状态条 */
 .owb-status {
   display: flex; align-items: center; gap: 8px;

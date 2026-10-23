@@ -92,8 +92,10 @@ export const artifact = sqliteTable(
   {
     id: text('id').primaryKey(),
     taskId: text('task_id').references(() => task.id, { onDelete: 'set null' }),
+    conversationId: text('conversation_id').references(() => conversation.id, { onDelete: 'cascade' }),
     kind: text('kind', { enum: ['file', 'html', 'url', 'image'] }).notNull(),
     title: text('title').notNull(),
+    description: text('description'),
     path: text('path'),
     url: text('url'),
     size: integer('size').notNull().default(0),
@@ -101,7 +103,7 @@ export const artifact = sqliteTable(
     previewRef: text('preview_ref'),
     createdAt: text('created_at').notNull()
   },
-  (t) => [index('idx_artifact_task').on(t.taskId)]
+  (t) => [index('idx_artifact_task').on(t.taskId), index('idx_artifact_conv').on(t.conversationId, t.createdAt)]
 )
 
 export const skill = sqliteTable(

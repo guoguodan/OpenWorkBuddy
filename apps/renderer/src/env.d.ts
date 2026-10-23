@@ -48,6 +48,17 @@ interface HistoryMessage {
   createdAt: string
 }
 
+interface ArtifactInfoLike {
+  id: string
+  kind: 'file' | 'html' | 'url' | 'image'
+  title: string
+  description?: string | null
+  path?: string | null
+  url?: string | null
+  size?: number
+  sha256?: string | null
+}
+
 interface Window {
   openwb: {
     modes: {
@@ -66,7 +77,11 @@ interface Window {
     conversation: {
       send: (input: { text: string; mode?: string; conversationId?: string }) => Promise<void>
       list: () => Promise<{ conversations: ConversationInfo[]; conversationId: string }>
-      history: (conversationId?: string) => Promise<{ messages: HistoryMessage[]; conversationId: string }>
+      history: (conversationId?: string) => Promise<{
+        messages: HistoryMessage[]
+        artifacts: ArtifactInfoLike[]
+        conversationId: string
+      }>
       create: (input?: { title?: string; mode?: string }) => Promise<{ conversationId: string }>
       remove: (conversationId: string) => Promise<{ conversationId: string }>
       onEvent: (cb: (e: unknown) => void) => () => void
@@ -74,6 +89,9 @@ interface Window {
     memory: {
       list: (scope?: string) => Promise<{ items: MemoryItemInfo[] }>
       remove: (id: string) => Promise<{ id: string }>
+    }
+    artifact: {
+      open: (target: string) => Promise<{ path: string }>
     }
     plugins: {
       list: () => Promise<{ plugins: PluginSnapshotInfo[] }>

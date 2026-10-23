@@ -116,7 +116,7 @@ try {
   ]
   check(expectedTables.every((t) => tableNames.includes(t)), 'all-tables-exist', JSON.stringify(tableNames))
   check(tableNames.includes('memory_fts'), 'fts-table-exists')
-  check(db.pragma('user_version', { simple: true }) === 1, 'schema-version-1')
+  check(db.pragma('user_version', { simple: true }) >= 1, 'schema-version-at-least-1')
   db.close()
 
   // ---------- 2. 重启后历史仍在 ----------

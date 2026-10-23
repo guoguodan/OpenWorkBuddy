@@ -180,6 +180,40 @@ CREATE TRIGGER memory_entry_au AFTER UPDATE ON memory_entry BEGIN
   INSERT INTO memory_fts(memory_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
   INSERT INTO memory_fts(rowid, content) VALUES (new.rowid, new.content);
 END;` 
+  },
+  {
+    version: 2,
+    name: 'artifacts-and-message-fts',
+    sql: `-- 交付物:会话归属与描述
+ALTER TABLE artifact ADD COLUMN conversation_id TEXT REFERENCES conversation(id) ON DELETE CASCADE;
+ALTER TABLE artifact ADD COLUMN description TEXT;
+CREATE INDEX idx_artifact_conv ON artifact(conversation_id, created_at);
+
+-- 回填已有产物的会话归属(经由任务)
+UPDATE artifact
+SET conversation_id = (SELECT conversation_id FROM task WHERE task.id = artifact.task_id)
+WHERE conversation_id IS NULL AND task_id IS NOT NULL;
+
+-- 全局搜索:消息正文的独立 FTS5 索引。
+-- 用独立表而不是 external content,是因为正文在 content_json 里不是独立列。
+CREATE VIRTUAL TABLE message_fts USING fts5(content, tokenize='unicode61');
+
+INSERT INTO message_fts(rowid, content)
+SELECT rowid, json_extract(content_json, '$.text')
+FROM message
+WHERE json_extract(content_json, '$.text') IS NOT NULL;
+
+CREATE TRIGGER message_fts_ai AFTER INSERT ON message BEGIN
+  INSERT INTO message_fts(rowid, content)
+  VALUES (new.rowid, coalesce(json_extract(new.content_json, '$.text'), ''));
+END;
+CREATE TRIGGER message_fts_ad AFTER DELETE ON message BEGIN
+  DELETE FROM message_fts WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER message_fts_au AFTER UPDATE OF content_json ON message BEGIN
+  DELETE FROM message_fts WHERE rowid = old.rowid;
+  INSERT INTO message_fts(rowid, content) VALUES (new.rowid, coalesce(json_extract(new.content_json, '$.text'), ''));
+END;`
   }
 ]
 

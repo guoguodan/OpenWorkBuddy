@@ -76,6 +76,18 @@ export function IconFolder({ size = 18, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.2l1.8 2.2h8A2 2 0 0 1 20.5 9.7v7.3a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" /></svg>
 }
 
+export function IconFile({ size = 18, className }: IconProps) {
+  return <svg {...base(size)} className={className}><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z" /><path d="M14 3.5V8.5h5" /></svg>
+}
+
+export function IconImage({ size = 18, className }: IconProps) {
+  return <svg {...base(size)} className={className}><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><circle cx="9" cy="9.5" r="1.6" /><path d="m4.5 17 4.8-4.8 3.4 3.4 2.4-2.4 4.4 4.4" /></svg>
+}
+
+export function IconLink({ size = 18, className }: IconProps) {
+  return <svg {...base(size)} className={className}><path d="M10 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 1 0-5.7-5.7l-1.4 1.4" /><path d="M14 10.5a4 4 0 0 0-5.7 0l-2.8 2.8a4 4 0 1 0 5.7 5.7l1.4-1.4" /></svg>
+}
+
 export function IconMoon({ size = 16, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="M20 13.5A8 8 0 0 1 10.5 4a8 8 0 1 0 9.5 9.5Z" /></svg>
 }

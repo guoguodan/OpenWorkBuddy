@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('openwb', {
       return () => ipcRenderer.removeListener('agent.event', handler)
     }
   },
+  artifact: {
+    open: (target: string) => ipcRenderer.invoke('artifact.open', target)
+  },
   memory: {
     list: (scope?: string) => ipcRenderer.invoke('memory.list', scope),
     remove: (id: string) => ipcRenderer.invoke('memory.delete', id)

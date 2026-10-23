@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView'
+import { type ArtifactInfo } from './components/ArtifactCards'
 import { Composer } from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
 import { InfoPanel, type SkillInfo } from './components/InfoPanel'
@@ -34,6 +35,7 @@ type AgentEvent = {
   usage?: { input?: number; output?: number }
   skills?: SkillInfo[]
   allowedTools?: string[] | null
+  artifact?: ArtifactInfo
 }
 
 interface SystemLine {
@@ -59,6 +61,7 @@ function baseName(path: string): string {
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [tools, setTools] = useState<ToolCall[]>([])
+  const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([])
   const [notices, setNotices] = useState<SystemLine[]>([])
   const [modes, setModes] = useState<ModeInfo[]>([])
   const [mode, setMode] = useState('craft')
@@ -107,6 +110,7 @@ export default function App() {
 
   const loadHistory = useCallback(async (id: string) => {
     const r = await window.openwb.conversation.history(id)
+    setArtifacts(r.artifacts ?? [])
     setMessages(
       r.messages
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -204,6 +208,9 @@ export default function App() {
         )
       } else if (e.type === 'ready' && e.workspace) {
         setWorkspacePath(e.workspace)
+      } else if (e.type === 'artifact.created' && e.artifact) {
+        const created = e.artifact
+        setArtifacts((list) => (list.some((a) => a.id === created.id) ? list : [...list, created]))
       } else if (e.type === 'conversation.ready' && e.conversationId) {
         setConversationId(e.conversationId)
         activeConversation.current = e.conversationId
@@ -292,6 +299,19 @@ export default function App() {
     }
   }
 
+  const openArtifact = async (artifact: ArtifactInfo) => {
+    try {
+      if (artifact.kind === 'url') {
+        if (artifact.url) window.open(artifact.url, '_blank', 'noopener')
+        return
+      }
+      if (!artifact.path) return
+      await window.openwb.artifact.open(artifact.path)
+    } catch (err) {
+      note('system', `打开交付物失败: ${(err as Error).message}`)
+    }
+  }
+
   const composer = (showModes: boolean, autoFocus = false) => (
     <Composer
       value={input}
@@ -371,7 +391,14 @@ export default function App() {
               </WelcomeView>
             ) : (
               <>
-                <ChatView messages={messages} tools={tools} modeLabel={modeLabel} busy={busy} />
+                <ChatView
+                  messages={messages}
+                  tools={tools}
+                  artifacts={artifacts}
+                  modeLabel={modeLabel}
+                  busy={busy}
+                  onOpenArtifact={(a) => void openArtifact(a)}
+                />
                 <div className="owb-chat__input">
                   {notices.length > 0 ? (
                     <div className="owb-notices">

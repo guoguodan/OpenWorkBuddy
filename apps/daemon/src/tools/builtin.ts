@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, sep, dirname } from 'node:path'
 import { z } from 'zod'
-import type { ToolDescriptor, ToolContext } from '@openwb/tools'
+import type { ArtifactDraft, ToolDescriptor, ToolContext } from '@openwb/tools'
 
 const MAX_READ_BYTES = 512 * 1024
 
@@ -165,24 +165,78 @@ export const shellTool: ToolDescriptor<z.infer<typeof shellParams>, { code: numb
   }
 }
 
-export const presentFilesTool: ToolDescriptor<{ items: Array<{ path: string; title: string }> }, { presented: number }> = {
+const MAX_ARTIFACT_BYTES = 200 * 1024 * 1024
+
+const presentParams = z.object({
+  items: z.array(z.object({
+    /** file/html/image 用 path;url 用 url */
+    path: z.string().optional().describe('工作区内的相对路径(文件类必填)'),
+    url: z.string().optional().describe('外链地址(仅 http/https,url 类必填)'),
+    title: z.string().min(1).max(120),
+    kind: z.enum(['file', 'html', 'url', 'image']).default('file'),
+    description: z.string().max(300).optional()
+  })).min(1).max(20)
+})
+
+type PresentInput = z.input<typeof presentParams>
+type PresentParsed = z.output<typeof presentParams>
+
+export const presentFilesTool: ToolDescriptor<PresentInput, { presented: number }> = {
   name: 'present_files',
-  description: '把本次任务产出的文件呈现给用户。凡产出文件,必须以本工具收尾。',
-  parameters: z.object({
-    items: z.array(z.object({
-      path: z.string().describe('相对工作区的路径'),
-      title: z.string().max(120)
-    })).min(1).max(20)
-  }),
+  description:
+    '把本次任务产出的文件或网页呈现给用户。凡产出文件,必须以本工具收尾。path 必须是工作区内真实存在的文件;外链用 url。',
+  parameters: presentParams,
   effects: effectsNone,
-  async execute({ items }, ctx: ToolContext) {
-    const { stat } = await import('node:fs/promises')
+  async execute(input, ctx: ToolContext) {
+    const { items } = presentParams.parse(input) as PresentParsed
+    const { stat, readFile } = await import('node:fs/promises')
+    const { createHash } = await import('node:crypto')
+    const drafts: ArtifactDraft[] = []
     for (const item of items) {
+      if (item.kind === 'url') {
+        if (!item.url) throw new Error(`url 类交付物缺少 url: ${item.title}`)
+        let parsed: URL
+        try {
+          parsed = new URL(item.url)
+        } catch {
+          throw new Error(`非法 url: ${item.url}`)
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          throw new Error(`只允许 http/https 外链,拒绝: ${parsed.protocol}`)
+        }
+        drafts.push({
+          kind: 'url',
+          title: item.title,
+          url: parsed.toString(),
+          ...(item.description ? { description: item.description } : {})
+        })
+        continue
+      }
+      if (!item.path) throw new Error(`${item.kind} 类交付物缺少 path: ${item.title}`)
       const abs = await resolveInsideWorkspace(ctx.workspaceRoot, item.path)
       const s = await stat(abs)
       if (!s.isFile()) throw new Error(`不是文件: ${item.path}`)
+      if (s.size > MAX_ARTIFACT_BYTES) {
+        throw new Error(`文件过大(${s.size} 字节),超过 200MB 上限;请改为交付摘要: ${item.path}`)
+      }
+      const sha256 = createHash('sha256').update(await readFile(abs)).digest('hex')
+      const lower = item.path.toLowerCase()
+      const kind = item.kind === 'file'
+        ? (lower.endsWith('.html') || lower.endsWith('.htm') ? 'html'
+          : /\.(png|jpe?g|gif|webp|svg)$/.test(lower) ? 'image' : 'file')
+        : item.kind
+      drafts.push({
+        kind,
+        title: item.title,
+        path: item.path,
+        size: s.size,
+        sha256,
+        ...(item.description ? { description: item.description } : {})
+      })
     }
-    return { presented: items.length }
+    if (!ctx.artifactSink) return { presented: drafts.length }
+    const inserted = await ctx.artifactSink.insert(drafts)
+    return { presented: inserted.length }
   }
 }
 

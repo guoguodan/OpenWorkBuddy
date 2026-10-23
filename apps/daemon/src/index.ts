@@ -23,6 +23,8 @@ import { FrameDecoder, encodeFrame, helloFrame } from '@openwb/protocol'
 import {
   appendEvent,
   appendMessage,
+  insertArtifacts,
+  listArtifactsByConversation,
   createConversation,
   createTask,
   deleteConversation,
@@ -390,7 +392,31 @@ type ExecutableTool = Tool<any, any> & {
   execute: (args: any, options: ToolExecutionOptions) => PromiseLike<any>
 }
 
-function buildTools(mode: ModePolicy, allowedNames: string[]) {
+interface RunToolContext {
+  taskId: string
+  conversationId: string
+}
+
+/**
+ * 交付物写入器:工具只负责校验与算哈希,落库与事件在这里完成。
+ * 事件只在真正新增时发出:同一任务重复交付同一文件不会再冒一张卡片。
+ */
+function artifactSinkFor(taskId: string, conversationId: string) {
+  const db = requireDb()
+  return {
+    insert: async (items: Array<{ kind: 'file' | 'html' | 'url' | 'image'; title: string; description?: string; path?: string; url?: string; size?: number; sha256?: string }>) => {
+      const results = insertArtifacts(db, { taskId, conversationId, items })
+      for (const r of results) {
+        if (r.deduped) continue
+        appendEvent(db, conversationId, 'artifact.created', { artifact: r.record })
+        emit({ type: 'artifact.created', artifact: r.record })
+      }
+      return results.map((r) => ({ id: r.record.id, deduped: r.deduped }))
+    }
+  }
+}
+
+function buildTools(mode: ModePolicy, allowedNames: string[], run?: RunToolContext) {
   const allowed = new Set(allowedNames)
   const result: Record<string, ExecutableTool> = {}
 
@@ -406,7 +432,11 @@ function buildTools(mode: ModePolicy, allowedNames: string[]) {
         }
         try {
           skills.assertAllowed(descriptor.name)
-          return await descriptor.execute(input, { workspaceRoot: WORKSPACE })
+          return await descriptor.execute(input, {
+            workspaceRoot: WORKSPACE,
+            ...(run ? { taskId: run.taskId, conversationId: run.conversationId } : {}),
+            ...(run ? { artifactSink: artifactSinkFor(run.taskId, run.conversationId) } : {})
+          })
         } catch (err) {
           return toToolFailure(err)
         }
@@ -557,6 +587,51 @@ async function runMock(
     return 'done'
   }
 
+  // 离线验收交付链路:文本里明确要求"交付/报告"时,先写一个真实文件再走 present_files。
+  // 走的是与真实模型完全相同的工具与落库路径,不只是发一个假事件。
+  const wantsDelivery = /(交付|呈现|报告|report)/i.test(input.text) && isToolAllowed(input.mode, 'present_files')
+  if (wantsDelivery) {
+    const rel = 'out/mock-report.md'
+    const body = `# Mock 报告\n\n请求: ${input.text}\n`
+    try {
+      await registry.get('write_file')!.execute({ path: rel, content: body }, { workspaceRoot: WORKSPACE })
+      emit({ type: 'tool.started', callId, name: 'present_files' })
+      const result = await registry.get('present_files')!.execute(
+        { items: [{ path: rel, title: 'Mock 报告', kind: 'file' }] },
+        {
+          workspaceRoot: WORKSPACE,
+          taskId,
+          conversationId: input.conversationId,
+          artifactSink: artifactSinkFor(taskId, input.conversationId)
+        }
+      )
+      emit({ type: 'tool.finished', callId, ok: true, summary: `已交付 ${(result as { presented: number }).presented} 个文件` })
+      reply = `[mock:${input.mode.id}] 已生成并交付报告:${rel}`
+    } catch (err) {
+      emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
+      reply = `[mock:${input.mode.id}] 交付失败:${(err as Error).message}`
+    }
+    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    appendMessage(db, {
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: { text: reply },
+      model: 'mock'
+    })
+    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    await writeTrace(TRACE_DIR, mockTrace)
+    transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
+    await appendRunLog(db, {
+      conversationId: input.conversationId,
+      text: input.text,
+      modeId: input.mode.id,
+      toolCalls: 1
+    })
+    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+    return 'done'
+  }
+
   const canRead = isToolAllowed(input.mode, 'read_file')
   if (canRead) {
     emit({ type: 'tool.started', callId, name: 'read_file' })
@@ -652,7 +727,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const names = effectiveTools(mode)
-      const tools = buildTools(mode, names)
+      const tools = buildTools(mode, names, { taskId, conversationId })
 
       if (JSON.stringify(names) !== JSON.stringify(lastNames)) {
         emit({ type: 'tools.available', names })
@@ -986,7 +1061,8 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       ...base,
       type: 'conversation.history',
       conversationId: id,
-      messages: listMessages(db, id)
+      messages: listMessages(db, id),
+      artifacts: listArtifactsByConversation(db, id)
     })
     return true
   }

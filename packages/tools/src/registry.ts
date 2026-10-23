@@ -17,6 +17,25 @@ export interface ToolEffects {
 export interface ToolContext {
   workspaceRoot: string
   signal?: AbortSignal
+  /** 当前任务与会话:交付物落库与事件归属需要 */
+  taskId?: string | null
+  conversationId?: string | null
+  /** 由宿主注入的交付物写入器;缺省时工具只做校验,不落库(例如工作流步骤) */
+  artifactSink?: ArtifactSink
+}
+
+export interface ArtifactDraft {
+  kind: 'file' | 'html' | 'url' | 'image'
+  title: string
+  description?: string
+  path?: string
+  url?: string
+  size?: number
+  sha256?: string
+}
+
+export interface ArtifactSink {
+  insert(items: ArtifactDraft[]): Promise<Array<{ id: string; deduped: boolean }>>
 }
 
 export interface ToolDescriptor<TInput = unknown, TOutput = unknown> {

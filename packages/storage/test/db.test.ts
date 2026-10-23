@@ -80,9 +80,10 @@ describe('migrations', () => {
     migrateOrThrow(raw, { dbPath })
     raw.close()
 
-    // 临时追加一条 v2 迁移,用它触发 5 次"升级"以验证备份与保留策略
+    // 临时追加一条下一版本迁移,用它触发 5 次"升级"以验证备份与保留策略
+    const nextVersion = MIGRATIONS.length + 1
     const fake = {
-      version: 2,
+      version: nextVersion,
       name: 'test_only',
       sql: 'CREATE TABLE IF NOT EXISTS backup_probe (id TEXT PRIMARY KEY);'
     }
@@ -91,9 +92,9 @@ describe('migrations', () => {
       for (let i = 0; i < 5; i++) {
         const conn = openDatabase(dbPath)
         try {
-          conn.raw.pragma('user_version = 1')
+          conn.raw.pragma(`user_version = ${nextVersion - 1}`)
           migrateOrThrow(conn.raw, { dbPath })
-          expect(currentVersion(conn.raw)).toBe(2)
+          expect(currentVersion(conn.raw)).toBe(nextVersion)
         } finally {
           conn.raw.close()
         }
