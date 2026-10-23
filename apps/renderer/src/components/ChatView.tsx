@@ -28,6 +28,8 @@ interface ChatViewProps {
   /** 从全局搜索跳转过来时,需要滚到并高亮的消息序号;nonce 让同一序号可重复触发 */
   focusRequest?: { seq: number; nonce: number } | null
   onOpenArtifact: (artifact: ArtifactInfo) => void
+  onShareArtifact?: ((artifact: ArtifactInfo) => void) | undefined
+  shareChannelName?: string | null | undefined
 }
 
 function Avatar({ role }: { role: 'user' | 'assistant' }) {
@@ -62,7 +64,9 @@ export function ChatView({
   modeLabel,
   busy,
   focusRequest,
-  onOpenArtifact
+  onOpenArtifact,
+  onShareArtifact,
+  shareChannelName
 }: ChatViewProps) {
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
@@ -128,7 +132,14 @@ export function ChatView({
                         <div className="owb-status"><span className="owb-status__dot" />正在思考…</div>
                       ) : null}
                       {isLast ? <ToolRows tools={tools} /> : null}
-                      {isLast ? <ArtifactCards artifacts={artifacts} onOpen={onOpenArtifact} /> : null}
+                      {isLast ? (
+                        <ArtifactCards
+                          artifacts={artifacts}
+                          onOpen={onOpenArtifact}
+                          onShare={onShareArtifact}
+                          shareChannelName={shareChannelName}
+                        />
+                      ) : null}
                     </>
                   )}
                 </div>

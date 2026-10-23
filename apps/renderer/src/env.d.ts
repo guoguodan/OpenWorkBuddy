@@ -2,8 +2,29 @@ interface ConversationInfo {
   id: string
   title: string
   modeId: string
+  channelId?: string | null
+  channelName?: string | null
   updatedAt: string
   lastSeq: number
+}
+
+interface ChannelInfo {
+  id: string
+  name: string
+  description: string | null
+  createdAt: string
+  conversationCount: number
+  artifacts: number
+}
+
+interface SyncStatusInfo {
+  configured: boolean
+  endpoint: string | null
+  pending: number
+  sent: number
+  failed: number
+  oldest: string | null
+  lastError: string | null
 }
 
 interface MemoryItemInfo {
@@ -103,7 +124,7 @@ interface Window {
         artifacts: ArtifactInfoLike[]
         conversationId: string
       }>
-      create: (input?: { title?: string; mode?: string }) => Promise<{ conversationId: string }>
+      create: (input?: { title?: string; mode?: string; channelId?: string }) => Promise<{ conversationId: string }>
       remove: (conversationId: string) => Promise<{ conversationId: string }>
       onEvent: (cb: (e: unknown) => void) => () => void
     }
@@ -119,6 +140,25 @@ interface Window {
         title?: string
         confirmedUrl?: boolean
       }) => Promise<{ mode: string; size?: number; sha256?: string }>
+      share: (input: { channelId: string; artifactId: string }) => Promise<{
+        channelId: string
+        shared: boolean
+        artifacts: ArtifactInfoLike[]
+      }>
+    }
+    channel: {
+      list: () => Promise<{ channels: ChannelInfo[] }>
+      create: (input: { name: string; description?: string }) => Promise<{ channel: ChannelInfo }>
+      remove: (channelId: string) => Promise<{ channelId: string }>
+      artifacts: (channelId: string) => Promise<{ channelId: string; artifacts: ArtifactInfoLike[] }>
+    }
+    sync: {
+      status: () => Promise<SyncStatusInfo>
+      flush: (input?: { retryFailed?: boolean }) => Promise<SyncStatusInfo & {
+        sentEvents: number
+        sentArtifacts: number
+        stopped: boolean
+      }>
     }
     plugins: {
       list: () => Promise<{ plugins: PluginSnapshotInfo[] }>

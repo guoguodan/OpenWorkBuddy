@@ -27,6 +27,7 @@ export const conversation = sqliteTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspace.id, { onDelete: 'cascade' }),
+    channelId: text('channel_id'),
     title: text('title').notNull(),
     modeId: text('mode_id').notNull(),
     status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),
@@ -34,7 +35,10 @@ export const conversation = sqliteTable(
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull()
   },
-  (t) => [index('idx_conversation_ws').on(t.workspaceId, t.updatedAt)]
+  (t) => [
+    index('idx_conversation_ws').on(t.workspaceId, t.updatedAt),
+    index('idx_conversation_channel').on(t.channelId, t.updatedAt)
+  ]
 )
 
 export const message = sqliteTable(
@@ -210,6 +214,65 @@ export const eventLog = sqliteTable(
   (t) => [uniqueIndex('idx_event_conv_seq').on(t.conversationId, t.seq)]
 )
 
+export const channel = sqliteTable(
+  'channel',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description'),
+    createdAt: text('created_at').notNull()
+  },
+  (t) => [
+    uniqueIndex('idx_channel_ws_name').on(t.workspaceId, t.name),
+    index('idx_channel_ws').on(t.workspaceId, t.createdAt)
+  ]
+)
+
+/** 待发队列:eventId 由客户端生成,重发沿用同一个 id,服务端据此幂等 */
+export const pendingEvent = sqliteTable(
+  'pending_event',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    conversationId: text('conversation_id'),
+    kind: text('kind', { enum: ['event', 'artifact'] }).notNull(),
+    payloadJson: text('payload_json').notNull(),
+    seq: integer('seq').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    nextAttemptAt: text('next_attempt_at').notNull(),
+    createdAt: text('created_at').notNull(),
+    sentAt: text('sent_at')
+  },
+  (t) => [
+    uniqueIndex('idx_pending_ws_seq').on(t.workspaceId, t.seq),
+    index('idx_pending_due').on(t.workspaceId, t.sentAt, t.nextAttemptAt, t.seq)
+  ]
+)
+
+export const channelArtifact = sqliteTable(
+  'channel_artifact',
+  {
+    id: text('id').primaryKey(),
+    channelId: text('channel_id')
+      .notNull()
+      .references(() => channel.id, { onDelete: 'cascade' }),
+    artifactId: text('artifact_id')
+      .notNull()
+      .references(() => artifact.id, { onDelete: 'cascade' }),
+    sharedAt: text('shared_at').notNull()
+  },
+  (t) => [
+    uniqueIndex('idx_channel_artifact_once').on(t.channelId, t.artifactId),
+    index('idx_channel_artifact').on(t.channelId, t.sharedAt)
+  ]
+)
+
 export const schema = {
   workspace,
   conversation,
@@ -221,5 +284,8 @@ export const schema = {
   automation,
   approvalGrant,
   memoryEntry,
-  eventLog
+  eventLog,
+  channel,
+  pendingEvent,
+  channelArtifact
 }

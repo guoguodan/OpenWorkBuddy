@@ -14,6 +14,8 @@ export interface ArtifactInfo {
 interface ArtifactCardsProps {
   artifacts: ArtifactInfo[]
   onOpen: (artifact: ArtifactInfo) => void
+  onShare?: ((artifact: ArtifactInfo) => void) | undefined
+  shareChannelName?: string | null | undefined
 }
 
 function formatSize(bytes: number | undefined): string {
@@ -36,30 +38,40 @@ function KindIcon({ kind }: { kind: ArtifactInfo['kind'] }) {
   return <IconFile size={18} />
 }
 
-export function ArtifactCards({ artifacts, onOpen }: ArtifactCardsProps) {
+export function ArtifactCards({ artifacts, onOpen, onShare, shareChannelName }: ArtifactCardsProps) {
   if (artifacts.length === 0) return null
   return (
     <div className="owb-artifacts" data-testid="artifact-cards">
       {artifacts.map((a) => (
-        <button
+        <div
           key={a.id}
           className="owb-artifact"
           data-testid="artifact-card"
-          onClick={() => onOpen(a)}
-          title={a.path ?? a.url ?? a.title}
         >
-          <span className="owb-artifact__icon"><KindIcon kind={a.kind} /></span>
-          <span className="owb-artifact__body">
-            <span className="owb-artifact__title">{a.title}</span>
-            {a.description ? <span className="owb-artifact__desc">{a.description}</span> : null}
-            <span className="owb-artifact__meta">
-              {KIND_LABEL[a.kind]}
-              {formatSize(a.size) ? ` · ${formatSize(a.size)}` : ''}
-              {a.path ? ` · ${a.path}` : ''}
+          <button className="owb-artifact__main" onClick={() => onOpen(a)} title={a.path ?? a.url ?? a.title}>
+            <span className="owb-artifact__icon"><KindIcon kind={a.kind} /></span>
+            <span className="owb-artifact__body">
+              <span className="owb-artifact__title">{a.title}</span>
+              {a.description ? <span className="owb-artifact__desc">{a.description}</span> : null}
+              <span className="owb-artifact__meta">
+                {KIND_LABEL[a.kind]}
+                {formatSize(a.size) ? ` · ${formatSize(a.size)}` : ''}
+                {a.path ? ` · ${a.path}` : ''}
+              </span>
             </span>
-          </span>
-          <span className="owb-artifact__action">打开</span>
-        </button>
+            <span className="owb-artifact__action">打开</span>
+          </button>
+          {onShare ? (
+            <button
+              className="owb-artifact__share"
+              data-testid="artifact-share"
+              title={shareChannelName ? `转发到频道 ${shareChannelName}` : '先在侧栏选择一个频道'}
+              onClick={() => onShare(a)}
+            >
+              转发到频道
+            </button>
+          ) : null}
+        </div>
       ))}
     </div>
   )

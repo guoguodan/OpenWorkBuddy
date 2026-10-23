@@ -7,6 +7,7 @@ import { InfoPanel, type SkillInfo } from './components/InfoPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { MemoryPanel, type MemoryItem } from './components/MemoryPanel'
 import { SearchPanel, type SearchGroup, type SearchHit } from './components/SearchPanel'
+import { ChannelPanel, type ChannelInfo, type SyncStatus } from './components/ChannelPanel'
 import { Sidebar, type ConversationSummary } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { WelcomeView } from './components/WelcomeView'
@@ -75,6 +76,10 @@ export default function App() {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [panel, setPanel] = useState<'skills' | 'connectors' | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [channels, setChannels] = useState<ChannelInfo[]>([])
+  const [channelPanelOpen, setChannelPanelOpen] = useState(false)
+  const [activeChannelId, setActiveChannelId] = useState<string | null>(null)
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [focusTarget, setFocusTarget] = useState<{ seq: number; nonce: number } | null>(null)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
   const [theme, setTheme] = useState<'light' | 'dark'>(readTheme)
@@ -87,6 +92,7 @@ export default function App() {
   const workspaceLabel = workspacePath ? baseName(workspacePath) : '工作区'
   const modeLabel = modes.find((m) => m.id === mode)?.displayName ?? mode
   const currentTitle = conversations.find((c) => c.id === conversationId)?.title ?? '新会话'
+  const activeChannel = channels.find((c) => c.id === activeChannelId) ?? null
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -134,6 +140,17 @@ export default function App() {
     setMemories(r.items)
   }, [])
 
+  const loadChannels = useCallback(async () => {
+    const r = await window.openwb.channel.list()
+    setChannels(r.channels)
+    return r.channels
+  }, [])
+
+  const loadSyncStatus = useCallback(async () => {
+    const r = await window.openwb.sync.status()
+    setSyncStatus(r)
+  }, [])
+
   useEffect(() => {
     // ready 帧在本监听注册前就已发出,工作区路径必须主动拉一次。
     void window.openwb.workspace
@@ -156,6 +173,8 @@ export default function App() {
         const id = await loadConversations()
         if (id) await loadHistory(id)
         await loadMemories()
+        await loadChannels()
+        await loadSyncStatus()
       } catch (err) {
         note('system', `[错误] 历史加载失败: ${(err as Error).message}`)
       }
@@ -239,7 +258,7 @@ export default function App() {
         note('system', `[错误] ${e.code}: ${e.message}`)
       }
     })
-  }, [loadConversations, loadHistory, loadMemories, note])
+  }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, note])
 
   const send = async () => {
     const text = input.trim()
@@ -278,7 +297,11 @@ export default function App() {
 
   const newConversation = async () => {
     if (busy) return
-    const r = await window.openwb.conversation.create({ title: '新会话', mode })
+    const r = await window.openwb.conversation.create({
+      title: '新会话',
+      mode,
+      ...(activeChannelId ? { channelId: activeChannelId } : {})
+    })
     setConversationId(r.conversationId)
     activeConversation.current = r.conversationId
     setMessages([])
@@ -286,6 +309,57 @@ export default function App() {
     setTools([])
     setNotices([])
     await loadConversations(r.conversationId)
+  }
+
+  const selectChannel = (channelId: string | null) => {
+    setActiveChannelId(channelId)
+    // 选频道后立刻开一个归属该频道的会话,避免用户以为"选了但没生效"。
+    if (!channelId) return
+    void (async () => {
+      const r = await window.openwb.conversation.create({ title: '新会话', mode, channelId })
+      setConversationId(r.conversationId)
+      activeConversation.current = r.conversationId
+      setMessages([])
+      setFocusTarget(null)
+      setTools([])
+      setNotices([])
+      await loadConversations(r.conversationId)
+    })().catch((err: Error) => note('system', `创建频道会话失败: ${err.message}`))
+  }
+
+  const createChannel = async (name: string, description: string) => {
+    const r = await window.openwb.channel.create({ name, ...(description ? { description } : {}) })
+    await loadChannels()
+    selectChannel(r.channel.id)
+  }
+
+  const deleteChannel = async (channelId: string) => {
+    await window.openwb.channel.remove(channelId)
+    const next = await loadChannels()
+    if (activeChannelId === channelId) setActiveChannelId(next[0]?.id ?? null)
+    await loadConversations(conversationId)
+  }
+
+  const flushSync = async () => {
+    await window.openwb.sync.flush()
+    await loadSyncStatus()
+    await loadChannels()
+  }
+
+  const shareArtifact = async (artifact: ArtifactInfo) => {
+    if (!activeChannelId) {
+      note('warn', '先在侧栏选择一个频道,再转发交付物。')
+      setChannelPanelOpen(true)
+      return
+    }
+    try {
+      const r = await window.openwb.artifact.share({ channelId: activeChannelId, artifactId: artifact.id })
+      note('tools', r.shared ? `已转发到频道:${activeChannel?.name ?? ''}` : '该产物已在频道中')
+      await loadChannels()
+      void loadSyncStatus().catch(() => undefined)
+    } catch (err) {
+      note('system', `转发失败: ${(err as Error).message}`)
+    }
   }
 
   const removeConversation = async (id: string) => {
@@ -413,6 +487,8 @@ export default function App() {
           }}
           onOpenSkills={() => setPanel('skills')}
           onOpenConnectors={() => setPanel('connectors')}
+          onOpenChannels={() => { setChannelPanelOpen(true); void loadSyncStatus() }}
+          channelCount={channels.length}
         />
 
         <main className="owb-main">
@@ -445,6 +521,8 @@ export default function App() {
                   busy={busy}
                   focusRequest={focusTarget}
                   onOpenArtifact={(a) => void openArtifact(a)}
+                  onShareArtifact={(a) => void shareArtifact(a)}
+                  shareChannelName={activeChannel?.name ?? null}
                 />
                 <div className="owb-chat__input">
                   {notices.length > 0 ? (
@@ -487,6 +565,20 @@ export default function App() {
           workspace={workspacePath || workspaceLabel}
           onOpenWorkspace={() => void openWorkspace()}
           onClose={() => setPanel(null)}
+        />
+      ) : null}
+
+      {channelPanelOpen ? (
+        <ChannelPanel
+          channels={channels}
+          activeChannelId={activeChannelId}
+          sync={syncStatus}
+          onClose={() => setChannelPanelOpen(false)}
+          onSelect={(id) => { setChannelPanelOpen(false); selectChannel(id) }}
+          onCreate={createChannel}
+          onDelete={deleteChannel}
+          onFlush={flushSync}
+          onOpenArtifact={(a) => void openArtifact(a)}
         />
       ) : null}
 

@@ -36,7 +36,18 @@ contextBridge.exposeInMainWorld('openwb', {
     }
   },
   artifact: {
-    preview: (input: unknown) => ipcRenderer.invoke('artifact.preview', input)
+    preview: (input: unknown) => ipcRenderer.invoke('artifact.preview', input),
+    share: (input: unknown) => ipcRenderer.invoke('channel.shareArtifact', input)
+  },
+  channel: {
+    list: () => ipcRenderer.invoke('channel.list'),
+    create: (input: unknown) => ipcRenderer.invoke('channel.create', input),
+    remove: (channelId: string) => ipcRenderer.invoke('channel.delete', channelId),
+    artifacts: (channelId: string) => ipcRenderer.invoke('channel.artifacts', channelId)
+  },
+  sync: {
+    status: () => ipcRenderer.invoke('sync.status'),
+    flush: (input?: unknown) => ipcRenderer.invoke('sync.flush', input)
   },
   memory: {
     list: (scope?: string) => ipcRenderer.invoke('memory.list', scope),

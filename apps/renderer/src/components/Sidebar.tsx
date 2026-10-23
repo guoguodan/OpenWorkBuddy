@@ -14,6 +14,8 @@ export interface ConversationSummary {
   id: string
   title: string
   modeId: string
+  channelId?: string | null
+  channelName?: string | null
   updatedAt: string
   lastSeq: number
 }
@@ -36,6 +38,8 @@ interface SidebarProps {
   onToggleMemory: () => void
   onOpenSkills: () => void
   onOpenConnectors: () => void
+  onOpenChannels: () => void
+  channelCount: number
 }
 
 function formatRelative(iso: string): string {
@@ -72,7 +76,9 @@ export function Sidebar({
   onDelete,
   onToggleMemory,
   onOpenSkills,
-  onOpenConnectors
+  onOpenConnectors,
+  onOpenChannels,
+  channelCount
 }: SidebarProps) {
   const filtered = conversations
 
@@ -118,6 +124,10 @@ export function Sidebar({
           <IconSparkle size={17} />
           <span className="owb-nav-item__label">模型 · 连接器</span>
         </button>
+        <button className="owb-nav-item" onClick={onOpenChannels} data-testid="open-channels">
+          <IconChat size={17} />
+          <span className="owb-nav-item__label">团队频道{channelCount > 0 ? ` (${channelCount})` : ''}</span>
+        </button>
       </nav>
 
       <div className="owb-sidebar__section">
@@ -141,7 +151,10 @@ export function Sidebar({
             onKeyDown={(e) => { if (e.key === 'Enter' && !busy && c.id !== activeId) onSelect(c.id) }}
           >
             <IconChat size={16} className="owb-conv-item__icon" />
-            <span className="owb-conv-item__title" title={c.title}>{c.title}</span>
+            <span className="owb-conv-item__title" title={c.title}>
+              {c.title}
+              {c.channelName ? <span className="owb-conv-item__channel" data-testid="conversation-channel">#{c.channelName}</span> : null}
+            </span>
             <span className="owb-conv-item__meta">{formatRelative(c.updatedAt)}</span>
             <button
               className="owb-conv-item__del"

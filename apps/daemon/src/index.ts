@@ -26,6 +26,14 @@ import {
   insertArtifacts,
   countArtifactsByTask,
   listArtifactsByConversation,
+  createChannel,
+  deleteChannel,
+  enqueuePending,
+  listChannelArtifacts,
+  listChannels,
+  listPending,
+  resetPendingBackoff,
+  shareArtifactToChannel,
   search,
   createConversation,
   createTask,
@@ -63,6 +71,7 @@ import {
 import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
 import { summarizeToolResult, toToolFailure } from './tool-summary.js'
 import { WorkflowService } from './workflows/service.js'
+import { flushPending, normalizeSyncUrl, startSyncLoop, SyncError } from './sync/client.js'
 
 const WORKSPACE = resolve(process.env.OPENWB_WORKSPACE ?? process.cwd())
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
@@ -105,6 +114,8 @@ const MOCK = process.env.OPENWB_MOCK === '1'
 const HOST_VERSION = process.env.OPENWB_HOST_VERSION ?? '0.0.1'
 const MAX_STEPS = 5
 const MODEL_NAME = process.env.OPENWB_MODEL ?? 'unknown'
+const SYNC_URL = process.env.OPENWB_SYNC_URL?.trim() ?? ''
+const SYNC_TOKEN = process.env.OPENWB_SYNC_TOKEN?.trim() || undefined
 
 /**
  * dataDir 解析优先级:
@@ -145,6 +156,7 @@ let fatal: string | null = null
 let dbHandle: ReturnType<typeof openDatabase> | null = null
 let workspaceId = ''
 let activeConversationId = ''
+let stopSync: (() => void) | null = null
 
 try {
   dbHandle = openDatabase(DB_PATH)
@@ -959,6 +971,40 @@ function resolveConversationId(requested: unknown): string {
   return activeConversationId
 }
 
+function syncConfig() {
+  if (!SYNC_URL) return null
+  try {
+    return { baseUrl: normalizeSyncUrl(SYNC_URL), ...(SYNC_TOKEN ? { token: SYNC_TOKEN } : {}) }
+  } catch (err) {
+    process.stderr.write(`[sync] 同步配置无效: ${(err as Error).message}\n`)
+    return null
+  }
+}
+
+function pendingStats() {
+  const items = listPending(requireDb(), workspaceId)
+  const unsent = items.filter((i) => !i.sentAt)
+  return {
+    configured: Boolean(syncConfig()),
+    endpoint: SYNC_URL ? safeEndpoint(SYNC_URL) : null,
+    pending: unsent.length,
+    sent: items.length - unsent.length,
+    failed: unsent.filter((i) => i.attempts > 0).length,
+    oldest: unsent[0]?.createdAt ?? null,
+    lastError: [...unsent].reverse().find((i) => i.lastError)?.lastError ?? null
+  }
+}
+
+/** 状态里只暴露协议与主机,不把 token 所在 URL 原样回显到界面 */
+function safeEndpoint(raw: string): string {
+  try {
+    const u = new URL(raw)
+    return `${u.protocol}//${u.host}`
+  } catch {
+    return '(invalid)'
+  }
+}
+
 async function handleCommand(msg: Record<string, unknown>, requestId: unknown): Promise<boolean> {
   const db = requireDb()
   const base = requestId !== undefined ? { requestId } : {}
@@ -1105,6 +1151,10 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
         id: c.id,
         title: c.title,
         modeId: c.modeId,
+        channelId: c.channelId,
+        channelName: c.channelId
+          ? (listChannels(db, workspaceId).find((ch) => ch.id === c.channelId)?.name ?? null)
+          : null,
         updatedAt: c.updatedAt,
         lastSeq: c.lastSeq
       }))
@@ -1140,13 +1190,132 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
   }
 
   if (msg.cmd === 'conversation.new') {
+    const channelId = typeof msg.channelId === 'string' && msg.channelId ? msg.channelId : null
+    if (channelId && !listChannels(db, workspaceId).some((c) => c.id === channelId)) {
+      throw new Error('频道不存在')
+    }
     const conv = createConversation(db, {
       workspaceId,
       title: typeof msg.title === 'string' && msg.title ? msg.title : '新会话',
-      modeId: typeof msg.mode === 'string' ? msg.mode : 'craft'
+      modeId: typeof msg.mode === 'string' ? msg.mode : 'craft',
+      channelId
     })
     activeConversationId = conv.id
     emit({ ...base, type: 'conversation.created', conversationId: conv.id })
+    return true
+  }
+
+  if (msg.cmd === 'channel.list') {
+    const channels = listChannels(db, workspaceId).map((c) => ({
+      ...c,
+      artifacts: listChannelArtifacts(db, c.id).length
+    }))
+    emit({ ...base, type: 'channel.list', channels })
+    return true
+  }
+
+  if (msg.cmd === 'channel.create') {
+    if (typeof msg.name !== 'string') throw new Error('缺少频道名')
+    const created = createChannel(db, {
+      workspaceId,
+      name: msg.name,
+      ...(typeof msg.description === 'string' ? { description: msg.description } : {})
+    })
+    emit({ ...base, type: 'channel.created', channel: created })
+    return true
+  }
+
+  if (msg.cmd === 'channel.delete') {
+    if (typeof msg.channelId !== 'string' || !msg.channelId) throw new Error('缺少 channelId')
+    deleteChannel(db, msg.channelId)
+    emit({ ...base, type: 'channel.deleted', channelId: msg.channelId })
+    return true
+  }
+
+  if (msg.cmd === 'channel.artifacts') {
+    if (typeof msg.channelId !== 'string' || !msg.channelId) throw new Error('缺少 channelId')
+    emit({
+      ...base,
+      type: 'channel.artifacts',
+      channelId: msg.channelId,
+      artifacts: listChannelArtifacts(db, msg.channelId)
+    })
+    return true
+  }
+
+  if (msg.cmd === 'channel.shareArtifact') {
+    if (typeof msg.channelId !== 'string' || !msg.channelId) throw new Error('缺少 channelId')
+    if (typeof msg.artifactId !== 'string' || !msg.artifactId) throw new Error('缺少 artifactId')
+    const { shared } = shareArtifactToChannel(db, {
+      channelId: msg.channelId,
+      artifactId: msg.artifactId
+    })
+    const artifacts = listChannelArtifacts(db, msg.channelId)
+    const artifact = artifacts.find((a) => a.id === msg.artifactId)
+    if (artifact) {
+      // 共享动作本身也要同步到云侧;去重由 pending_event 的唯一键负责。
+      const pendingId = `share-${msg.channelId}-${msg.artifactId}`
+      const existing = listPending(db, workspaceId).some((p) => p.id === pendingId)
+      if (shared && !existing) {
+        enqueuePending(db, {
+          workspaceId,
+          kind: 'artifact',
+          eventId: pendingId,
+          payload: {
+            eventId: pendingId,
+            channelId: msg.channelId,
+            artifactId: artifact.id,
+            title: artifact.title,
+            kind: artifact.kind,
+            path: artifact.path,
+            url: artifact.url,
+            size: artifact.size,
+            sha256: artifact.sha256
+          }
+        })
+      }
+    }
+    emit({ ...base, type: 'channel.artifactShared', channelId: msg.channelId, shared, artifacts })
+    return true
+  }
+
+  if (msg.cmd === 'sync.status') {
+    emit({ ...base, type: 'sync.status', ...pendingStats() })
+    return true
+  }
+
+  if (msg.cmd === 'sync.flush') {
+    const config = syncConfig()
+    if (!config) {
+      emit({
+        ...base,
+        type: 'sync.flushed',
+        configured: false,
+        sentEvents: 0,
+        sentArtifacts: 0,
+        stopped: false,
+        queue: pendingStats()
+      })
+      return true
+    }
+    if (msg.retryFailed === true) resetPendingBackoff(db, workspaceId)
+    try {
+      const result = await flushPending(db, workspaceId, config)
+      emit({ ...base, type: 'sync.flushed', configured: true, ...result, queue: pendingStats() })
+    } catch (err) {
+      if (!(err instanceof SyncError)) throw err
+      emit({
+        ...base,
+        type: 'sync.flushed',
+        configured: true,
+        sentEvents: 0,
+        sentArtifacts: 0,
+        failed: listPending(db, workspaceId).filter((p) => !p.sentAt).length,
+        stopped: true,
+        lastError: err.message,
+        queue: pendingStats()
+      })
+    }
     return true
   }
 
@@ -1372,6 +1541,7 @@ process.stdin.on('end', () => {
   }
   void queue
     .finally(async () => {
+      stopSync?.()
       // 先取消并等待后台工作流/自动化落盘,再关数据库
       await workflowService?.shutdown()
       await pluginRuntime.stopAll()
@@ -1400,3 +1570,13 @@ emit({
 // 启动补跑放在 ready 之后:桌面端先看到可交互界面,补跑在后台进行。
 // 验收脚本需要手动控制时钟,因此允许用 OPENWB_AUTOMATION_AUTOSTART=0 关闭。
 if (process.env.OPENWB_AUTOMATION_AUTOSTART !== '0') workflowService?.startScheduler()
+
+// 只有显式配置了服务端地址才启动同步:默认离线可用,不因云端不可达反复报错。
+const activeSync = dbHandle ? syncConfig() : null
+if (activeSync && dbHandle) {
+  stopSync = startSyncLoop(dbHandle.db, workspaceId, activeSync, {
+    intervalMs: Number(process.env.OPENWB_SYNC_INTERVAL_MS ?? 15_000),
+    onError: (err) => process.stderr.write(`[sync] ${err.message}\n`)
+  })
+  process.stderr.write(`[sync] 已启用 -> ${safeEndpoint(SYNC_URL)}\n`)
+}

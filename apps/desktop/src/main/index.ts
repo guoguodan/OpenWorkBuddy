@@ -116,13 +116,66 @@ ipcMain.handle('artifact.preview', async (_e, input: PreviewTarget & { confirmed
   return resolved
 })
 
-ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string }) => {
+ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string }) => {
   await daemonReady
   return request<{ conversationId: string }>({
     cmd: 'conversation.new',
     ...(input?.title ? { title: input.title } : {}),
-    ...(input?.mode ? { mode: input.mode } : {})
+    ...(input?.mode ? { mode: input.mode } : {}),
+    ...(input?.channelId ? { channelId: input.channelId } : {})
   })
+})
+
+ipcMain.handle('channel.list', async () => {
+  await daemonReady
+  return request<{ channels: unknown[] }>({ cmd: 'channel.list' })
+})
+
+ipcMain.handle('channel.create', async (_e, input: { name: string; description?: string }) => {
+  await daemonReady
+  if (!input || typeof input.name !== 'string' || !input.name.trim()) throw new Error('非法频道名')
+  return request<{ channel: unknown }>({
+    cmd: 'channel.create',
+    name: input.name,
+    ...(typeof input.description === 'string' ? { description: input.description } : {})
+  })
+})
+
+ipcMain.handle('channel.delete', async (_e, channelId: string) => {
+  await daemonReady
+  if (typeof channelId !== 'string' || !channelId) throw new Error('非法频道 ID')
+  return request<{ channelId: string }>({ cmd: 'channel.delete', channelId })
+})
+
+ipcMain.handle('channel.artifacts', async (_e, channelId: string) => {
+  await daemonReady
+  if (typeof channelId !== 'string' || !channelId) throw new Error('非法频道 ID')
+  return request<{ channelId: string; artifacts: unknown[] }>({ cmd: 'channel.artifacts', channelId })
+})
+
+ipcMain.handle('channel.shareArtifact', async (_e, input: { channelId: string; artifactId: string }) => {
+  await daemonReady
+  if (!input || typeof input.channelId !== 'string' || typeof input.artifactId !== 'string') {
+    throw new Error('非法共享请求')
+  }
+  return request<{ channelId: string; shared: boolean; artifacts: unknown[] }>({
+    cmd: 'channel.shareArtifact',
+    channelId: input.channelId,
+    artifactId: input.artifactId
+  })
+})
+
+ipcMain.handle('sync.status', async () => {
+  await daemonReady
+  return request<Record<string, unknown>>({ cmd: 'sync.status' })
+})
+
+ipcMain.handle('sync.flush', async (_e, input?: { retryFailed?: boolean }) => {
+  await daemonReady
+  return request<Record<string, unknown>>({
+    cmd: 'sync.flush',
+    ...(input?.retryFailed === true ? { retryFailed: true } : {})
+  }, 30_000)
 })
 
 ipcMain.handle('conversation.delete', async (_e, conversationId: string) => {

@@ -30,7 +30,7 @@ export interface ArtifactInput {
   sha256?: string
 }
 
-function toRecord(row: typeof artifact.$inferSelect): ArtifactRecord {
+export function toArtifactRecord(row: typeof artifact.$inferSelect): ArtifactRecord {
   return {
     id: row.id,
     taskId: row.taskId,
@@ -66,7 +66,7 @@ export function insertArtifacts(
     for (const item of input.items) {
       const existing = findExisting(tx as unknown as AppDatabase, input.taskId, item)
       if (existing) {
-        out.push({ record: existing, deduped: true })
+      out.push({ record: existing, deduped: true })
         continue
       }
       const row = {
@@ -84,7 +84,7 @@ export function insertArtifacts(
         createdAt: nowIso()
       }
       tx.insert(artifact).values(row as typeof artifact.$inferInsert).run()
-      out.push({ record: toRecord(row as typeof artifact.$inferSelect), deduped: false })
+        out.push({ record: toArtifactRecord(row as typeof artifact.$inferSelect), deduped: false })
     }
     return out
   })
@@ -105,7 +105,7 @@ function findExisting(
     cond = and(taskCond, eq(artifact.sha256, item.sha256))
   }
   const rows = db.select().from(artifact).where(cond).orderBy(asc(artifact.createdAt)).all()
-  return rows[0] ? toRecord(rows[0]) : undefined
+  return rows[0] ? toArtifactRecord(rows[0]) : undefined
 }
 
 export function listArtifactsByTask(db: AppDatabase, taskId: string): ArtifactRecord[] {
@@ -115,7 +115,7 @@ export function listArtifactsByTask(db: AppDatabase, taskId: string): ArtifactRe
     .where(eq(artifact.taskId, taskId))
     .orderBy(asc(artifact.createdAt))
     .all()
-    .map(toRecord)
+    .map(toArtifactRecord)
 }
 
 export function listArtifactsByConversation(db: AppDatabase, conversationId: string): ArtifactRecord[] {
@@ -125,7 +125,7 @@ export function listArtifactsByConversation(db: AppDatabase, conversationId: str
     .where(eq(artifact.conversationId, conversationId))
     .orderBy(asc(artifact.createdAt))
     .all()
-    .map(toRecord)
+    .map(toArtifactRecord)
 }
 
 export function countArtifactsByTask(db: AppDatabase, taskId: string): number {

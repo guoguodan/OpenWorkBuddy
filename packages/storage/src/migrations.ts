@@ -214,6 +214,53 @@ CREATE TRIGGER message_fts_au AFTER UPDATE OF content_json ON message BEGIN
   DELETE FROM message_fts WHERE rowid = old.rowid;
   INSERT INTO message_fts(rowid, content) VALUES (new.rowid, coalesce(json_extract(new.content_json, '$.text'), ''));
 END;`
+  },
+  {
+    version: 3,
+    name: 'channels-and-pending-events',
+    sql: `-- 本地频道:先有频道概念,云侧推送与成员管理后续再接
+CREATE TABLE channel (
+  id           TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  description  TEXT,
+  created_at   TEXT NOT NULL,
+  UNIQUE (workspace_id, name)
+);
+CREATE INDEX idx_channel_ws ON channel(workspace_id, created_at);
+
+-- 会话可归属一个频道;NULL 表示纯本地会话
+ALTER TABLE conversation ADD COLUMN channel_id TEXT REFERENCES channel(id) ON DELETE SET NULL;
+CREATE INDEX idx_conversation_channel ON conversation(channel_id, updated_at);
+
+-- 频道内共享的交付物。共享是"引用",不复制文件:
+-- 预览仍走 artifact 的 path/url,权限与大小校验在预览层复用。
+CREATE TABLE channel_artifact (
+  id           TEXT PRIMARY KEY,
+  channel_id   TEXT NOT NULL REFERENCES channel(id) ON DELETE CASCADE,
+  artifact_id  TEXT NOT NULL REFERENCES artifact(id) ON DELETE CASCADE,
+  shared_at    TEXT NOT NULL,
+  UNIQUE (channel_id, artifact_id)
+);
+CREATE INDEX idx_channel_artifact ON channel_artifact(channel_id, shared_at);
+
+-- 待发队列:eventId 由客户端生成(ULID),重发沿用同一个 ID,
+-- 服务端据此去重;seq 保证按产生顺序重放。
+CREATE TABLE pending_event (
+  id              TEXT PRIMARY KEY,
+  workspace_id    TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  conversation_id TEXT REFERENCES conversation(id) ON DELETE SET NULL,
+  kind            TEXT NOT NULL CHECK (kind IN ('event','artifact')),
+  payload_json    TEXT NOT NULL,
+  seq             INTEGER NOT NULL,
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
+  next_attempt_at TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  sent_at         TEXT,
+  UNIQUE (workspace_id, seq)
+);
+CREATE INDEX idx_pending_due ON pending_event(workspace_id, sent_at, next_attempt_at, seq);`
   }
 ]
 

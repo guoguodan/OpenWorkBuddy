@@ -2,6 +2,7 @@ import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import type { AppDatabase } from './client.js'
 import { nowIso, ulid } from './ids.js'
 import { conversation, eventLog, message, workspace } from './schema.js'
+import { enqueuePendingTx } from './sync.js'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'streaming' | 'done' | 'interrupted'
@@ -31,6 +32,7 @@ export function ensureWorkspace(db: AppDatabase, rootPath: string, name?: string
 export interface ConversationRecord {
   id: string
   workspaceId: string
+  channelId: string | null
   title: string
   modeId: string
   status: 'active' | 'archived'
@@ -41,12 +43,13 @@ export interface ConversationRecord {
 
 export function createConversation(
   db: AppDatabase,
-  input: { workspaceId: string; title: string; modeId: string }
+  input: { workspaceId: string; title: string; modeId: string; channelId?: string | null }
 ): ConversationRecord {
   const at = nowIso()
   const row: ConversationRecord = {
     id: ulid(),
     workspaceId: input.workspaceId,
+    channelId: input.channelId ?? null,
     title: input.title.slice(0, 200),
     modeId: input.modeId,
     status: 'active',
@@ -56,6 +59,17 @@ export function createConversation(
   }
   db.insert(conversation).values(row).run()
   return row
+}
+
+export function setConversationChannel(
+  db: AppDatabase,
+  conversationId: string,
+  channelId: string | null
+): void {
+  db.update(conversation)
+    .set({ channelId, updatedAt: nowIso() })
+    .where(eq(conversation.id, conversationId))
+    .run()
 }
 
 export function getConversation(db: AppDatabase, id: string): ConversationRecord | undefined {
@@ -215,16 +229,29 @@ export function appendEvent(
       .where(eq(eventLog.conversationId, conversationId))
       .all()[0]
     const seq = (maxRow?.maxSeq ?? 0) + 1
+    const id = ulid()
+    const createdAt = nowIso()
     tx.insert(eventLog)
       .values({
-        id: ulid(),
+        id,
         conversationId,
         seq,
         type,
         payloadJson: JSON.stringify(payload ?? null),
-        createdAt: nowIso()
+        createdAt
       })
       .run()
+    // 频道内的事件才需要端云同步;eventId 直接复用 event_log.id,
+    // 重放时保持不变,服务端据此幂等。
+    if (conv.channelId) {
+      enqueuePendingTx(tx as unknown as AppDatabase, {
+        workspaceId: conv.workspaceId,
+        kind: 'event',
+        eventId: id,
+        conversationId,
+        payload: { eventId: id, conversationId, seq, type, payload: payload ?? null, createdAt }
+      })
+    }
     return seq
   })
 }
