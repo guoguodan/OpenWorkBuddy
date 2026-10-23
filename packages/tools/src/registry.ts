@@ -38,6 +38,13 @@ export interface ArtifactSink {
   insert(items: ArtifactDraft[]): Promise<Array<{ id: string; deduped: boolean }>>
 }
 
+export class ToolError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message)
+    this.name = 'ToolError'
+  }
+}
+
 export interface ToolDescriptor<TInput = unknown, TOutput = unknown> {
   name: string
   description: string

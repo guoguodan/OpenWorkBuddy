@@ -40,7 +40,7 @@ type AgentEvent = {
 
 interface SystemLine {
   id: string
-  kind: 'system' | 'skill' | 'tools' | 'memory' | 'usage'
+  kind: 'system' | 'skill' | 'tools' | 'memory' | 'usage' | 'warn'
   text: string
 }
 
@@ -211,6 +211,11 @@ export default function App() {
       } else if (e.type === 'artifact.created' && e.artifact) {
         const created = e.artifact
         setArtifacts((list) => (list.some((a) => a.id === created.id) ? list : [...list, created]))
+      } else if (e.type === 'delivery.missing') {
+        note(
+          'warn',
+          'DELIVERY_MISSING:本轮写了文件但没有交付,成果还在工作区里。请让助手调用 present_files,否则你拿不到可点击的交付物。'
+        )
       } else if (e.type === 'conversation.ready' && e.conversationId) {
         setConversationId(e.conversationId)
         activeConversation.current = e.conversationId
@@ -405,7 +410,7 @@ export default function App() {
                       {notices.map((n) => (
                         <div
                           key={n.id}
-                          className={`owb-status${n.kind === 'system' ? ' owb-status--error' : n.kind === 'skill' ? ' owb-status--skill' : ' owb-status--info'}`}
+                          className={`owb-status${n.kind === 'system' ? ' owb-status--error' : n.kind === 'skill' ? ' owb-status--skill' : n.kind === 'warn' ? ' owb-status--warn' : ' owb-status--info'}`}
                         >
                           {n.kind === 'skill' ? <IconTool size={13} /> : null}
                           {n.kind === 'tools' ? <IconCheck size={13} /> : null}

@@ -24,6 +24,7 @@ import {
   appendEvent,
   appendMessage,
   insertArtifacts,
+  countArtifactsByTask,
   listArtifactsByConversation,
   createConversation,
   createTask,
@@ -395,6 +396,8 @@ type ExecutableTool = Tool<any, any> & {
 interface RunToolContext {
   taskId: string
   conversationId: string
+  /** 本轮是否写过文件:用于收尾时判定交付是否缺失 */
+  wroteFiles?: { value: boolean }
 }
 
 /**
@@ -416,6 +419,20 @@ function artifactSinkFor(taskId: string, conversationId: string) {
   }
 }
 
+/**
+ * WM-DELIVER-01 的运行时兜底。
+ * 提示词能劝模型交付,但劝不住:只要写过文件而任务没有任何交付物,
+ * 就必须在任务上留下 DELIVERY_MISSING,让界面明确提示"东西还没到你手上"。
+ */
+function checkDelivery(taskId: string, conversationId: string, wroteFiles: boolean): boolean {
+  if (!wroteFiles) return false
+  const db = requireDb()
+  if (countArtifactsByTask(db, taskId) > 0) return false
+  emit({ type: 'delivery.missing', taskId, conversationId, code: 'DELIVERY_MISSING' })
+  appendEvent(db, conversationId, 'delivery.missing', { taskId, code: 'DELIVERY_MISSING' })
+  return true
+}
+
 function buildTools(mode: ModePolicy, allowedNames: string[], run?: RunToolContext) {
   const allowed = new Set(allowedNames)
   const result: Record<string, ExecutableTool> = {}
@@ -432,6 +449,7 @@ function buildTools(mode: ModePolicy, allowedNames: string[], run?: RunToolConte
         }
         try {
           skills.assertAllowed(descriptor.name)
+          if (descriptor.effects.writesFilesystem && run?.wroteFiles) run.wroteFiles.value = true
           return await descriptor.execute(input, {
             workspaceRoot: WORKSPACE,
             ...(run ? { taskId: run.taskId, conversationId: run.conversationId } : {}),
@@ -590,6 +608,36 @@ async function runMock(
   // 离线验收交付链路:文本里明确要求"交付/报告"时,先写一个真实文件再走 present_files。
   // 走的是与真实模型完全相同的工具与落库路径,不只是发一个假事件。
   const wantsDelivery = /(交付|呈现|报告|report)/i.test(input.text) && isToolAllowed(input.mode, 'present_files')
+  // 反向场景:明确要求"只写不交付",用于验证运行时兜底能抓到漏交付
+  const skipDelivery = /(不要交付|不用交付|不交付)/.test(input.text) && isToolAllowed(input.mode, 'write_file')
+  if (skipDelivery) {
+    const rel = 'out/undelivered.md'
+    await registry.get('write_file')!.execute({ path: rel, content: '# 未交付\n' }, { workspaceRoot: WORKSPACE })
+    reply = `[mock:${input.mode.id}] 已写入 ${rel},但没有交付。`
+    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    appendMessage(db, {
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: { text: reply },
+      model: 'mock'
+    })
+    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    await writeTrace(TRACE_DIR, mockTrace)
+    const missing = checkDelivery(taskId, input.conversationId, true)
+    transitionTask(db, taskId, 'done', {
+      resultRef: mockTrace.outputSha256.slice(0, 16),
+      ...(missing ? { errorCode: 'DELIVERY_MISSING' } : {})
+    })
+    appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
+    await appendRunLog(db, {
+      conversationId: input.conversationId,
+      text: input.text,
+      modeId: input.mode.id,
+      toolCalls: 1
+    })
+    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+    return 'done'
+  }
   if (wantsDelivery) {
     const rel = 'out/mock-report.md'
     const body = `# Mock 报告\n\n请求: ${input.text}\n`
@@ -716,6 +764,8 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
   let totalOutput = 0
   let activeSkill: string | undefined
   let toolCalls = 0
+  const wroteFiles = { value: false }
+  let delivered = 0
 
   try {
     emit({ type: 'text.start' })
@@ -727,7 +777,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const names = effectiveTools(mode)
-      const tools = buildTools(mode, names, { taskId, conversationId })
+      const tools = buildTools(mode, names, { taskId, conversationId, wroteFiles })
 
       if (JSON.stringify(names) !== JSON.stringify(lastNames)) {
         emit({ type: 'tools.available', names })
@@ -752,6 +802,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
         } else if (part.type === 'tool-result') {
           const { ok, summary } = summarizeToolResult(part.toolName, part.result)
           emit({ type: 'tool.finished', callId: part.toolCallId, ok, summary })
+          if (part.toolName === 'present_files' && ok) delivered++
         } else if (part.type === 'error') {
           emit({
             type: 'error',
@@ -840,7 +891,12 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
       tokenIn: totalInput,
       tokenOut: totalOutput
     })
-    transitionTask(db, taskId, 'done', { resultRef: trace.outputSha256.slice(0, 16) })
+    // 先判定交付缺失,再一次性把任务标成 done:状态机不允许 done 之后再补写
+    const missing = checkDelivery(taskId, conversationId, wroteFiles.value)
+    transitionTask(db, taskId, 'done', {
+      resultRef: trace.outputSha256.slice(0, 16),
+      ...(missing ? { errorCode: 'DELIVERY_MISSING' } : {})
+    })
     appendEvent(db, conversationId, 'run.finished', { taskId, steps: toolCalls })
 
     await appendRunLog(db, { conversationId, text, modeId: mode.id, toolCalls })

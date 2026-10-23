@@ -365,6 +365,7 @@ input, textarea { font-family: inherit; }
 .owb-status--info { color: var(--owb-brand-9); }
 .owb-status--skill { color: var(--owb-purple-6); }
 .owb-status--error { color: var(--owb-red-7); background: color-mix(in srgb, var(--owb-red-7) 8%, transparent); }
+.owb-status--warn { color: var(--owb-amber-8, #a16207); background: color-mix(in srgb, #eab308 20%, transparent); }
 .owb-status__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 
 /* 记忆面板 */
