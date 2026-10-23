@@ -11,6 +11,7 @@
         "test": "vitest run --passWithNoTests"
     },
     "dependencies": {
+        "@openwb/protocol": "workspace:*",
         "@vitejs/plugin-react": "^6.1.2",
         "electron": "^45.0.0",
         "electron-vite": "^6.0.0",

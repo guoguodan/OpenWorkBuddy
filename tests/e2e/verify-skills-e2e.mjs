@@ -27,14 +27,36 @@ const check = (ok, label, detail = '') => {
   else { failed++; console.log(`FAIL ${label} ${detail}`) }
 }
 
+/** v2 帧:4 字节大端长度 + UTF-8 JSON */
+function encodeFrame(value) {
+  const payload = Buffer.from(JSON.stringify(value), 'utf8')
+  const header = Buffer.alloc(4)
+  header.writeUInt32BE(payload.length, 0)
+  return Buffer.concat([header, payload])
+}
+
+function decodeFrames(buf) {
+  const out = []
+  let offset = 0
+  while (buf.length - offset >= 4) {
+    const len = buf.readUInt32BE(offset)
+    if (buf.length - offset < 4 + len) break
+    const json = buf.subarray(offset + 4, offset + 4 + len).toString('utf8')
+    offset += 4 + len
+    try { out.push(JSON.parse(json)) } catch { out.push({ type: 'PARSE_ERROR', raw: json }) }
+  }
+  return out
+}
+
 /** 启动 daemon,发一条命令后关闭 */
-function runDaemon({ workspace, skillsDir, text, mode, mock = true, timeoutMs = 60000 }) {
+function runDaemon({ workspace, skillsDir, text, mode, mock = true, timeoutMs = 60000, dataDir }) {
   return new Promise((res, rej) => {
     const child = spawn(process.execPath, [entry], {
       cwd: root,
       env: {
         ...process.env,
         OPENWB_WORKSPACE: workspace,
+        OPENWB_DATA_DIR: dataDir ?? resolve(workspace, '.data'),
         OPENWB_MODES_DIR: resolve(root, 'resources/modes'),
         OPENWB_PROMPTS_DIR: resolve(root, 'resources/prompts'),
         OPENWB_SKILLS_DIR: skillsDir,
@@ -42,23 +64,21 @@ function runDaemon({ workspace, skillsDir, text, mode, mock = true, timeoutMs = 
       },
       stdio: ['pipe', 'pipe', 'pipe']
     })
-    let out = ''
+    const chunks = []
     let err = ''
     const timer = setTimeout(() => {
       child.kill()
       rej(new Error(`daemon 超时 ${timeoutMs}ms`))
     }, timeoutMs)
-    child.stdout.on('data', (b) => { out += String(b) })
+    child.stdout.on('data', (b) => { chunks.push(b) })
     child.stderr.on('data', (b) => { err += String(b) })
     child.on('error', (e) => { clearTimeout(timer); rej(e) })
     child.on('close', (code) => {
       clearTimeout(timer)
-      const events = out.split('\n').filter(Boolean).map((l) => {
-        try { return JSON.parse(l) } catch { return { type: 'PARSE_ERROR', raw: l } }
-      })
+      const events = decodeFrames(Buffer.concat(chunks))
       res({ code, events, err })
     })
-    child.stdin.end(JSON.stringify({ text, mode }) + '\n')
+    child.stdin.end(encodeFrame({ text, mode }))
   })
 }
 

@@ -1,9 +1,12 @@
-﻿import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
 
 export default defineConfig({
-  main: { plugins: [externalizeDepsPlugin()] },
+  main: {
+    // @openwb/* 的 main 指向 .ts 源码,必须内联进主进程产物
+    plugins: [externalizeDepsPlugin({ exclude: ['@openwb/protocol'] })]
+  },
   preload: { plugins: [externalizeDepsPlugin()] },
   renderer: {
     root: resolve(__dirname, '../renderer'),

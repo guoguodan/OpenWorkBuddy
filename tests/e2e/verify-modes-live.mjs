@@ -4,7 +4,7 @@
  * 需要 OpenWorkBuddy/.env 中配置 OPENAI_API_KEY / OPENAI_BASE_URL / OPENWB_MODEL
  */
 import { spawn } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -13,30 +13,46 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')
 const entry = resolve(root, 'apps/daemon/dist/index.js')
 
-function runDaemon({ mode, workspace, text }) {
+function encodeFrame(value) {
+  const payload = Buffer.from(JSON.stringify(value), 'utf8')
+  const header = Buffer.alloc(4)
+  header.writeUInt32BE(payload.length, 0)
+  return Buffer.concat([header, payload])
+}
+
+function decodeFrames(buf) {
+  const out = []
+  let offset = 0
+  while (buf.length - offset >= 4) {
+    const len = buf.readUInt32BE(offset)
+    if (buf.length - offset < 4 + len) break
+    const json = buf.subarray(offset + 4, offset + 4 + len).toString('utf8')
+    offset += 4 + len
+    try { out.push(JSON.parse(json)) } catch { out.push({ type: 'PARSE_ERROR', raw: json }) }
+  }
+  return out
+}
+
+function runDaemon({ mode, workspace, dataDir, text }) {
   return new Promise((res, rej) => {
     const child = spawn(process.execPath, [entry], {
       cwd: root,
       env: {
         ...process.env,
         OPENWB_WORKSPACE: workspace,
+        OPENWB_DATA_DIR: dataDir,
         OPENWB_MODES_DIR: resolve(root, 'resources/modes'),
         OPENWB_PROMPTS_DIR: resolve(root, 'resources/prompts')
       },
       stdio: ['pipe', 'pipe', 'pipe']
     })
-    let out = ''
+    const chunks = []
     let err = ''
-    child.stdout.on('data', (b) => { out += String(b) })
+    child.stdout.on('data', (b) => { chunks.push(b) })
     child.stderr.on('data', (b) => { err += String(b) })
     child.on('error', rej)
-    child.on('close', (code) => {
-      const events = out.split('\n').filter(Boolean).map((l) => {
-        try { return JSON.parse(l) } catch { return { type: 'PARSE_ERROR', raw: l } }
-      })
-      res({ code, events, err })
-    })
-    child.stdin.end(JSON.stringify({ text, mode }) + '\n')
+    child.on('close', (code) => res({ code, events: decodeFrames(Buffer.concat(chunks)), err }))
+    child.stdin.end(encodeFrame({ text, mode }))
   })
 }
 
@@ -56,7 +72,12 @@ try {
     await mkdir(ws, { recursive: true })
     await writeFile(join(ws, 'README.md'), '# live test workspace\n', 'utf8')
 
-    const { code, events, err } = await runDaemon({ mode, workspace: ws, text: task })
+    const { code, events, err } = await runDaemon({
+      mode,
+      workspace: ws,
+      dataDir: join(base, `data-${mode}`),
+      text: task
+    })
     const avail = events.find((e) => e.type === 'tools.available')
     const textOut = events.filter((e) => e.type === 'delta').map((e) => e.text).join('')
     const errors = events.filter((e) => e.type === 'error')

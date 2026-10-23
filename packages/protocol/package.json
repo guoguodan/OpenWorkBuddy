@@ -1,12 +1,21 @@
-﻿{
-    "private":  true,
-    "name":  "@openwb/protocol",
-    "version":  "0.0.1",
-    "dependencies":  {
-                         "zod":  "^3.25.76"
-                     },
-    "scripts":  {
-                    "lint":  "eslint .",
-                    "test":  "vitest run --passWithNoTests"
-                }
+{
+  "private": true,
+  "name": "@openwb/protocol",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
+  }
 }
