@@ -137,6 +137,13 @@ export interface ToolResolverDeps {
   registry: ToolRegistry
   workspaceRoot: string
   log?: (message: string) => void
+  /** 宿主注入的审批网关;工作流工具步骤不得绕过闸门 */
+  executeTool?: (input: {
+    name: string
+    args: Record<string, unknown>
+    conversationId: string
+    signal?: AbortSignal
+  }) => Promise<unknown>
 }
 
 export function buildToolResolver(deps: ToolResolverDeps) {
@@ -149,6 +156,14 @@ export function buildToolResolver(deps: ToolResolverDeps) {
       throw new Error(`工具 ${name} 参数不合法: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`)
     }
     deps.log?.(`[workflow] tool ${name} ${JSON.stringify(args).slice(0, 200)}`)
+    if (deps.executeTool && !dedicated.has(name)) {
+      return await deps.executeTool({
+        name,
+        args: parsed.data as Record<string, unknown>,
+        conversationId: ctx.conversationId ?? '',
+        signal: ctx.signal
+      })
+    }
     return await tool.execute(parsed.data, { workspaceRoot: deps.workspaceRoot, signal: ctx.signal })
   }
 }
@@ -159,6 +174,8 @@ export interface RunWorkflowInput {
   inputs: Record<string, unknown>
   workspaceRoot: string
   registry: ToolRegistry
+  executeTool?: ToolResolverDeps['executeTool']
+  conversationId?: string
   signal: AbortSignal
   resume: boolean
   onEvent: (event: WorkflowEvent) => void
@@ -171,7 +188,12 @@ export async function runWorkflow(input: RunWorkflowInput) {
   const controls = mockControls()
   const engine = new WorkflowEngine(input.manifest, {
     prompt: mock ? mockPrompt(controls) : realPrompt,
-    tool: buildToolResolver({ registry: input.registry, workspaceRoot: input.workspaceRoot, log: input.log }),
+    tool: buildToolResolver({
+      registry: input.registry,
+      workspaceRoot: input.workspaceRoot,
+      log: input.log,
+      ...(input.executeTool ? { executeTool: input.executeTool } : {})
+    }),
     store,
     onEvent: input.onEvent
   })
@@ -180,7 +202,8 @@ export async function runWorkflow(input: RunWorkflowInput) {
     inputs: input.inputs,
     workspaceRoot: input.workspaceRoot,
     signal: input.signal,
-    resume: input.resume
+    resume: input.resume,
+    ...(input.conversationId ? { conversationId: input.conversationId } : {})
   })
   return { outcome, controls }
 }

@@ -52,5 +52,11 @@ contextBridge.exposeInMainWorld('openwb', {
   memory: {
     list: (scope?: string) => ipcRenderer.invoke('memory.list', scope),
     remove: (id: string) => ipcRenderer.invoke('memory.delete', id)
+  },
+  approval: {
+    respond: (input: unknown) => ipcRenderer.invoke('approval.respond', input),
+    list: () => ipcRenderer.invoke('approval.list'),
+    grants: () => ipcRenderer.invoke('approval.grants'),
+    revoke: (groupKey: string) => ipcRenderer.invoke('approval.revoke', groupKey)
   }
 })

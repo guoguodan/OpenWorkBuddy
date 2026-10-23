@@ -1,10 +1,10 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { McpTool } from './mcp-client.js'
 import { McpStdioClient, McpError } from './mcp-client.js'
 import type { DiscoveredPlugin } from './install.js'
-import type { PluginManifest, McpServerSpec } from './manifest.js'
+import { assertManifestCoherent, parseManifest, type PluginManifest, type McpServerSpec } from './manifest.js'
 import { buildSafeEnv, expandVars } from './env.js'
 
 /**
@@ -503,6 +503,29 @@ export class PluginRuntime {
       out.push(...instance.tools)
     }
     return out.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /**
+   * 读取某个插件工具的审批声明。
+   *
+   * 返回 null 表示"清单可读且未声明该工具";清单不可读、JSON 损坏、
+   * 字段非法都抛错,由审批闸门收敛为 ask(fail-closed)。
+   */
+  async manifestRiskOf(pluginName: string, toolName: string): Promise<{ approvalKind: 'writeExternal' | 'charge' | 'delete'; group: string } | null> {
+    const instance = this.instances.get(pluginName)
+    const dir = instance?.plugin.dir ?? join(this.options.pluginsRoot, pluginName)
+    // 每次都从磁盘读:清单在运行期被改坏/替换时必须能被发现,
+    // 不能拿启动时的内存快照继续放行已经不可信的工具。
+    const raw = await readFile(join(dir, 'plugin.json'), 'utf8')
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (err) {
+      throw new Error(`plugin.json 不是合法 JSON: ${(err as Error).message}`)
+    }
+    const manifest = parseManifest(parsed)
+    assertManifestCoherent(manifest)
+    return manifest.highCreditTools[toolName] ?? null
   }
 
   async callTool(

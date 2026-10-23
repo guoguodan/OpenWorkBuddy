@@ -36,6 +36,15 @@ interface MemoryItemInfo {
   createdAt: string
 }
 
+interface ApprovalGrantInfo {
+  id: string
+  scope: string
+  groupKey: string
+  toolName: string
+  grantedAt: string
+  expiresAt: string | null
+}
+
 interface PluginToolInfo {
   name: string
   description: string
@@ -131,6 +140,16 @@ interface Window {
     memory: {
       list: (scope?: string) => Promise<{ items: MemoryItemInfo[] }>
       remove: (id: string) => Promise<{ id: string }>
+    }
+    approval: {
+      respond: (input: {
+        approvalId: string
+        approved: boolean
+        scope?: 'once' | 'session' | 'always'
+      }) => Promise<{ ok: boolean }>
+      list: () => Promise<{ requests: unknown[] }>
+      grants: () => Promise<{ grants: ApprovalGrantInfo[] }>
+      revoke: (groupKey: string) => Promise<{ groupKey: string; removed: boolean }>
     }
     artifact: {
       preview: (input: {

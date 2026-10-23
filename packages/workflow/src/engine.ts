@@ -41,6 +41,8 @@ export interface WorkflowToolContext {
   signal: AbortSignal
   phaseId: string
   stepId: string
+  /** 宿主会话;工作流工具审批的记忆与审计都按会话归属 */
+  conversationId?: string
 }
 
 export type PromptFn = (request: PromptRequest) => Promise<string>
@@ -82,6 +84,7 @@ export interface RunOptions {
   runId: string
   inputs: Record<string, unknown>
   workspaceRoot: string
+  conversationId?: string
   signal?: AbortSignal
   /** 续跑时读取已落盘的 phase 结果,跳过它们 */
   resume?: boolean
@@ -376,7 +379,15 @@ export class WorkflowEngine {
   ): Promise<Record<string, unknown>> {
     throwIfAborted(signal)
     if (!phase.fanout) {
-      return await this.runSteps(phase, baseScope, signal, addModelCall, options.runId, options.workspaceRoot)
+      return await this.runSteps(
+        phase,
+        baseScope,
+        signal,
+        addModelCall,
+        options.runId,
+        options.workspaceRoot,
+        options.conversationId
+      )
     }
 
     const raw = phase.fanout.trim()
@@ -397,7 +408,8 @@ export class WorkflowEngine {
         signal,
         addModelCall,
         options.runId,
-        options.workspaceRoot
+        options.workspaceRoot,
+        options.conversationId
       )
       for (const [key, val] of Object.entries(produced)) {
         const merged = outputs[key]
@@ -419,13 +431,23 @@ export class WorkflowEngine {
     signal: AbortSignal,
     addModelCall: (delta: number) => void,
     runId: string,
-    workspaceRoot: string
+    workspaceRoot: string,
+    conversationId?: string
   ): Promise<Record<string, unknown>> {
     const outputs: Record<string, unknown> = {}
     const local: Scope = { ...scope }
     const worker = async (step: WorkflowStep) => {
       throwIfAborted(signal)
-      const result = await this.runStep(phase, step, local, signal, addModelCall, runId, workspaceRoot)
+      const result = await this.runStep(
+        phase,
+        step,
+        local,
+        signal,
+        addModelCall,
+        runId,
+        workspaceRoot,
+        conversationId
+      )
       if (step.save_as) {
         const merged = { ...(local.steps as Record<string, unknown>), [step.save_as]: result }
         local.steps = merged
@@ -451,7 +473,8 @@ export class WorkflowEngine {
     signal: AbortSignal,
     addModelCall: (delta: number) => void,
     runId: string,
-    workspaceRoot: string
+    workspaceRoot: string,
+    conversationId?: string
   ): Promise<unknown> {
     const retry = step.retry ?? { maxAttempts: 1, backoffMs: 0 }
     // 结构化输出失败必须至少再给一次机会(WM: 非法 JSON 重试 1 次),
@@ -485,7 +508,8 @@ export class WorkflowEngine {
           workspaceRoot,
           signal,
           phaseId: phase.id,
-          stepId: step.id
+          stepId: step.id,
+          ...(conversationId ? { conversationId } : {})
         })
         if (step.output === 'json') {
           if (typeof result === 'string') return await this.coerceOutput(step, result)

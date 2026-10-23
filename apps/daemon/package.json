@@ -23,6 +23,7 @@
         "@openwb/memory": "workspace:*",
         "@openwb/plugins": "workspace:*",
         "@openwb/skills": "workspace:*",
+        "@openwb/security": "workspace:*",
         "@openwb/tools": "workspace:*",
         "@openwb/workflow": "workspace:*",
         "ai": "^4.3.19",

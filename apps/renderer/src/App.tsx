@@ -8,10 +8,17 @@ import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { MemoryPanel, type MemoryItem } from './components/MemoryPanel'
 import { SearchPanel, type SearchGroup, type SearchHit } from './components/SearchPanel'
 import { ChannelPanel, type ChannelInfo, type SyncStatus } from './components/ChannelPanel'
+import {
+  ApprovalDialog,
+  ApprovalGrantList,
+  type ApprovalGrantInfo,
+  type ApprovalRequestInfo,
+  type ApprovalScope
+} from './components/ApprovalDialog'
 import { Sidebar, type ConversationSummary } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { WelcomeView } from './components/WelcomeView'
-import { IconCheck, IconSparkle, IconTool } from './components/Icons'
+import { IconCheck, IconSparkle, IconTool, IconX } from './components/Icons'
 import './styles/tokens.css'
 import './styles/app.css'
 
@@ -38,6 +45,8 @@ type AgentEvent = {
   skills?: SkillInfo[]
   allowedTools?: string[] | null
   artifact?: ArtifactInfo
+  request?: ApprovalRequestInfo
+  approvalId?: string
 }
 
 interface SystemLine {
@@ -81,6 +90,9 @@ export default function App() {
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [focusTarget, setFocusTarget] = useState<{ seq: number; nonce: number } | null>(null)
+  const [approvalQueue, setApprovalQueue] = useState<ApprovalRequestInfo[]>([])
+  const [approvalGrants, setApprovalGrants] = useState<ApprovalGrantInfo[]>([])
+  const [showGrants, setShowGrants] = useState(false)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
   const [theme, setTheme] = useState<'light' | 'dark'>(readTheme)
   const streaming = useRef(false)
@@ -185,6 +197,11 @@ export default function App() {
       .then((r) => setSkills(r.skills))
       .catch(() => undefined)
 
+    void window.openwb.approval
+      .list()
+      .then((r) => setApprovalQueue((r.requests ?? []) as ApprovalRequestInfo[]))
+      .catch(() => undefined)
+
     return window.openwb.conversation.onEvent((raw: unknown) => {
       const e = raw as AgentEvent
       if (e.type === 'text.start') {
@@ -238,6 +255,15 @@ export default function App() {
           'warn',
           'DELIVERY_MISSING:本轮写了文件但没有交付,成果还在工作区里。请让助手调用 present_files,否则你拿不到可点击的交付物。'
         )
+      } else if (e.type === 'approval.request' && e.request) {
+        const request = e.request as ApprovalRequestInfo
+        setApprovalQueue((list) => (list.some((item) => item.id === request.id) ? list : [...list, request]))
+      } else if (e.type === 'approval.resolved' || e.type === 'approval.expired' || e.type === 'approval.cancelled') {
+        const approvalId = (e as { approvalId?: string }).approvalId
+        if (approvalId) setApprovalQueue((list) => list.filter((item) => item.id !== approvalId))
+      } else if (e.type === 'approval.denied') {
+        if (e.code === 'USER_DENIED') note('warn', '你拒绝了该操作,本次没有执行。')
+        else note('system', `操作被拦截: ${e.code ?? ''} ${e.message ?? ''}`.trim())
       } else if (e.type === 'conversation.ready' && e.conversationId) {
         setConversationId(e.conversationId)
         activeConversation.current = e.conversationId
@@ -344,6 +370,23 @@ export default function App() {
     await window.openwb.sync.flush()
     await loadSyncStatus()
     await loadChannels()
+  }
+
+  const respondApproval = async (input: { approvalId: string; approved: boolean; scope?: ApprovalScope }) => {
+    await window.openwb.approval.respond(input)
+    setApprovalQueue((list) => list.filter((item) => item.id !== input.approvalId))
+  }
+
+  const openGrants = async () => {
+    const r = await window.openwb.approval.grants()
+    setApprovalGrants(r.grants as ApprovalGrantInfo[])
+    setShowGrants(true)
+  }
+
+  const revokeGrant = async (groupKey: string) => {
+    await window.openwb.approval.revoke(groupKey)
+    const r = await window.openwb.approval.grants()
+    setApprovalGrants(r.grants as ApprovalGrantInfo[])
   }
 
   const shareArtifact = async (artifact: ArtifactInfo) => {
@@ -488,6 +531,7 @@ export default function App() {
           onOpenSkills={() => setPanel('skills')}
           onOpenConnectors={() => setPanel('connectors')}
           onOpenChannels={() => { setChannelPanelOpen(true); void loadSyncStatus() }}
+          onOpenApprovals={() => void openGrants().catch((err: Error) => note('system', `授权列表加载失败: ${err.message}`))}
           channelCount={channels.length}
         />
 
@@ -588,6 +632,27 @@ export default function App() {
         onQuery={runSearch}
         onJump={(hit) => void jumpToHit(hit)}
       />
+
+      {approvalQueue[0] ? (
+        <ApprovalDialog request={approvalQueue[0]} onRespond={respondApproval} />
+      ) : null}
+
+      {showGrants ? (
+        <div className="owb-approval-overlay" role="presentation">
+          <section className="owb-approval owb-approval--grants" role="dialog" aria-modal="true" aria-label="授权管理">
+            <header className="owb-approval__header">
+              <span className="owb-approval__risk"><IconTool size={14} /> 长期授权</span>
+              <button className="owb-icon-btn" onClick={() => setShowGrants(false)} aria-label="关闭授权管理">
+                <IconX size={14} />
+              </button>
+            </header>
+            <div className="owb-approval__body">
+              <p className="owb-approval__detail">这些授权会在到期前自动放行同组操作;撤销后下一次调用会重新询问。</p>
+              <ApprovalGrantList grants={approvalGrants} onRevoke={revokeGrant} />
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -43,6 +43,13 @@ export interface WorkflowServiceDeps {
     modeId: string
     automationId: string
   }) => Promise<{ status: 'done' | 'failed' | 'interrupted'; message?: string }>
+  /** 工作流里的工具步骤同样要过审批闸门:否则自动化会绕过计费/路径确认 */
+  gateToolExecution: (input: {
+    name: string
+    args: Record<string, unknown>
+    conversationId: string
+    signal?: AbortSignal
+  }) => Promise<unknown>
   log: (message: string) => void
   /** 测试注入:模拟时钟 */
   now?: () => Date
@@ -291,8 +298,10 @@ export class WorkflowService {
         inputs: input.inputs,
         workspaceRoot: this.deps.workspaceRoot,
         registry: this.deps.registry,
+        executeTool: this.deps.gateToolExecution,
         signal: input.controller.signal,
         resume: input.resume,
+        conversationId,
         onEvent,
         log: this.deps.log
       })

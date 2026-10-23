@@ -39,6 +39,7 @@ interface SidebarProps {
   onOpenSkills: () => void
   onOpenConnectors: () => void
   onOpenChannels: () => void
+  onOpenApprovals: () => void
   channelCount: number
 }
 
@@ -78,6 +79,7 @@ export function Sidebar({
   onOpenSkills,
   onOpenConnectors,
   onOpenChannels,
+  onOpenApprovals,
   channelCount
 }: SidebarProps) {
   const filtered = conversations
@@ -127,6 +129,10 @@ export function Sidebar({
         <button className="owb-nav-item" onClick={onOpenChannels} data-testid="open-channels">
           <IconChat size={17} />
           <span className="owb-nav-item__label">团队频道{channelCount > 0 ? ` (${channelCount})` : ''}</span>
+        </button>
+        <button className="owb-nav-item" onClick={onOpenApprovals} data-testid="open-approvals">
+          <IconTool size={17} />
+          <span className="owb-nav-item__label">授权管理</span>
         </button>
       </nav>
 

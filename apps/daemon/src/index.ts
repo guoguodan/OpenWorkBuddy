@@ -17,7 +17,7 @@ import {
   type AssembledPrompt,
   type ModePolicy
 } from '@openwb/prompt'
-import { ToolRegistry, type ToolDescriptor } from '@openwb/tools'
+import { ToolError, ToolRegistry, type ToolDescriptor } from '@openwb/tools'
 import type { SkillRoot } from '@openwb/skills'
 import { FrameDecoder, encodeFrame, helloFrame } from '@openwb/protocol'
 import {
@@ -50,6 +50,11 @@ import {
   setPluginEnabled,
   transitionTask,
   upsertPlugin,
+  hasActiveApprovalGrant,
+  listApprovalGrants,
+  pruneExpiredApprovalGrants,
+  upsertApprovalGrant,
+  deleteApprovalGrant,
   eq
 } from '@openwb/storage'
 import {
@@ -72,6 +77,17 @@ import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
 import { summarizeToolResult, toToolFailure } from './tool-summary.js'
 import { WorkflowService } from './workflows/service.js'
 import { flushPending, normalizeSyncUrl, startSyncLoop, SyncError } from './sync/client.js'
+import {
+  InMemorySessionGrants,
+  builtinRisk,
+  classifyPath,
+  classifyRisk,
+  decide,
+  type ApprovalRequest,
+  type GateContext,
+  type RiskAssessment
+} from '@openwb/security'
+import { ApprovalBridge, ApprovalUnavailableError } from './security/approval-bridge.js'
 
 const WORKSPACE = resolve(process.env.OPENWB_WORKSPACE ?? process.cwd())
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
@@ -116,6 +132,9 @@ const MAX_STEPS = 5
 const MODEL_NAME = process.env.OPENWB_MODEL ?? 'unknown'
 const SYNC_URL = process.env.OPENWB_SYNC_URL?.trim() ?? ''
 const SYNC_TOKEN = process.env.OPENWB_SYNC_TOKEN?.trim() || undefined
+/** 审批授权默认 30 天;显式配置用于测试与合规缩短 */
+const APPROVAL_TTL_DAYS = Number(process.env.OPENWB_APPROVAL_TTL_DAYS ?? 30)
+const APPROVAL_TIMEOUT_MS = Number(process.env.OPENWB_APPROVAL_TIMEOUT_MS ?? 120_000)
 
 /**
  * dataDir 解析优先级:
@@ -149,6 +168,14 @@ const PLUGIN_DATA_DIR = resolve(DATA_DIR, 'plugin-data')
 function emit(event: unknown) {
   process.stdout.write(encodeFrame(event))
 }
+
+const approvalBridge = new ApprovalBridge({
+  emit: (event) => emit(event),
+  newId: () => `apr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+  timeoutMs: APPROVAL_TIMEOUT_MS,
+  log: (message) => process.stderr.write(`${message}\n`)
+})
+const sessionGrants = new InMemorySessionGrants()
 
 const decoder = new FrameDecoder()
 
@@ -414,6 +441,101 @@ interface RunToolContext {
 }
 
 /**
+ * 构造一次工具调用所需的闸门上下文。
+ *
+ * 风险分类每次调用都重新读插件清单:运行期清单被改坏时必须立刻 fail-closed,
+ * 不能继续用启动时的内存快照放行。
+ */
+function gateContextFor(
+  mode: ModePolicy,
+  conversationId: string,
+  callId?: string
+): GateContext {
+  const db = requireDb()
+  return {
+    workspaceRoot: WORKSPACE,
+    conversationId,
+    ...(callId ? { callId } : {}),
+    ttlDays: APPROVAL_TTL_DAYS,
+    modeAllows: (name) => modeAllowsTool(mode, name),
+    classifyRisk: async (name, args) =>
+      await classifyRisk(
+        {
+          name,
+          arguments: args,
+          effects: { writesFilesystem: registry.get(name)?.effects.writesFilesystem === true }
+        },
+        {
+          workspaceRoot: WORKSPACE,
+          resolveManifestTool: (plugin, tool) => pluginRuntime.manifestRiskOf(plugin, tool),
+          classifyPath: (target, root) => classifyPath(target, root),
+          builtinRisk: (call): ReturnType<typeof builtinRisk> => builtinRisk(call)
+        }
+      ),
+    requestApproval: (request) => approvalBridge.request(request),
+    sessionGrants,
+    persistentGrants: {
+      has: (groupKey, now) => hasActiveApprovalGrant(db, groupKey, now),
+      add: (groupKey, toolName, expiresAt) => {
+        upsertApprovalGrant(db, { groupKey, toolName, expiresAt, scope: 'always' })
+      }
+    },
+    newApprovalId: () => approvalBridge.newId(),
+    log: (message) => process.stderr.write(`${message}\n`)
+  }
+}
+
+/**
+ * 唯一允许执行工具的内部入口:任何绕过它的调用都意味着跳过审批闸门,
+ * 因此 buildTools、mock 与工作流都必须走这里。
+ */
+async function executeGated(
+  descriptorName: string,
+  input: unknown,
+  mode: ModePolicy,
+  conversationId: string,
+  ctx: {
+    taskId?: string | null
+    callId?: string
+    wroteFiles?: { value: boolean }
+    signal?: AbortSignal
+  }
+): Promise<unknown> {
+  const descriptor = registry.get(descriptorName)
+  if (!descriptor) throw new ToolError('TOOL_NOT_FOUND', `工具不存在: ${descriptorName}`)
+  const args =
+    input && typeof input === 'object' ? (input as Record<string, unknown>) : { value: input }
+
+  const decision = await decide(
+    { name: descriptorName, arguments: args },
+    gateContextFor(mode, conversationId, ctx.callId)
+  )
+  if (decision.action === 'deny') {
+    emit({
+      type: 'approval.denied',
+      ...(ctx.callId ? { callId: ctx.callId } : {}),
+      toolName: descriptorName,
+      code: decision.code,
+      message: decision.message,
+      retryable: decision.retryable
+    })
+    throw new ToolError(decision.code, decision.message)
+  }
+
+  skills.assertAllowed(descriptorName)
+  if (descriptor.effects.writesFilesystem && ctx.wroteFiles) ctx.wroteFiles.value = true
+  return await descriptor.execute(args, {
+    workspaceRoot: WORKSPACE,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+    ...(ctx.taskId ? { taskId: ctx.taskId } : {}),
+    ...(ctx.taskId ? { conversationId } : {}),
+    ...(ctx.taskId
+      ? { artifactSink: artifactSinkFor(ctx.taskId, conversationId) }
+      : {})
+  })
+}
+
+/**
  * 交付物写入器:工具只负责校验与算哈希,落库与事件在这里完成。
  * 事件只在真正新增时发出:同一任务重复交付同一文件不会再冒一张卡片。
  */
@@ -456,19 +578,25 @@ function buildTools(mode: ModePolicy, allowedNames: string[], run?: RunToolConte
       parameters: descriptor.inputSchema
         ? jsonSchema<Record<string, unknown>>(descriptor.inputSchema as any)
         : descriptor.parameters,
-      execute: async (input) => {
+      execute: async (input, options) => {
         if (!modeAllowsTool(mode, descriptor.name)) {
           return toToolFailure(new Error(`当前模式(${mode.displayName})不允许使用 ${descriptor.name}`))
         }
         try {
-          skills.assertAllowed(descriptor.name)
-          if (descriptor.effects.writesFilesystem && run?.wroteFiles) run.wroteFiles.value = true
-          return await descriptor.execute(input, {
-            workspaceRoot: WORKSPACE,
-            ...(run ? { taskId: run.taskId, conversationId: run.conversationId } : {}),
-            ...(run ? { artifactSink: artifactSinkFor(run.taskId, run.conversationId) } : {})
+          return await executeGated(descriptor.name, input, mode, run?.conversationId ?? activeConversationId, {
+            ...(run ? { taskId: run.taskId, wroteFiles: run.wroteFiles } : {}),
+            ...(options?.toolCallId ? { callId: options.toolCallId } : {})
           })
         } catch (err) {
+          if (err instanceof ApprovalUnavailableError) {
+            // 审批通道断开必须显式告知界面"没有执行、可重试",不能只当普通工具失败。
+            emit({
+              type: 'error',
+              code: err.code,
+              message: err.message,
+              retryable: true
+            })
+          }
           return toToolFailure(err)
         }
       }
@@ -512,6 +640,13 @@ const workflowService: WorkflowService | null = dbHandle
       registry,
       emit: (event) => emit(event),
       log: (message) => process.stderr.write(`${message}\n`),
+      gateToolExecution: async ({ name, args, conversationId, signal }) => {
+        const mode = modes.get('craft')
+        if (!mode) throw new Error('默认模式不可用')
+        return await executeGated(name, args, mode, conversationId, {
+          ...(signal ? { signal } : {})
+        })
+      },
       runAutomationPrompt: async ({ conversationId, prompt, modeId }) => {
         // WM-AUTO-03:新会话、空上下文;不读取任何历史消息。
         // 但审计链必须完整:先把 prompt 写成 user 消息,再执行。
@@ -589,7 +724,13 @@ async function runMock(
   if (toolName) {
     emit({ type: 'tool.started', callId, name: toolName })
     try {
-      const result = await pluginRuntime.callTool(toolName, { text: 'p5-hello' })
+      const result = await executeGated(
+        toolName,
+        { text: 'p5-hello' },
+        input.mode,
+        input.conversationId,
+        { taskId, callId }
+      )
       const { ok, summary } = summarizeToolResult(toolName, result)
       emit({ type: 'tool.finished', callId, ok, summary })
       reply = `[mock:${input.mode.id}] 插件工具 ${toolName} 返回: ${summary}`
@@ -625,7 +766,10 @@ async function runMock(
   const skipDelivery = /(不要交付|不用交付|不交付)/.test(input.text) && isToolAllowed(input.mode, 'write_file')
   if (skipDelivery) {
     const rel = 'out/undelivered.md'
-    await registry.get('write_file')!.execute({ path: rel, content: '# 未交付\n' }, { workspaceRoot: WORKSPACE })
+    await executeGated('write_file', { path: rel, content: '# 未交付\n' }, input.mode, input.conversationId, {
+      taskId,
+      callId
+    })
     reply = `[mock:${input.mode.id}] 已写入 ${rel},但没有交付。`
     for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
     appendMessage(db, {
@@ -655,16 +799,17 @@ async function runMock(
     const rel = 'out/mock-report.md'
     const body = `# Mock 报告\n\n请求: ${input.text}\n`
     try {
-      await registry.get('write_file')!.execute({ path: rel, content: body }, { workspaceRoot: WORKSPACE })
+      await executeGated('write_file', { path: rel, content: body }, input.mode, input.conversationId, {
+        taskId,
+        callId
+      })
       emit({ type: 'tool.started', callId, name: 'present_files' })
-      const result = await registry.get('present_files')!.execute(
+      const result = await executeGated(
+        'present_files',
         { items: [{ path: rel, title: 'Mock 报告', kind: 'file' }] },
-        {
-          workspaceRoot: WORKSPACE,
-          taskId,
-          conversationId: input.conversationId,
-          artifactSink: artifactSinkFor(taskId, input.conversationId)
-        }
+        input.mode,
+        input.conversationId,
+        { taskId, callId }
       )
       emit({ type: 'tool.finished', callId, ok: true, summary: `已交付 ${(result as { presented: number }).presented} 个文件` })
       reply = `[mock:${input.mode.id}] 已生成并交付报告:${rel}`
@@ -697,9 +842,13 @@ async function runMock(
   if (canRead) {
     emit({ type: 'tool.started', callId, name: 'read_file' })
     try {
-      const content = (await registry
-        .get('read_file')!
-        .execute({ path: 'package.json' }, { workspaceRoot: WORKSPACE })) as string
+      const content = (await executeGated(
+        'read_file',
+        { path: 'package.json' },
+        input.mode,
+        input.conversationId,
+        { taskId, callId }
+      )) as string
       emit({ type: 'tool.finished', callId, ok: true, summary: `${content.length} 字节` })
       reply = `[mock:${input.mode.id}] 已读取 package.json(${content.length} 字节)。问题: ${input.text}`
     } catch (err) {
@@ -1024,6 +1173,41 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
 
   if (msg.cmd === 'plugins.list') {
     emit({ ...base, type: 'plugins.list', plugins: pluginStatusList() })
+    return true
+  }
+
+  if (msg.cmd === 'approval.ready') {
+    // UI 明确声明"我能收审批":在此之前任何风险调用都必须拒绝,而不是默默排队。
+    approvalBridge.markReady()
+    emit({ ...base, type: 'approval.ready', pending: approvalBridge.list() })
+    return true
+  }
+
+  if (msg.cmd === 'approval.list') {
+    emit({ ...base, type: 'approval.list', requests: approvalBridge.list() })
+    return true
+  }
+
+  if (msg.cmd === 'approval.grants') {
+    const includeExpired = msg.includeExpired === true
+    const now = new Date()
+    const grants = listApprovalGrants(db)
+      .filter((row) => includeExpired || !row.expiresAt || new Date(row.expiresAt).getTime() > now.getTime())
+      .map((row) => ({
+        id: row.id,
+        groupKey: row.groupKey,
+        toolName: row.toolName,
+        grantedAt: row.grantedAt,
+        expiresAt: row.expiresAt
+      }))
+    emit({ ...base, type: 'approval.grants', grants })
+    return true
+  }
+
+  if (msg.cmd === 'approval.revoke') {
+    if (typeof msg.groupKey !== 'string' || !msg.groupKey) throw new Error('缺少 groupKey')
+    const removed = deleteApprovalGrant(db, msg.groupKey)
+    emit({ ...base, type: 'approval.revoked', groupKey: msg.groupKey, removed })
     return true
   }
 
@@ -1527,6 +1711,18 @@ process.stdin.on('data', (chunk: Buffer) => {
     process.exit(4)
   }
   for (const frame of frames) {
+    const record = frame && typeof frame === 'object' ? (frame as Record<string, unknown>) : null
+    // 审批回答必须绕过串行队列:发起审批的那次工具调用正占着队列等待它,
+    // 若排到队尾就会形成死锁,直到超时才"拒绝"。
+    if (record?.cmd === 'approval.respond') {
+      const result = approvalBridge.respond(record)
+      emit({
+        ...(record.requestId !== undefined ? { requestId: record.requestId } : {}),
+        type: 'approval.answered',
+        ...result
+      })
+      continue
+    }
     const requestId =
       frame && typeof frame === 'object' ? (frame as { requestId?: unknown }).requestId : undefined
     enqueue(() => handleFrame(frame), requestId)
@@ -1534,6 +1730,7 @@ process.stdin.on('data', (chunk: Buffer) => {
 })
 
 process.stdin.on('end', () => {
+  approvalBridge.markDisconnected()
   try {
     decoder.finish()
   } catch {

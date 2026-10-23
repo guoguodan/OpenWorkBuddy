@@ -195,6 +195,42 @@ ipcMain.handle('memory.delete', async (_e, id: string) => {
   return request<{ id: string }>({ cmd: 'memory.delete', id })
 })
 
+ipcMain.handle('approval.respond', async (_e, input: { approvalId?: string; approved?: boolean; scope?: string }) => {
+  await daemonReady
+  if (!daemon?.stdin?.writable) throw new Error('daemon 未就绪')
+  if (typeof input?.approvalId !== 'string' || !input.approvalId) throw new Error('缺少审批 ID')
+  if (typeof input.approved !== 'boolean') throw new Error('缺少审批结论')
+  if (input.approved && !['once', 'session', 'always'].includes(input.scope ?? '')) {
+    throw new Error('非法授权范围')
+  }
+  // 审批回答不能走 request():工具调用本身正阻塞在等待这个回答上。
+  daemon.stdin.write(
+    encodeFrame({
+      cmd: 'approval.respond',
+      approvalId: input.approvalId,
+      approved: input.approved,
+      ...(input.approved ? { scope: input.scope } : {})
+    })
+  )
+  return { ok: true }
+})
+
+ipcMain.handle('approval.list', async () => {
+  await daemonReady
+  return request<{ requests: unknown[] }>({ cmd: 'approval.list' })
+})
+
+ipcMain.handle('approval.grants', async () => {
+  await daemonReady
+  return request<{ grants: unknown[] }>({ cmd: 'approval.grants' })
+})
+
+ipcMain.handle('approval.revoke', async (_e, groupKey: string) => {
+  await daemonReady
+  if (typeof groupKey !== 'string' || !groupKey) throw new Error('非法授权组')
+  return request<{ groupKey: string; removed: boolean }>({ cmd: 'approval.revoke', groupKey })
+})
+
 ipcMain.handle('plugins.list', async () => {
   await daemonReady
   return request<{ plugins: unknown[] }>({ cmd: 'plugins.list' })
@@ -343,6 +379,12 @@ function createWindow() {
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) win.loadURL(devUrl)
   else win.loadFile(path.join(__dirname, '../renderer/index.html'))
+  // 审批必须赶在第一次工具调用前声明就绪;否则 daemon 会 fail-closed。
+  win.webContents.on('did-finish-load', () => {
+    void daemonReady.then(() => {
+      if (daemon?.stdin?.writable) daemon.stdin.write(encodeFrame({ cmd: 'approval.ready' }))
+    })
+  })
 }
 
 /** 桌面端由 apps/desktop 启动,资源目录相对构建产物上溯到仓库根 */
