@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
 import { openExternal, openHtmlPreview, openImagePreview, openWithSystem, resolvePreview, type PreviewTarget } from './preview.js'
@@ -343,7 +344,25 @@ function attachDaemonOutput() {
         if (typeof ws === 'string' && ws) resolvedWorkspace = ws
         resolveReady?.()
         resolveReady = null
+        // 安装包冒烟需要一个客观的"首屏已就绪"时刻;仅在显式传入路径时写标记。
+        const readyFile = process.env.OPENWB_READY_FILE
+        if (readyFile) {
+          try {
+            writeFileSync(
+              readyFile,
+              JSON.stringify({ readyAt: new Date().toISOString(), packageMode: app.isPackaged }),
+              'utf8'
+            )
+          } catch (err) {
+            console.error('[main] 写就绪标记失败:', (err as Error).message)
+          }
+        }
         win?.webContents.send('agent.event', event)
+        // 安装包冷启动基准:ready 后按需自动退出,避免 CI 残留进程。
+        const exitAfter = Number(process.env.OPENWB_SMOKE_EXIT_MS ?? 0)
+        if (Number.isFinite(exitAfter) && exitAfter > 0) {
+          setTimeout(() => app.quit(), exitAfter)
+        }
         continue
       }
       const entry = event.requestId ? pending.get(event.requestId) : undefined
@@ -390,6 +409,8 @@ function createWindow() {
 /** 桌面端由 apps/desktop 启动,资源目录相对构建产物上溯到仓库根 */
 function resolveBundleRoot(): string {
   if (process.env.OPENWB_BUNDLE_ROOT) return path.resolve(process.env.OPENWB_BUNDLE_ROOT)
+  // 打包态:<install>/resources 下同时放 resources/{modes,prompts,skills}。
+  if (app.isPackaged) return process.resourcesPath
   // __dirname = <root>/apps/desktop/out/main
   return path.resolve(__dirname, '../../../..')
 }
@@ -401,9 +422,15 @@ function resolveWorkspace(): string {
 }
 
 function startDaemon() {
-  const entry = process.env.OPENWB_DAEMON_ENTRY
+  // 打包态 daemon 与运行依赖都在 resources/daemon 下,不依赖用户工作目录。
+  // daemon 以 Electron 的 Node 运行时启动,但入口必须是普通文件:asar 内的
+  // 原生模块与子进程脚本无法被 require/import 正确解析。
+  const entry =
+    process.env.OPENWB_DAEMON_ENTRY ??
+    (app.isPackaged ? path.join(process.resourcesPath, 'daemon', 'dist', 'index.js') : undefined)
   if (!entry) throw new Error('缺少 OPENWB_DAEMON_ENTRY,daemon 未构建')
   const bundleRoot = resolveBundleRoot()
+  const cwd = app.isPackaged ? path.dirname(entry) : resolveWorkspace()
   daemon = spawn(process.execPath, [path.resolve(entry)], {
     env: {
       ...process.env,
@@ -415,8 +442,10 @@ function startDaemon() {
       OPENWB_WORKSPACE: resolveWorkspace(),
       OPENWB_MODES_DIR: path.join(bundleRoot, 'resources/modes'),
       OPENWB_PROMPTS_DIR: path.join(bundleRoot, 'resources/prompts'),
-      OPENWB_BUNDLED_SKILLS_DIR: path.join(bundleRoot, 'resources/skills')
+      OPENWB_BUNDLED_SKILLS_DIR: path.join(bundleRoot, 'resources/skills'),
+      OPENWB_WORKFLOWS_DIR: path.join(bundleRoot, 'resources/workflows')
     },
+    cwd,
     stdio: ['pipe', 'pipe', 'pipe']
   })
   const timer = setTimeout(() => {
@@ -432,6 +461,16 @@ function startDaemon() {
 }
 
 app.whenReady().then(() => {
+  // 单实例锁:安装包被重复点击时不能再起一套 daemon 与工作区。
+  if (!app.requestSingleInstanceLock()) {
+    app.quit()
+    return
+  }
+  app.on('second-instance', () => {
+    if (!win) return
+    if (win.isMinimized()) win.restore()
+    win.focus()
+  })
   startDaemon()
   createWindow()
 })

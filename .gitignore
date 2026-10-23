@@ -13,3 +13,8 @@ out/
 .data/
 workspace-demo/
 
+# 打包产物:staging 运行目录与 electron-builder 输出
+.pack-staging/
+release/
+release-old-*/
+

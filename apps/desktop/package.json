@@ -6,14 +6,17 @@
     "scripts": {
         "dev": "electron-vite dev",
         "build": "electron-vite build",
+        "pack:stage": "pnpm --filter @openwb/daemon build && node ../../scripts/stage-daemon.mjs",
+        "dist:win": "pnpm build && pnpm pack:stage && electron-builder --win nsis --x64 --publish never",
         "typecheck": "tsc --noEmit",
         "lint": "eslint .",
         "test": "vitest run --passWithNoTests"
     },
-    "dependencies": {
+    "devDependencies": {
         "@openwb/protocol": "workspace:*",
         "@vitejs/plugin-react": "^6.1.2",
         "electron": "^45.0.0",
+        "electron-builder": "26.15.3",
         "electron-vite": "^6.0.0",
         "vite": "^8.3.5"
     }

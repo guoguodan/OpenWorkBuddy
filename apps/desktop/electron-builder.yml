@@ -1,0 +1,70 @@
+# P8-3 打包配置
+# 结构约定:
+#   app.asar               -> out/** (main/preload/renderer)
+#   resources/daemon       -> daemon dist + 真实文件 node_modules (子进程可加载原生模块)
+#   resources/resources/*  -> modes/prompts/skills/workflows (daemon 资源目录)
+appId: com.openworkbuddy.desktop
+productName: OpenWorkBuddy
+directories:
+  output: ../../release
+  buildResources: build
+
+# 复用 node_modules 中已下载的 Electron,打包不依赖 GitHub 网络。
+# 路径相对 apps/desktop;electron-builder 会把它当作官方发行目录结构。
+electronDist: node_modules/electron/dist
+
+asar: true
+# 主进程与渲染层都是纯 JS;原生模块只在 resources/daemon,不进 asar。
+# electron-builder 默认会把运行依赖再次解包,这里显式关闭:
+#   - dependencies 为空 -> 没有可打包的 node_modules
+#   - npmRebuild=false  -> 不在打包机重装/重编译
+files:
+  - out/**
+  - package.json
+  # 桌面端不需要任何 node_modules:第三方代码已内联,daemon 依赖在 resources/daemon。
+  # 不显式排除时 electron-builder 会把 devDependencies 整棵树塞进 asar。
+  - "!node_modules/**"
+  - "!**/*.map"
+
+# 桌面端运行时不需要 node_modules:所有第三方代码已由 electron-vite 内联,
+# daemon 的依赖在 extraResources/daemon 中。禁止 builder 扫描与重建。
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+
+extraResources:
+  # 必须分开声明 dist 与 node_modules:
+  # electron-builder 的复制过滤器会丢弃"被复制目录顶层名叫 node_modules"的目录,
+  # 若整目录一次复制,daemon 的运行依赖会静默丢失(表现为启动即退)。
+  - from: ../../.pack-staging/daemon/dist
+    to: daemon/dist
+  - from: ../../.pack-staging/daemon/node_modules
+    to: daemon/node_modules
+  - from: ../../.pack-staging/daemon/package.json
+    to: daemon/package.json
+  - from: ../../resources/modes
+    to: resources/modes
+  - from: ../../resources/prompts
+    to: resources/prompts
+  - from: ../../resources/skills
+    to: resources/skills
+  - from: ../../resources/workflows
+    to: resources/workflows
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+  shortcutName: OpenWorkBuddy
+
+publish: null
