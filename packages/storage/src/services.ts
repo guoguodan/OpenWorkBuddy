@@ -32,6 +32,8 @@ export function sanitizeEndpoint(raw: string | null | undefined): string | null 
   try {
     const url = new URL(raw)
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+    // 地址里带账号密码既不会被使用,也会在日志/界面上暴露凭据,直接判为无效。
+    if (url.username || url.password) return null
     return `${url.protocol}//${url.host}`
   } catch {
     return null

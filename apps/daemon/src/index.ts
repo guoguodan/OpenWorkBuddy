@@ -13,6 +13,7 @@ import {
 } from 'ai'
 import { z } from 'zod'
 import { listRemoteModels, modelFor, resolveModelName } from './model.js'
+import { probeServiceEndpoint } from './service-probe.js'
 import {
   loadModes,
   assertRequiredModes,
@@ -3569,18 +3570,22 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
 
   if (msg.cmd === 'connections.set') {
     if (!isServiceProvider(msg.provider)) throw new Error('未知服务')
-    const status =
-      msg.status === 'connecting' || msg.status === 'connected' || msg.status === 'error' || msg.status === 'not_connected'
-        ? msg.status
-        : null
-    if (!status) throw new Error('未知连接状态')
+    // 连接状态由 daemon 探测得出,不采信客户端声明的 connected/lastError。
+    const current = listConnections(db, workspaceId).find((item) => item.provider === msg.provider)
+    const endpoint =
+      typeof msg.endpoint === 'string' || msg.endpoint === null
+        ? msg.endpoint
+        : (current?.endpoint ?? null)
+    const account =
+      typeof msg.account === 'string' || msg.account === null ? msg.account : undefined
+    const probe = await probeServiceEndpoint(endpoint)
     const connection = setConnection(db, {
       workspaceId,
       provider: msg.provider,
-      status,
-      ...(typeof msg.endpoint === 'string' || msg.endpoint === null ? { endpoint: msg.endpoint } : {}),
-      ...(typeof msg.account === 'string' || msg.account === null ? { account: msg.account } : {}),
-      ...(typeof msg.lastError === 'string' || msg.lastError === null ? { lastError: msg.lastError } : {}),
+      status: probe.ok ? 'connected' : 'error',
+      ...(endpoint !== null || msg.endpoint === null ? { endpoint } : {}),
+      ...(account !== undefined ? { account } : {}),
+      lastError: probe.ok ? null : probe.error,
       check: true
     })
     emit({ ...base, type: 'connections.updated', connection })

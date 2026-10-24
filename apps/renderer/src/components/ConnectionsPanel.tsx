@@ -256,7 +256,9 @@ export function ConnectionsPanel({ provider, onClose, onNotify }: ConnectionsPan
           </label>
           <div className="owb-connection-note">
             <IconLink size={14} />
-            <span>仅保存服务域名与账号别名；查询串、令牌和密码不会写入本地数据库。</span>
+            <span>
+              提交后会实际探测服务地址（5 秒超时），服务正常响应才会显示已连接。仅保存服务域名与账号别名；查询串、令牌和密码不会写入本地数据库。
+            </span>
           </div>
           <div className="owb-form__actions">
             {current?.status === 'connected' || current?.status === 'error' ? (

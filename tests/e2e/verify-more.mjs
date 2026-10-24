@@ -4,7 +4,7 @@
  * 桌面端 UI:
  *   六个"更多"入口分别打开项目 / 我的邮箱 / 腾讯文档 / ima / 乐享 / 灵感,
  *   项目创建/编辑/置顶/删除、项目内新建任务并归属、重启后保留;
- *   连接状态切换与重启保持,非法地址不得显示为已连接;
+ *   连接状态切换与重启保持,地址必须真实可达才算已连接;
  *   灵感空态、发布、收藏、刷新后保留。
  * daemon 运行链:
  *   项目指令进入 system、项目技能白名单收窄工具、项目上下文进入 trace。
@@ -13,6 +13,7 @@
  * 前置: pnpm --filter @openwb/daemon build && pnpm --filter @openwb/desktop build
  */
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
@@ -28,6 +29,13 @@ const port = 9339
 const endpoint = `http://127.0.0.1:${port}/json/list`
 const require = createRequire(resolve(root, 'apps/daemon/package.json'))
 const Database = require('better-sqlite3')
+
+const serviceStub = createServer((_req, res) => {
+  res.writeHead(200, { 'content-type': 'text/plain' })
+  res.end('ok')
+})
+await new Promise((resolveListen) => serviceStub.listen(0, '127.0.0.1', resolveListen))
+const serviceUrl = `http://127.0.0.1:${serviceStub.address().port}`
 
 if (!existsSync(electron) || !existsSync(daemonEntry)) {
   console.error('缺少 Electron 或 daemon 产物,先执行 build')
@@ -405,7 +413,7 @@ try {
   // ---------- 3. 连接状态切换与持久化 ----------
   await openMore('我的邮箱')
   await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="connection-panel"]'))`)
-  await fillField('connection-endpoint', 'https://mail.example.com')
+  await fillField('connection-endpoint', serviceUrl)
   await fillField('connection-account', 'team@example.com')
   await evaluate(`document.querySelector('[data-testid="connection-connect"]').click()`)
   const connected = await waitFor(
@@ -413,6 +421,25 @@ try {
     `document.querySelector('[data-testid="connection-status"]')?.innerText.includes('已连接')`
   )
   check(connected, 'connection-connected')
+
+  // 可解析但不可达的地址同样不能显示为已连接。
+  await evaluate(`document.querySelector('[data-testid="connection-provider-ima"]').click()`)
+  await sleep(200)
+  await fillField('connection-endpoint', 'http://127.0.0.1:1')
+  await evaluate(`document.querySelector('[data-testid="connection-connect"]').click()`)
+  const unreachableError = await waitFor(
+    evaluate,
+    `document.querySelector('[data-testid="connection-status"]')?.innerText.includes('连接异常')`
+  )
+  check(unreachableError, 'unreachable-endpoint-becomes-error')
+  const unreachableText = await evaluate(
+    `document.querySelector('[data-testid="connection-error"]')?.innerText ?? ''`
+  )
+  check(
+    /无法连接|拒绝连接|连接超时/.test(unreachableText),
+    'unreachable-endpoint-has-reason',
+    unreachableText
+  )
 
   // 非法地址 -> error,不能显示为已连接
   await evaluate(`document.querySelector('[data-testid="connection-provider-tencentDocs"]').click()`)
@@ -495,6 +522,41 @@ try {
   )
   const projectId2 = project?.project?.id
   check(!!projectId2, 'daemon-project-created', JSON.stringify(project))
+
+  // 协议级:客户端即使声明 connected,也必须以 daemon 实际探测结果为准。
+  const forged = await s.call(
+    {
+      cmd: 'connections.set',
+      provider: 'mailbox',
+      status: 'connected',
+      endpoint: 'http://127.0.0.1:1',
+      account: 'forged@example.com',
+      lastError: null
+    },
+    'connections.updated'
+  )
+  check(
+    forged?.connection?.status === 'error' && forged.connection.lastError,
+    'daemon-ignores-forged-connected-status',
+    JSON.stringify(forged)
+  )
+  const reachable = await s.call(
+    { cmd: 'connections.set', provider: 'mailbox', status: 'error', endpoint: serviceUrl },
+    'connections.updated'
+  )
+  check(
+    reachable?.connection?.status === 'connected' &&
+      reachable.connection.endpoint === serviceUrl &&
+      reachable.connection.lastError === null,
+    'daemon-verifies-reachable-endpoint',
+    JSON.stringify(reachable)
+  )
+  const listed = await s.call({ cmd: 'connections.list' }, 'connections.list')
+  check(
+    listed?.connections?.find((c) => c.provider === 'mailbox')?.status === 'connected',
+    'daemon-persists-probed-status',
+    JSON.stringify(listed)
+  )
 
   const conv = await s.call(
     { cmd: 'conversation.new', title: '项目会话', projectId: projectId2 },
@@ -582,6 +644,7 @@ try {
     session?.ws?.close()
   } catch {}
   app.kill()
+  await new Promise((resolveClose) => serviceStub.close(() => resolveClose()))
   await sleep(1200)
   await rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 })
 }
