@@ -400,6 +400,16 @@ export default function App() {
         void loadConversations(activeConversation.current || undefined).catch(() => undefined)
         void loadMemories().catch(() => undefined)
         void loadUnreadNotifications()
+      } else if (e.type === 'run.cancelled') {
+        // 停止以 daemon 的确认事件为准:点击瞬间就清空会把已经生成的内容"撤回",
+        // 用户在停止前看到的部分回复应继续留在会话里。
+        streaming.current = false
+        setBusy(false)
+        setMessages((list) =>
+          list.map((m, i) => (i === list.length - 1 && m.role === 'assistant' ? { ...m, streaming: false } : m))
+        )
+        note('warn', '已停止生成,已保留当前输出。')
+        void loadConversations(activeConversation.current || undefined).catch(() => undefined)
       } else if (e.type === 'automation.finished') {
         void loadUnreadNotifications()
       } else if (e.type === 'error') {
@@ -449,6 +459,15 @@ export default function App() {
       setAttachments(sentAttachments)
       setInput(outgoing)
       note('system', `[错误] 发送失败: ${(err as Error).message}`)
+    }
+  }
+
+  const stopGenerate = async () => {
+    if (!busy) return
+    try {
+      await window.openwb.conversation.cancel(conversationId || undefined)
+    } catch (err) {
+      note('system', `[错误] 停止失败: ${(err as Error).message}`)
     }
   }
 
@@ -773,6 +792,7 @@ export default function App() {
       attachments={attachments}
       onChange={setInput}
       onSend={() => void send()}
+      onStop={() => void stopGenerate()}
       onPickSkill={setSelectedSkill}
       onPickPermission={(next) => void changePermission(next)}
       onOpenWorkspace={() => void openWorkspace()}

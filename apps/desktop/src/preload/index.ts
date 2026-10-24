@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('openwb', {
   },
   conversation: {
     send: (input: unknown) => ipcRenderer.invoke('conversation.send', input),
+    cancel: (conversationId?: string) => ipcRenderer.invoke('conversation.cancel', conversationId),
     list: () => ipcRenderer.invoke('conversation.list'),
     history: (conversationId?: string) => ipcRenderer.invoke('conversation.history', conversationId),
     create: (input?: unknown) => ipcRenderer.invoke('conversation.new', input),

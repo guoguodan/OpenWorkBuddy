@@ -13,10 +13,11 @@ const root = resolve(here, '../..')
 const entry = resolve(root, 'apps/daemon/dist/index.js')
 
 const expected = {
-  craft: ['delete_files', 'glob', 'grep', 'move_files', 'present_files', 'read_file', 'shell', 'write_file'],
-  plan: ['glob', 'grep', 'present_files', 'read_file'],
-  ask: ['glob', 'grep', 'read_file'],
-  expert: ['glob', 'grep', 'present_files', 'read_file'],
+  // 内置技能上线后,只要模式有工具且有可加载技能,就会额外暴露 load_skill。
+  craft: ['delete_files', 'glob', 'grep', 'load_skill', 'move_files', 'present_files', 'read_file', 'shell', 'write_file'],
+  plan: ['glob', 'grep', 'load_skill', 'present_files', 'read_file'],
+  ask: ['glob', 'grep', 'load_skill', 'read_file'],
+  expert: ['glob', 'grep', 'load_skill', 'present_files', 'read_file'],
   quick: []
 }
 

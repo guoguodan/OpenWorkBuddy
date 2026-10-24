@@ -307,6 +307,7 @@ interface Window {
         scene?: 'working' | 'coding' | 'design'
         contextPaths?: string[]
       }) => Promise<void>
+      cancel: (conversationId?: string) => Promise<{ ok: boolean }>
       list: () => Promise<{ conversations: ConversationInfo[]; conversationId: string }>
       history: (conversationId?: string) => Promise<{
         messages: HistoryMessage[]

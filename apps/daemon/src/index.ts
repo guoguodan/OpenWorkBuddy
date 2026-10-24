@@ -264,11 +264,61 @@ const sessionGrants = new InMemorySessionGrants()
 
 const decoder = new FrameDecoder()
 
+/**
+ * 正在运行的会话对应的中断句柄。
+ *
+ * 用户点击"停止"时必须能真正取消模型流与后续工具执行,而不是只把按钮置灰。
+ * 每个会话最多一个在跑的任务,重复发送在 UI 层已被挡住;这里仍然按会话隔离,
+ * 避免误停到别的会话。
+ */
 let fatal: string | null = null
 let dbHandle: ReturnType<typeof openDatabase> | null = null
 let workspaceId = ''
 let activeConversationId = ''
 let stopSync: (() => void) | null = null
+
+const activeRuns = new Map<string, AbortController>()
+/**
+ * 用户可能在一轮任务还没有建立 AbortController 时就点了停止(例如还在读上下文)。
+ * 记住"这个会话下一次真正开始时要立刻停",避免这次停止被吞掉。
+ */
+const pendingCancels = new Set<string>()
+/** 已受理、正在准备或执行中的会话:用于区分"还没开始"和"根本没在跑"。 */
+const startingRuns = new Set<string>()
+
+class RunCancelledError extends Error {
+  constructor() {
+    super('用户已停止本次生成')
+    this.name = 'RunCancelledError'
+  }
+}
+
+function cancelRun(conversationId: string | undefined): boolean {
+  if (!conversationId) {
+    // 没有指定会话时,按当前活跃会话取消;再兜底取消唯一在跑的任务。
+    const fallback = activeRuns.has(activeConversationId)
+      ? activeConversationId
+      : startingRuns.has(activeConversationId)
+        ? activeConversationId
+        : activeRuns.size + [...startingRuns].filter((id) => !activeRuns.has(id)).length === 1
+          ? ([...activeRuns.keys()][0] ?? [...startingRuns][0])
+        : undefined
+    if (!fallback) return false
+    conversationId = fallback
+  }
+  const controller = activeRuns.get(conversationId)
+  if (!controller) {
+    if (!startingRuns.has(conversationId)) return false
+    pendingCancels.add(conversationId)
+    return true
+  }
+  controller.abort()
+  // 正在等审批的工具调用不会自己观察 AbortSignal:必须让审批桥立即拒绝,
+  // 否则界面已经显示"已停止",daemon 还挂着一张永不回答的审批卡。
+  approvalBridge.cancelForConversation(conversationId, '用户已停止本次生成,该操作没有执行')
+  return true
+}
+
 
 try {
   dbHandle = openDatabase(DB_PATH)
@@ -593,6 +643,8 @@ interface RunToolContext {
   conversationId: string
   /** 本轮是否写过文件:用于收尾时判定交付是否缺失 */
   wroteFiles?: { value: boolean }
+  /** 用户停止生成时,正在执行或即将执行的工具必须立刻退出 */
+  signal?: AbortSignal
 }
 
 /**
@@ -658,6 +710,10 @@ async function executeGated(
     signal?: AbortSignal
   }
 ): Promise<unknown> {
+  // 取消必须发生在任何副作用之前:审批通过后再检查已经太晚,
+  // 用户按下停止后不应再看到新的工具调用被放行。
+  if (ctx.signal?.aborted) throw new RunCancelledError()
+
   const descriptor = registry.get(descriptorName)
   if (!descriptor) throw new ToolError('TOOL_NOT_FOUND', `工具不存在: ${descriptorName}`)
   const args =
@@ -755,6 +811,7 @@ async function executeGated(
 
   skills.assertAllowed(descriptorName)
   if (descriptor.effects.writesFilesystem && ctx.wroteFiles) ctx.wroteFiles.value = true
+  if (ctx.signal?.aborted) throw new RunCancelledError()
   return await descriptor.execute(args, {
     workspaceRoot: WORKSPACE,
     ...(ctx.signal ? { signal: ctx.signal } : {}),
@@ -817,9 +874,13 @@ function buildTools(mode: ModePolicy, allowedNames: string[], run?: RunToolConte
         try {
           return await executeGated(descriptor.name, input, mode, run?.conversationId ?? activeConversationId, {
             ...(run ? { taskId: run.taskId, wroteFiles: run.wroteFiles } : {}),
+            ...(run?.signal ? { signal: run.signal } : {}),
             ...(options?.toolCallId ? { callId: options.toolCallId } : {})
           })
         } catch (err) {
+          // 用户停止生成不是"工具失败":把它转成普通工具结果会让模型继续跑,
+          // 必须让异常一路冒泡到本轮运行层,由那里统一收尾。
+          if (run?.signal?.aborted || err instanceof RunCancelledError) throw err
           if (err instanceof ApprovalUnavailableError) {
             // 审批通道断开必须显式告知界面"没有执行、可重试",不能只当普通工具失败。
             emit({
@@ -1195,20 +1256,131 @@ function notifyTaskFinished(input: {
   }
 }
 
+interface MockRunState {
+  /** 已推送给界面的部分回复;取消时用它落盘,不能丢掉用户已经看到的内容 */
+  text: string
+}
+
+function isRunCancelled(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true
+  if (err instanceof RunCancelledError) return true
+  return err instanceof Error && (err.name === 'AbortError' || /已取消|aborted|cancelled/i.test(err.message))
+}
+
+/** mock 逐字输出也要能被中断;真实模型由 abortSignal 负责同样的语义。 */
+async function emitMockText(text: string, signal: AbortSignal, state: MockRunState): Promise<void> {
+  const delayRaw = Number(process.env.OPENWB_MOCK_DELAY_MS ?? 0)
+  const delay = Number.isFinite(delayRaw) && delayRaw > 0 ? delayRaw : 0
+  for (const ch of Array.from(text)) {
+    if (signal.aborted) throw new RunCancelledError()
+    state.text += ch
+    emit({ type: 'delta', text: ch })
+    if (delay > 0) {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const timer = setTimeout(() => {
+          settled = true
+          signal.removeEventListener('abort', onAbort)
+          resolve()
+        }, delay)
+        const onAbort = () => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          reject(new RunCancelledError())
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        // abort 可能发生在上面的检查之后、监听器挂载之前;补一次检查避免漏掉。
+        if (signal.aborted) onAbort()
+      })
+    } else {
+      // 让出事件循环,确保没有延迟时 stdin 的取消帧仍有机会被处理。
+      await Promise.resolve()
+    }
+  }
+}
+
+/**
+ * 离线 mock 的可取消包装。
+ *
+ * 任务与 activeRuns 都必须在这里建立:测试和真实运行走的是同一套取消入口,
+ * 不能只在真实模型路径上支持停止。
+ */
 async function runMock(
   input: RunInput,
   prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt }
+): Promise<'done' | 'failed' | 'interrupted'> {
+  const db = requireDb()
+  const colleague = input.colleagueId ? getColleague(db, input.colleagueId) : undefined
+  const taskId = createTask(db, {
+    conversationId: input.conversationId,
+    title: input.text.slice(0, 80) || '未命名任务'
+  })
+  transitionTask(db, taskId, 'running')
+  appendEvent(db, input.conversationId, 'run.started', { taskId, mode: input.mode.id })
+  emit({ type: 'text.start' })
+  emit({ type: 'tools.available', names: effectiveTools(input.mode, colleague ?? null) })
+
+  const controller = new AbortController()
+  activeRuns.set(input.conversationId, controller)
+  if (pendingCancels.delete(input.conversationId)) controller.abort()
+  const state: MockRunState = { text: '' }
+  try {
+    if (controller.signal.aborted) throw new RunCancelledError()
+    return await runMockInner(input, prepared, taskId, controller.signal, state)
+  } catch (err) {
+    if (isRunCancelled(err, controller.signal)) {
+      appendMessage(db, {
+        conversationId: input.conversationId,
+        role: 'assistant',
+        content: { text: state.text },
+        status: 'interrupted',
+        model: 'mock'
+      })
+      try {
+        transitionTask(db, taskId, 'interrupted')
+      } catch {
+        // 任务若已落终态则不再改写
+      }
+      appendEvent(db, input.conversationId, 'run.cancelled', { taskId })
+      emit({ type: 'run.cancelled', conversationId: input.conversationId, taskId })
+      return 'interrupted'
+    }
+    const message = (err as Error).message
+    appendMessage(db, {
+      conversationId: input.conversationId,
+      role: 'assistant',
+      content: { text: state.text },
+      status: 'interrupted',
+      model: 'mock'
+    })
+    try {
+      transitionTask(db, taskId, 'failed', { errorCode: 'AGENT_FAILED' })
+    } catch {
+      // 已处于终态则忽略
+    }
+    appendEvent(db, input.conversationId, 'run.failed', { taskId, message: message.slice(0, 300) })
+    emit({ type: 'error', code: 'AGENT_FAILED', message, retryable: true })
+    return 'failed'
+  } finally {
+    if (activeRuns.get(input.conversationId) === controller) {
+      activeRuns.delete(input.conversationId)
+    }
+  }
+}
+
+async function runMockInner(
+  input: RunInput,
+  prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt },
+  taskId: string,
+  signal: AbortSignal,
+  state: MockRunState
 ): Promise<'done'> {
   const db = requireDb()
   const colleague = input.colleagueId ? getColleague(db, input.colleagueId) : undefined
   const runConversation = getConversation(db, input.conversationId)
   const runProject = runConversation?.projectId ? getProject(db, runConversation.projectId) : undefined
   const runSkill = skills.activeSkill()?.name
-  const taskId = createTask(db, { conversationId: input.conversationId, title: input.text.slice(0, 80) || '未命名任务' })
-  transitionTask(db, taskId, 'running')
-  appendEvent(db, input.conversationId, 'run.started', { taskId, mode: input.mode.id })
-  emit({ type: 'text.start' })
-  emit({ type: 'tools.available', names: effectiveTools(input.mode, colleague ?? null) })
   const callId = 'mock-call-1'
   let reply = ''
 
@@ -1236,16 +1408,17 @@ async function runMock(
         { text: 'p5-hello' },
         input.mode,
         input.conversationId,
-        { taskId, callId }
+        { taskId, callId, signal }
       )
       const { ok, summary } = summarizeToolResult(toolName, result)
       emit({ type: 'tool.finished', callId, ok, summary })
       reply = `[mock:${input.mode.id}] 插件工具 ${toolName} 返回: ${summary}`
     } catch (err) {
+      if (isRunCancelled(err, signal)) throw err
       emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
       reply = `[mock:${input.mode.id}] 插件工具 ${toolName} 调用失败: ${(err as Error).message}`
     }
-    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    await emitMockText(reply, signal, state)
     appendMessage(db, {
       conversationId: input.conversationId,
       role: 'assistant',
@@ -1291,16 +1464,18 @@ async function runMock(
     try {
       const result = await executeGated('shell', payload, input.mode, input.conversationId, {
         taskId,
-        callId
+        callId,
+        signal
       })
       const { ok, summary } = summarizeToolResult('shell', result)
       emit({ type: 'tool.finished', callId, ok, summary })
       reply = `[mock:${input.mode.id}] ${summary}`
     } catch (err) {
+      if (isRunCancelled(err, signal)) throw err
       emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
       reply = `[mock:${input.mode.id}] 命令未执行: ${(err as Error).message}`
     }
-    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    await emitMockText(reply, signal, state)
     appendMessage(db, {
       conversationId: input.conversationId,
       role: 'assistant',
@@ -1345,15 +1520,20 @@ async function runMock(
     const args = name === 'delete_files' ? { paths: payload } : { items: payload }
     emit({ type: 'tool.started', callId, name })
     try {
-      const result = await executeGated(name, args, input.mode, input.conversationId, { taskId, callId })
+      const result = await executeGated(name, args, input.mode, input.conversationId, {
+        taskId,
+        callId,
+        signal
+      })
       const { ok, summary } = summarizeToolResult(name, result)
       emit({ type: 'tool.finished', callId, ok, summary })
       reply = `[mock:${input.mode.id}] ${summary}`
     } catch (err) {
+      if (isRunCancelled(err, signal)) throw err
       emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
       reply = `[mock:${input.mode.id}] 破坏性操作未执行: ${(err as Error).message}`
     }
-    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    await emitMockText(reply, signal, state)
     appendMessage(db, {
       conversationId: input.conversationId,
       role: 'assistant',
@@ -1392,10 +1572,11 @@ async function runMock(
     const rel = 'out/undelivered.md'
     await executeGated('write_file', { path: rel, content: '# 未交付\n' }, input.mode, input.conversationId, {
       taskId,
-      callId
+      callId,
+      signal
     })
     reply = `[mock:${input.mode.id}] 已写入 ${rel},但没有交付。`
-    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    await emitMockText(reply, signal, state)
     appendMessage(db, {
       conversationId: input.conversationId,
       role: 'assistant',
@@ -1434,7 +1615,8 @@ async function runMock(
     try {
       await executeGated('write_file', { path: rel, content: body }, input.mode, input.conversationId, {
         taskId,
-        callId
+        callId,
+        signal
       })
       emit({ type: 'tool.started', callId, name: 'present_files' })
       const result = await executeGated(
@@ -1442,15 +1624,16 @@ async function runMock(
         { items: [{ path: rel, title: 'Mock 报告', kind: 'file' }] },
         input.mode,
         input.conversationId,
-        { taskId, callId }
+        { taskId, callId, signal }
       )
       emit({ type: 'tool.finished', callId, ok: true, summary: `已交付 ${(result as { presented: number }).presented} 个文件` })
       reply = `[mock:${input.mode.id}] 已生成并交付报告:${rel}`
     } catch (err) {
+      if (isRunCancelled(err, signal)) throw err
       emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
       reply = `[mock:${input.mode.id}] 交付失败:${(err as Error).message}`
     }
-    for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+    await emitMockText(reply, signal, state)
     appendMessage(db, {
       conversationId: input.conversationId,
       role: 'assistant',
@@ -1489,11 +1672,12 @@ async function runMock(
         { path: 'package.json' },
         input.mode,
         input.conversationId,
-        { taskId, callId }
+        { taskId, callId, signal }
       )) as string
       emit({ type: 'tool.finished', callId, ok: true, summary: `${content.length} 字节` })
       reply = `[mock:${input.mode.id}] 已读取 package.json(${content.length} 字节)。问题: ${input.text}`
     } catch (err) {
+      if (isRunCancelled(err, signal)) throw err
       // 离线验收常在空目录里跑,mock 不能因为缺 package.json 就整轮失败
       emit({ type: 'tool.finished', callId, ok: false, summary: (err as Error).message })
       reply = `[mock:${input.mode.id}] 工具调用失败(${(err as Error).message})。问题: ${input.text}`
@@ -1501,7 +1685,7 @@ async function runMock(
   } else {
     reply = `[mock:${input.mode.id}] 当前模式无工具权限,未读取任何文件。问题: ${input.text}`
   }
-  for (const ch of Array.from(reply)) emit({ type: 'delta', text: ch })
+  await emitMockText(reply, signal, state)
   appendMessage(db, {
     conversationId: input.conversationId,
     role: 'assistant',
@@ -1531,7 +1715,7 @@ async function runMock(
   return 'done'
 }
 
-async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
+async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupted'> {
   const db = requireDb()
   const { text, mode, conversationId } = input
 
@@ -1621,6 +1805,13 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
   transitionTask(db, taskId, 'running')
   appendEvent(db, conversationId, 'run.started', { taskId, mode: mode.id })
 
+  // 从这里开始才是可取消的模型运行。准备阶段(记忆、提示词)很快,
+  // 提前注册反而会让"停止"落在还没开始的请求上。
+  const controller = new AbortController()
+  activeRuns.set(conversationId, controller)
+  if (pendingCancels.delete(conversationId)) controller.abort()
+  const signal = controller.signal
+
   let reply = ''
   let totalInput = 0
   let totalOutput = 0
@@ -1630,6 +1821,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
   let delivered = 0
 
   try {
+    if (signal.aborted) throw new RunCancelledError()
     emit({ type: 'text.start' })
     const initialTools = effectiveTools(mode, colleague ?? null)
     emit({ type: 'tools.available', names: initialTools })
@@ -1639,7 +1831,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const names = effectiveTools(mode, colleague ?? null)
-      const tools = buildTools(mode, names, { taskId, conversationId, wroteFiles })
+      const tools = buildTools(mode, names, { taskId, conversationId, wroteFiles, signal })
 
       if (JSON.stringify(names) !== JSON.stringify(lastNames)) {
         emit({ type: 'tools.available', names })
@@ -1651,10 +1843,12 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
         system: prepared.system,
         messages,
         tools,
-        maxSteps: 1
+        maxSteps: 1,
+        abortSignal: signal
       })
 
       for await (const part of result.fullStream) {
+        if (signal.aborted) throw new RunCancelledError()
         if (part.type === 'text-delta') {
           reply += part.textDelta
           emit({ type: 'delta', text: part.textDelta })
@@ -1703,6 +1897,8 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
       if (toolResults.length === 0) break
     }
 
+    if (signal.aborted) throw new RunCancelledError()
+
     // 步数用尽时模型往往还在试下一步工具,此时 reply 为空,用户只看到一排失败的
     // 工具行,像"报错"。强制补一轮不带工具的收尾,把已有观测变成可读结论。
     if (!reply.trim()) {
@@ -1716,7 +1912,8 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
               role: 'user',
               content: '请立刻给出最终回答:已经查到什么、结论是什么、哪些没查到。不要再调用任何工具。'
             }
-          ]
+          ],
+          abortSignal: signal
         })
         for await (const part of wrapUp.fullStream) {
           if (part.type === 'text-delta') {
@@ -1730,6 +1927,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
         if (Number.isFinite(wrapIn)) totalInput += wrapIn
         if (Number.isFinite(wrapOut)) totalOutput += wrapOut
       } catch (err) {
+        if (isRunCancelled(err, signal)) throw err
         process.stderr.write(`[wrapup] 收尾失败: ${(err as Error).message}\n`)
         if (!reply.trim()) {
           reply = '本轮工具调用没有取得结果,已达到步数上限。请把问题拆小一些重试,或换用 ask 模式查看具体文件。'
@@ -1737,6 +1935,8 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
         }
       }
     }
+
+    if (signal.aborted) throw new RunCancelledError()
 
     const finalNames = effectiveTools(mode, colleague ?? null)
     const trace = buildTrace(
@@ -1784,6 +1984,26 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
     return 'done'
   } catch (err) {
     const message = (err as Error).message
+    if (isRunCancelled(err, signal)) {
+      // 保留已经推送给用户的部分输出:停止不等于撤回答复。
+      appendMessage(db, {
+        conversationId,
+        role: 'assistant',
+        content: { text: reply },
+        status: 'interrupted',
+        ...(activeSkill ? { model: `${MODEL_NAME}#${activeSkill}` } : { model: MODEL_NAME }),
+        tokenIn: totalInput,
+        tokenOut: totalOutput
+      })
+      try {
+        transitionTask(db, taskId, 'interrupted')
+      } catch {
+        // 若已处于终态则忽略
+      }
+      appendEvent(db, conversationId, 'run.cancelled', { taskId })
+      emit({ type: 'run.cancelled', conversationId, taskId })
+      return 'interrupted'
+    }
     appendMessage(db, {
       conversationId,
       role: 'assistant',
@@ -1805,6 +2025,8 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
     appendEvent(db, conversationId, 'run.failed', { taskId, message: message.slice(0, 300) })
     emit({ type: 'error', code: 'AGENT_FAILED', message, retryable: true })
     return 'failed'
+  } finally {
+    if (activeRuns.get(conversationId) === controller) activeRuns.delete(conversationId)
   }
 }
 
@@ -2918,17 +3140,23 @@ async function handleFrame(value: unknown) {
   }
 
   emit({ type: 'conversation.ready', conversationId, seq: saved.record.seq })
-  await runAgent({
-    text: msg.text,
-    mode,
-    conversationId,
-    ...(clientRequestId ? { clientRequestId } : {}),
-    ...(skill ? { skill } : {}),
-    ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),
-    ...(effectiveExpertId ? { expertId: effectiveExpertId } : {}),
-    ...(scene ? { scene } : {}),
-    ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
-  })
+  startingRuns.add(conversationId)
+  try {
+    await runAgent({
+      text: msg.text,
+      mode,
+      conversationId,
+      ...(clientRequestId ? { clientRequestId } : {}),
+      ...(skill ? { skill } : {}),
+      ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),
+      ...(effectiveExpertId ? { expertId: effectiveExpertId } : {}),
+      ...(scene ? { scene } : {}),
+      ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
+    })
+  } finally {
+    startingRuns.delete(conversationId)
+    pendingCancels.delete(conversationId)
+  }
 }
 
 process.stdin.on('data', (chunk: Buffer) => {
@@ -2949,6 +3177,21 @@ process.stdin.on('data', (chunk: Buffer) => {
         ...(record.requestId !== undefined ? { requestId: record.requestId } : {}),
         type: 'approval.answered',
         ...result
+      })
+      continue
+    }
+    // 停止生成同理:chat 正占着串行队列,排到队尾的取消命令永远等不到执行。
+    if (record?.cmd === 'conversation.cancel') {
+      const conversationId =
+        typeof record.conversationId === 'string' && record.conversationId
+          ? record.conversationId
+          : undefined
+      const accepted = cancelRun(conversationId)
+      emit({
+        ...(record.requestId !== undefined ? { requestId: record.requestId } : {}),
+        type: 'conversation.cancel',
+        ...(conversationId ? { conversationId } : {}),
+        accepted
       })
       continue
     }

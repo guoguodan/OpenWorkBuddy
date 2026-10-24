@@ -624,6 +624,23 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle('conversation.cancel', async (_e, conversationId?: string) => {
+  await daemonReady
+  if (!daemon?.stdin?.writable) throw new Error('daemon 未就绪')
+  if (conversationId !== undefined && (typeof conversationId !== 'string' || !conversationId)) {
+    throw new Error('非法会话 ID')
+  }
+  // 取消不能走 request():正在执行的会话占着 daemon 的串行队列,
+  // 等待应答只会把"停止"拖到本轮结束之后。daemon 会以 run.cancelled 事件确认结果。
+  daemon.stdin.write(
+    encodeFrame({
+      cmd: 'conversation.cancel',
+      ...(conversationId ? { conversationId } : {})
+    })
+  )
+  return { ok: true }
+})
+
 function attachDaemonOutput() {
   const decoder = new FrameDecoder()
   daemon!.stdout!.on('data', (chunk: Buffer) => {

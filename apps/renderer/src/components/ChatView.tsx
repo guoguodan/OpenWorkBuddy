@@ -99,7 +99,7 @@ export function ChatView({
   }, [messages, tools])
 
   return (
-    <div className="owb-chat" data-busy={busy ? '1' : '0'}>
+    <div className="owb-chat" data-busy={busy ? '1' : '0'} data-testid="chat">
       <div className="owb-chat__messages" ref={ref}>
         <div className="owb-chat__inner">
           {messages.map((m, idx) => {
@@ -107,8 +107,9 @@ export function ChatView({
             return (
               <div
                 key={m.id}
-                className={`owb-msg owb-msg--${m.role}${m.seq !== undefined && m.seq === focusRequest?.seq ? ' owb-msg--focused' : ''}`}
+                className={`owb-msg owb-msg--${m.role}${m.streaming ? ' owb-msg--streaming' : ''}${m.seq !== undefined && m.seq === focusRequest?.seq ? ' owb-msg--focused' : ''}`}
                 data-seq={m.seq}
+                data-streaming={m.streaming ? '1' : '0'}
               >
                 <Avatar role={m.role} />
                 <div className="owb-msg__body">

@@ -129,6 +129,20 @@ export class ApprovalBridge {
     return { ok: true }
   }
 
+  /** 用户停止生成:当前等待授权的操作必须直接作废,不能继续挂到超时。 */
+  cancelForConversation(conversationId: string, reason: string): number {
+    let cancelled = 0
+    for (const [id, entry] of this.pending) {
+      if (entry.request.conversationId !== conversationId) continue
+      clearTimeout(entry.timer)
+      this.pending.delete(id)
+      this.options.emit({ type: 'approval.cancelled', approvalId: id, toolName: entry.request.toolName })
+      entry.reject(new ApprovalUnavailableError('APPROVAL_CANCELLED', reason))
+      cancelled++
+    }
+    return cancelled
+  }
+
   list(): ApprovalRequest[] {
     return [...this.pending.values()].map((entry) => entry.request)
   }

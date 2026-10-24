@@ -39,6 +39,7 @@ interface ComposerProps {
   modelLabel: string
   onChange: (v: string) => void
   onSend: () => void
+  onStop: () => void
   onPickSkill: (name: string | null) => void
   onPickPermission: (mode: PermissionMode) => void
   onOpenWorkspace: () => void
@@ -107,6 +108,7 @@ export function Composer({
   modelLabel,
   onChange,
   onSend,
+  onStop,
   onPickSkill,
   onPickPermission,
   onOpenWorkspace,
@@ -453,7 +455,13 @@ export function Composer({
               <IconMic size={17} />
             </button>
             {busy ? (
-              <button className="owb-composer__send owb-composer__send--busy" disabled title="本次运行结束后才能继续">
+              <button
+                type="button"
+                className="owb-composer__send owb-composer__send--busy"
+                onClick={onStop}
+                title="停止生成"
+                aria-label="停止生成"
+              >
                 <IconStop size={13} />
               </button>
             ) : (
