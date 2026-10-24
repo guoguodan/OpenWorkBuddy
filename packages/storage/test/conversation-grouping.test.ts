@@ -7,12 +7,14 @@ import { migrateOrThrow } from '../src/migrate.js'
 import { createColleague, deleteColleague } from '../src/colleagues.js'
 import {
   createConversation,
+  conversationDisplayTitle,
   ensureWorkspace,
   getConversation,
   listConversationSummaries,
   listConversations,
   renameConversation,
   reorderPinnedConversations,
+  setConversationAutoTitle,
   setConversationExpert,
   setConversationPinned
 } from '../src/conversations.js'
@@ -83,13 +85,29 @@ describe('conversation grouping fields', () => {
   it('renames a task and keeps it in place', () => {
     const conv = createConversation(handle.db, { workspaceId, title: '旧标题', modeId: 'craft' })
     const renamed = renameConversation(handle.db, conv.id, '  新标题  ')
-    expect(renamed?.title).toBe('新标题')
+    // 用户标题写入 custom_title,自动标题 title 保留为兜底。
+    expect(renamed?.customTitle).toBe('新标题')
+    expect(renamed?.title).toBe('旧标题')
+    expect(conversationDisplayTitle(renamed!)).toBe('新标题')
     expect(renamed?.updatedAt).toBe(conv.updatedAt)
   })
 
   it('ignores an empty rename instead of erasing the title', () => {
     const conv = createConversation(handle.db, { workspaceId, title: '保留我', modeId: 'craft' })
-    expect(renameConversation(handle.db, conv.id, '   ')?.title).toBe('保留我')
+    expect(conversationDisplayTitle(renameConversation(handle.db, conv.id, '   ')!)).toBe('保留我')
+  })
+
+  it('generates an automatic title without overriding a manual title', () => {
+    const conv = createConversation(handle.db, { workspaceId, title: '新会话', modeId: 'craft' })
+    const auto = setConversationAutoTitle(handle.db, conv.id, ' 将 PDF 转为 Markdown ')
+    expect(auto?.title).toBe('将 PDF 转为 Markdown')
+    expect(conversationDisplayTitle(auto!)).toBe('将 PDF 转为 Markdown')
+
+    renameConversation(handle.db, conv.id, '我的固定标题')
+    const afterRename = setConversationAutoTitle(handle.db, conv.id, '不该覆盖')
+    expect(afterRename?.title).toBe('将 PDF 转为 Markdown')
+    expect(afterRename?.customTitle).toBe('我的固定标题')
+    expect(conversationDisplayTitle(afterRename!)).toBe('我的固定标题')
   })
 
   it('stores colleague ownership and clears it when the colleague is deleted', () => {

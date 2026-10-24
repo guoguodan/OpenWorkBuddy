@@ -2,7 +2,15 @@ import { dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { access, cp, mkdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { streamText, tool, jsonSchema, type CoreMessage, type Tool, type ToolExecutionOptions } from 'ai'
+import {
+  generateText,
+  streamText,
+  tool,
+  jsonSchema,
+  type CoreMessage,
+  type Tool,
+  type ToolExecutionOptions
+} from 'ai'
 import { z } from 'zod'
 import { model } from './model.js'
 import {
@@ -45,6 +53,8 @@ import {
   listConversationSummaries,
   listConversations,
   renameConversation,
+  setConversationAutoTitle,
+  conversationDisplayTitle,
   reorderPinnedConversations,
   setConversationColleague,
   setConversationExpert,
@@ -988,6 +998,8 @@ interface RunInput {
   mode: ModePolicy
   clientRequestId?: string
   conversationId: string
+  /** 本轮是否是该会话的第一轮;只有首轮才生成自动标题。 */
+  firstTurn?: boolean
   /** 用户显式选中的技能:本轮开始时直接加载,不依赖模型自己调用 load_skill。 */
   skill?: string
   /** @ 引用的工作区相对路径,发送前注入正文。 */
@@ -1227,6 +1239,82 @@ async function appendRunLog(
 }
 
 /**
+ * 自动标题的降级实现:不调用模型也能得到可辨识的标题。
+ *
+ * 真实客户端由模型压缩成短句;离线与模型不可用时必须仍有稳定结果,
+ * 否则侧栏会长期停留在"新会话",用户无法区分历史任务。
+ */
+function fallbackConversationTitle(text: string): string {
+  const firstLine = text
+    .replace(/@\s*\S+/g, ' ')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
+  const compact = (firstLine ?? '').replace(/^[#>*\-\d.\s]+/, '').replace(/\s+/g, ' ').trim()
+  if (!compact) return '新会话'
+  // 标题只保留一个语义单元:中英文句读都截断,再兜底按长度截断。
+  const sentence =
+    compact
+      .split(/[。！？!?；;，,]/)[0]
+      ?.replace(/[、和及与并或\s]+$/, '')
+      .trim() || compact
+  return Array.from(sentence).slice(0, 24).join('').trim()
+}
+
+/**
+ * 首轮成功后生成会话标题。
+ *
+ * 与真实客户端的内部模型一致:系统标题 title 与用户标题 custom_title 分离,
+ * 这里只写自动标题;用户已手动改名时 setConversationAutoTitle 不会覆盖。
+ * 标题生成失败不能影响本轮结果,因此所有异常都只记录到 stderr。
+ */
+async function maybeAutoTitle(input: {
+  conversationId: string
+  text: string
+  firstTurn: boolean
+  signal?: AbortSignal
+}): Promise<void> {
+  const db = requireDb()
+  if (!input.firstTurn) return
+  const conversation = getConversation(db, input.conversationId)
+  if (!conversation || conversation.customTitle) return
+
+  let title = fallbackConversationTitle(input.text)
+  if (!MOCK) {
+    try {
+      const result = await generateText({
+        model,
+        system:
+          '你是会话标题生成器。根据用户的第一条请求,输出一个中文短标题。要求:只输出标题本身;不超过 16 个汉字;不要标点、引号、编号或"标题:"前缀;概括任务目标,不要复述客套话。',
+        prompt: input.text.slice(0, 2000),
+        maxTokens: 32,
+        temperature: 0.2,
+        ...(input.signal ? { abortSignal: input.signal } : {})
+      })
+      const generated = result.text
+        .replace(/^["'“”‘’#*\s]+|["'“”‘’\s]+$/g, '')
+        .split(/\r?\n/)[0]
+        ?.replace(/^标题[:：]\s*/, '')
+        .trim()
+      if (generated) title = Array.from(generated).slice(0, 24).join('')
+    } catch (err) {
+      process.stderr.write(`[title] 自动标题失败,使用本地摘要: ${(err as Error).message}\n`)
+    }
+  }
+
+  const updated = setConversationAutoTitle(db, input.conversationId, title)
+  if (!updated) return
+  emit({
+    type: 'conversation.updated',
+    conversation: {
+      id: updated.id,
+      title: conversationDisplayTitle(updated),
+      autoTitle: updated.title
+    }
+  })
+}
+
+/**
  * 任务结束通知。
  *
  * 用 taskId + 终态去重:补跑/重试不应在消息中心堆出多张“任务已完成”卡片。
@@ -1384,6 +1472,19 @@ async function runMockInner(
   const callId = 'mock-call-1'
   let reply = ''
 
+  // 所有离线分支共用同一个完成出口:标题必须在 done 之前广播,
+  // 侧栏才能在本轮结束时立即显示新标题,而不是等下一次列表刷新。
+  const finishMockRun = async (): Promise<'done'> => {
+    await maybeAutoTitle({
+      conversationId: input.conversationId,
+      text: input.text,
+      firstTurn: input.firstTurn === true,
+      signal
+    }).catch((err: Error) => process.stderr.write(`[title] 自动标题失败: ${err.message}\n`))
+    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+    return 'done'
+  }
+
   // 离线验收要覆盖"插件工具调用结果回填":mock 不做真实模型决策,
   // 优先识别文本里显式写出的 <插件>__<工具>;若只写了短名(如"调用 echo"),
   // 则按已就绪插件的原始工具名反查,且只在唯一命中时调用,避免误调同名工具。
@@ -1444,8 +1545,7 @@ async function runMockInner(
       modeId: input.mode.id,
       toolCalls: 1
     })
-    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
-    return 'done'
+    return finishMockRun()
   }
 
   // 离线验收 shell 参数语义:用真实工具与闸门执行,证明 args 按数组原样传递,
@@ -1501,8 +1601,7 @@ async function runMockInner(
       modeId: input.mode.id,
       toolCalls: 1
     })
-    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
-    return 'done'
+    return finishMockRun()
   }
 
   // 离线验收破坏性链路:文本里显式给出 delete_files / move_files 时,按真实工具与闸门执行。
@@ -1559,8 +1658,7 @@ async function runMockInner(
       modeId: input.mode.id,
       toolCalls: 1
     })
-    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
-    return 'done'
+    return finishMockRun()
   }
 
   // 离线验收交付链路:文本里明确要求"交付/报告"时,先写一个真实文件再走 present_files。
@@ -1606,8 +1704,7 @@ async function runMockInner(
       modeId: input.mode.id,
       toolCalls: 1
     })
-    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
-    return 'done'
+    return finishMockRun()
   }
   if (wantsDelivery) {
     const rel = 'out/mock-report.md'
@@ -1659,8 +1756,7 @@ async function runMockInner(
       modeId: input.mode.id,
       toolCalls: 1
     })
-    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
-    return 'done'
+    return finishMockRun()
   }
 
   const canRead = isToolAllowed(input.mode, 'read_file')
@@ -1711,8 +1807,7 @@ async function runMockInner(
   notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
   appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: canRead ? 1 : 0 })
   await appendRunLog(db, { conversationId: input.conversationId, text: input.text, modeId: input.mode.id, toolCalls: canRead ? 1 : 0 })
-  emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
-  return 'done'
+  return finishMockRun()
 }
 
 async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupted'> {
@@ -1971,6 +2066,13 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupt
     appendEvent(db, conversationId, 'run.finished', { taskId, steps: toolCalls })
 
     await appendRunLog(db, { conversationId, text, modeId: mode.id, toolCalls })
+
+    await maybeAutoTitle({
+      conversationId,
+      text,
+      firstTurn: input.firstTurn === true,
+      signal
+    }).catch((err: Error) => process.stderr.write(`[title] 自动标题失败: ${err.message}\n`))
 
     emit({
       type: 'done',
@@ -2241,7 +2343,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
                 : 'idle'
         return {
           id: c.id,
-          title: c.title,
+          title: conversationDisplayTitle(c),
           source,
           status,
           createdAt: c.createdAt,
@@ -2543,7 +2645,8 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       conversationId: activeConversationId,
       conversations: listConversationSummaries(db, workspaceId).map((c) => ({
         id: c.id,
-        title: c.title,
+        title: conversationDisplayTitle(c),
+        autoTitle: c.title,
         modeId: c.modeId,
         colleagueId: c.colleagueId,
         colleagueName: c.colleagueId
@@ -2653,7 +2756,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     emit({
       ...base,
       type: 'conversation.updated',
-      conversation: { id: updated.id, title: updated.title }
+      conversation: { id: updated.id, title: conversationDisplayTitle(updated), autoTitle: updated.title }
     })
     return true
   }
@@ -2917,7 +3020,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
         .filter((c) => c.projectId === msg.id)
         .map((c) => ({
           id: c.id,
-          title: c.title,
+          title: conversationDisplayTitle(c),
           updatedAt: c.updatedAt,
           colleagueId: c.colleagueId,
           pinnedAt: c.pinnedAt
@@ -3121,6 +3224,9 @@ async function handleFrame(value: unknown) {
     assertColleagueAssignable(db, workspaceId, effectiveColleagueId, existingConversation?.channelId ?? null)
   }
   const effectiveExpertId = resolveConversationExpert(db, conversationId, expertId, existingConversation)
+  // 首轮判定必须在写入本次用户消息之前取:之后历史里至少已有这一条,
+  // 再数一遍会把每一轮都当成"新会话"。
+  const firstTurn = listMessages(db, conversationId).every((m) => m.role !== 'user')
   const saved = appendMessage(db, {
     conversationId,
     role: 'user',
@@ -3146,6 +3252,7 @@ async function handleFrame(value: unknown) {
       text: msg.text,
       mode,
       conversationId,
+      firstTurn,
       ...(clientRequestId ? { clientRequestId } : {}),
       ...(skill ? { skill } : {}),
       ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),

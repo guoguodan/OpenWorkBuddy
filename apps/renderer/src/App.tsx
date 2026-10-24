@@ -52,6 +52,7 @@ type AgentEvent = {
   modeId?: string
   displayName?: string
   conversationId?: string
+  conversation?: { id?: string; title?: string; autoTitle?: string }
   workspace?: string
   blocks?: MemoryBlock[]
   truncatedTotal?: number
@@ -410,6 +411,19 @@ export default function App() {
         )
         note('warn', '已停止生成,已保留当前输出。')
         void loadConversations(activeConversation.current || undefined).catch(() => undefined)
+      } else if (e.type === 'conversation.updated' && e.conversation) {
+        // 自动标题/重命名由 daemon 统一广播;用事件里的 title 直接更新,
+        // 避免每个事件都重新拉整个列表造成侧栏闪烁。
+        const updated = e.conversation
+        if (updated.id && updated.title) {
+          setConversations((list) =>
+            list.map((c) =>
+              c.id === updated.id
+                ? { ...c, title: updated.title!, ...(updated.autoTitle ? { autoTitle: updated.autoTitle } : {}) }
+                : c
+            )
+          )
+        }
       } else if (e.type === 'automation.finished') {
         void loadUnreadNotifications()
       } else if (e.type === 'error') {
@@ -678,6 +692,8 @@ export default function App() {
   const renameConversation = async (id: string, title: string) => {
     try {
       await window.openwb.conversation.rename({ conversationId: id, title })
+      // 服务端返回的是展示标题(用户标题优先);直接替换本地项,无需整表重拉。
+      setConversations((list) => list.map((c) => (c.id === id ? { ...c, title } : c)))
       await loadConversations(activeConversation.current || undefined)
     } catch (err) {
       note('system', `重命名失败: ${(err as Error).message}`)

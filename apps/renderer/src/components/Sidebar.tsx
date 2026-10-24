@@ -20,6 +20,7 @@ import brandIcon from '../assets/brand-icon.svg'
 export interface ConversationSummary {
   id: string
   title: string
+  autoTitle?: string | null
   modeId: string
   colleagueId?: string | null
   colleagueName?: string | null

@@ -30,6 +30,7 @@ export const conversation = sqliteTable(
       .references(() => workspace.id, { onDelete: 'cascade' }),
     channelId: text('channel_id'),
     title: text('title').notNull(),
+      customTitle: text('custom_title'),
     modeId: text('mode_id').notNull(),
     colleagueId: text('colleague_id').references(() => colleague.id, { onDelete: 'set null' }),
     projectId: text('project_id').references(() => project.id, { onDelete: 'set null' }),

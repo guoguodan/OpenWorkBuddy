@@ -11,6 +11,7 @@ declare module '*.svg' {
 interface ConversationInfo {
   id: string
   title: string
+  autoTitle?: string | null
   modeId: string
   colleagueId?: string | null
   colleagueName?: string | null

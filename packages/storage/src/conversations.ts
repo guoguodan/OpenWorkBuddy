@@ -34,6 +34,8 @@ export interface ConversationRecord {
   workspaceId: string
   channelId: string | null
   title: string
+  /** 用户手动设置的标题;为空时展示自动标题 title */
+  customTitle: string | null
   modeId: string
   colleagueId: string | null
   projectId: string | null
@@ -81,6 +83,7 @@ export function createConversation(
     workspaceId: input.workspaceId,
     channelId: input.channelId ?? null,
     title: input.title.slice(0, 200),
+    customTitle: null,
     modeId: input.modeId,
     colleagueId: input.colleagueId ?? null,
     projectId: input.projectId ?? null,
@@ -255,7 +258,12 @@ export function reorderPinnedConversations(
     .filter((item): item is ConversationRecord => Boolean(item))
 }
 
-/** 重命名只改标题;不推进 updatedAt,否则任务会因为改名跳到列表最前面。 */
+/**
+ * 重命名写入 custom_title,保留自动标题 title 作为兜底。
+ *
+ * 不推进 updatedAt:改名只是标签调整,不能把任务伪装成"刚刚有活动"。
+ * 传入空标题时保留原值,避免用户误清空后列表出现无标题行。
+ */
 export function renameConversation(
   db: AppDatabase,
   conversationId: string,
@@ -265,8 +273,33 @@ export function renameConversation(
   if (!existing) return undefined
   const next = title.trim().slice(0, 200)
   if (!next) return existing
+  db.update(conversation).set({ customTitle: next }).where(eq(conversation.id, conversationId)).run()
+  return getConversation(db, conversationId)
+}
+
+/**
+ * 自动标题只写 title,并且绝不覆盖用户手动标题。
+ *
+ * 由首轮请求触发:新会话创建时标题是占位符,首轮内容不足以直接当标题,
+ * 需要模型压缩成可辨识的短句。调用方负责保证只在第一轮成功结束时调用。
+ */
+export function setConversationAutoTitle(
+  db: AppDatabase,
+  conversationId: string,
+  title: string
+): ConversationRecord | undefined {
+  const existing = getConversation(db, conversationId)
+  if (!existing) return undefined
+  const next = title.trim().replace(/\s+/g, ' ').slice(0, 200)
+  if (!next) return existing
+  if (existing.customTitle) return existing
   db.update(conversation).set({ title: next }).where(eq(conversation.id, conversationId)).run()
   return getConversation(db, conversationId)
+}
+
+/** 对外展示标题:用户标题优先,没有用户标题才用自动标题。 */
+export function conversationDisplayTitle(record: ConversationRecord): string {
+  return record.customTitle?.trim() || record.title
 }
 
 /** 指定助理后,后续消息会沿用该助理身份;新建会话时由 UI 显式传入。 */

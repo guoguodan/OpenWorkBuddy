@@ -205,7 +205,7 @@ ipcMain.handle('conversation.rename', async (_e, input: { conversationId: string
   await daemonReady
   if (!input || typeof input.conversationId !== 'string' || !input.conversationId) throw new Error('非法会话 ID')
   if (typeof input.title !== 'string' || !input.title.trim()) throw new Error('任务标题不能为空')
-  return request<{ conversationId: string; title: string }>({
+  return request<{ conversationId: string; title: string; autoTitle?: string }>({
     cmd: 'conversation.rename',
     conversationId: input.conversationId,
     title: input.title.trim()

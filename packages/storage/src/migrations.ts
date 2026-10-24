@@ -413,6 +413,14 @@ CREATE INDEX idx_conversation_pinned ON conversation(workspace_id, pinned_at, pi
     sql: `-- 每个任务最多绑定一个专家;专家是插件清单资产,删除插件后保留历史归属.
 ALTER TABLE conversation ADD COLUMN expert_id TEXT;
 `
+  },
+  {
+    version: 11,
+    name: 'conversation_custom_title',
+    sql: `-- 自动标题与用户标题分开保存:用户手动改名后,custom_title 优先展示,
+-- 后续轮次自动标题不得覆盖用户的选择.
+ALTER TABLE conversation ADD COLUMN custom_title TEXT;
+`
   }
 ]
 
