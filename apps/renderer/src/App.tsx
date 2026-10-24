@@ -22,6 +22,9 @@ import { SettingsPanel, type WorkspaceSettingsInfo } from './components/Settings
 import { AutomationPanel } from './components/AutomationPanel'
 import { LibraryPanel } from './components/LibraryPanel'
 import { ColleaguesPanel } from './components/ColleaguesPanel'
+import { ProjectsPanel } from './components/ProjectsPanel'
+import { ConnectionsPanel } from './components/ConnectionsPanel'
+import { InspirationPanel } from './components/InspirationPanel'
 import { MessageCenter } from './components/MessageCenter'
 import { IconCheck, IconSparkle, IconTool } from './components/Icons'
 import './styles/tokens.css'
@@ -63,7 +66,15 @@ interface SystemLine {
   text: string
 }
 
-type Sheet = 'settings' | 'automation' | 'library' | 'colleagues' | null
+type Sheet =
+  | 'settings'
+  | 'automation'
+  | 'library'
+  | 'colleagues'
+  | 'projects'
+  | 'connections'
+  | 'inspiration'
+  | null
 
 const THEME_KEY = 'owb.theme'
 const COLLAPSE_KEY = 'owb.sidebar.collapsed'
@@ -115,6 +126,7 @@ export default function App() {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [panel, setPanel] = useState<'skills' | 'connectors' | null>(null)
   const [sheet, setSheet] = useState<Sheet>(null)
+  const [connectionProvider, setConnectionProvider] = useState<ServiceProviderInfo>('mailbox')
   const [searchOpen, setSearchOpen] = useState(false)
   const [channels, setChannels] = useState<ChannelInfo[]>([])
   const [channelPanelOpen, setChannelPanelOpen] = useState(false)
@@ -430,6 +442,30 @@ export default function App() {
     return r.conversationId
   }
 
+  const newProjectTask = async (project: ProjectInfo) => {
+    if (busy) return
+    try {
+      const r = await window.openwb.conversation.create({
+        title: `与项目「${project.name}」协作`,
+        mode,
+        ...(activeChannelId ? { channelId: activeChannelId } : {}),
+        projectId: project.id
+      })
+      setConversationId(r.conversationId)
+      activeConversation.current = r.conversationId
+      setActiveColleague(null)
+      setMessages([])
+      setFocusTarget(null)
+      setTools([])
+      setNotices([])
+      await loadConversations(r.conversationId)
+      setSheet(null)
+      note('info', `已在项目「${project.name}」中新建任务，项目指令与技能约束会随本轮生效。`)
+    } catch (err) {
+      note('system', `新建项目任务失败: ${(err as Error).message}`)
+    }
+  }
+
   const selectChannel = (channelId: string | null) => {
     setActiveChannelId(channelId)
     // 选频道后立刻开一个归属该频道的会话,避免用户以为"选了但没生效"。
@@ -588,14 +624,15 @@ export default function App() {
 
   const handleMore = (entry: MoreEntry) => {
     if (entry === 'projects') {
-      setSheet('library')
+      setSheet('projects')
       return
     }
     if (entry === 'inspiration') {
-      setPanel('skills')
+      setSheet('inspiration')
       return
     }
-    note('info', '该入口需要先连接对应账号(邮箱 / 腾讯文档 / ima / 乐享),当前工作区尚未配置。')
+    setConnectionProvider(entry)
+    setSheet('connections')
   }
 
   useEffect(() => {
@@ -858,6 +895,28 @@ export default function App() {
                 setSheet(null)
                 void newConversation(colleague)
               }}
+            />
+          ) : sheet === 'projects' ? (
+            <ProjectsPanel
+              onClose={() => setSheet(null)}
+              onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
+              onOpenTask={(id) => {
+                setSheet(null)
+                void switchConversation(id)
+              }}
+              onCreateTask={(project) => void newProjectTask(project)}
+              onChanged={() => void loadConversations(conversationId || undefined)}
+            />
+          ) : sheet === 'connections' ? (
+            <ConnectionsPanel
+              provider={connectionProvider}
+              onClose={() => setSheet(null)}
+              onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
+            />
+          ) : sheet === 'inspiration' ? (
+            <InspirationPanel
+              onClose={() => setSheet(null)}
+              onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
             />
           ) : null}
         </div>

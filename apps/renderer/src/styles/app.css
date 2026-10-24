@@ -297,6 +297,12 @@ input, textarea { font-family: inherit; }
   border-radius: var(--owb-radius-sm); vertical-align: 1px;
 }
 :root[data-theme='dark'] .owb-conv-item__channel { color: var(--owb-brand-5); }
+.owb-conv-item__project {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 6px;
+  padding: 0 5px; font-size: 10px; font-weight: 400;
+  color: var(--owb-text-secondary); background: var(--owb-bg-tertiary);
+  border-radius: var(--owb-radius-sm); vertical-align: 1px;
+}
 .owb-conv-item__meta { font-size: 11px; color: var(--owb-text-tertiary); flex-shrink: 0; }
 .owb-sidebar--collapsed .owb-conv-item { justify-content: center; padding: 10px; }
 .owb-sidebar--collapsed .owb-conv-item__title, .owb-sidebar--collapsed .owb-conv-item__meta { display: none; }
@@ -1688,3 +1694,54 @@ input, textarea { font-family: inherit; }
 .owb-check input { width: 14px; height: 14px; accent-color: var(--owb-brand-8); }
 .owb-check small { color: var(--owb-text-tertiary); font-size: 11px; }
 .owb-colleague-meta { display: flex; flex-wrap: wrap; gap: 10px; }
+
+/* ---- 项目 ---- */
+.owb-project-card { gap: 10px; }
+.owb-project-card__actions { justify-content: flex-end; }
+.owb-project-refresh { align-self: flex-start; }
+.owb-project-tasks {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px; border-radius: var(--owb-radius-lg);
+  background: var(--owb-bg-primary); border: 1px solid var(--owb-border-subtle);
+}
+.owb-project-task {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 6px 8px; border: none; border-radius: var(--owb-radius-md);
+  background: transparent; color: var(--owb-text-primary);
+  font-size: 12px; text-align: left; cursor: pointer;
+}
+.owb-project-task:hover { background: var(--owb-bg-hover); }
+.owb-project-task > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owb-project-task > span:last-child { flex-shrink: 0; font-size: 11px; color: var(--owb-text-tertiary); }
+
+/* ---- 第三方服务连接 ---- */
+.owb-connection-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.owb-connection-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 30px; padding: 0 10px; cursor: pointer;
+  border: 1px solid var(--owb-border-subtle); border-radius: var(--owb-radius-full);
+  background: var(--owb-bg-primary); color: var(--owb-text-secondary); font-size: 12px;
+}
+.owb-connection-tab:hover { border-color: var(--owb-border-default); color: var(--owb-text-primary); }
+.owb-connection-tab--on {
+  border-color: var(--owb-brand-8); color: var(--owb-brand-9);
+  background: color-mix(in srgb, var(--owb-brand-8) 9%, transparent);
+}
+.owb-connection-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--owb-border-subtle); border-radius: var(--owb-radius-xl); background: var(--owb-bg-secondary); }
+.owb-connection-status {
+  display: inline-flex; align-items: center; padding: 1px 6px;
+  border-radius: var(--owb-radius-full); background: var(--owb-bg-tertiary);
+  color: var(--owb-text-secondary); font-size: 10px; font-weight: 500;
+}
+.owb-connection-status--ok { background: color-mix(in srgb, var(--owb-green-8) 14%, transparent); color: var(--owb-green-8); }
+.owb-connection-status--error { background: color-mix(in srgb, var(--owb-red-7) 12%, transparent); color: var(--owb-red-7); }
+.owb-connection-status--pending { background: color-mix(in srgb, var(--owb-orange-7) 14%, transparent); color: var(--owb-orange-7); }
+.owb-connection-form { display: flex; flex-direction: column; gap: 12px; }
+.owb-connection-note { display: flex; align-items: flex-start; gap: 6px; font-size: 11px; line-height: 1.5; color: var(--owb-text-tertiary); }
+.owb-connection-note svg { flex-shrink: 0; margin-top: 1px; }
+
+/* ---- 灵感 ---- */
+.owb-inspiration-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.owb-inspiration-card { gap: 8px; }
+.owb-icon-btn--on { color: var(--owb-brand-9); background: color-mix(in srgb, var(--owb-brand-8) 12%, transparent); }
+.owb-icon-btn--danger:hover { color: var(--owb-red-7); background: color-mix(in srgb, var(--owb-red-7) 8%, transparent); }

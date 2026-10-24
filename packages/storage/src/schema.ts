@@ -32,6 +32,7 @@ export const conversation = sqliteTable(
     title: text('title').notNull(),
     modeId: text('mode_id').notNull(),
     colleagueId: text('colleague_id').references(() => colleague.id, { onDelete: 'set null' }),
+    projectId: text('project_id').references(() => project.id, { onDelete: 'set null' }),
     pinnedAt: text('pinned_at'),
     status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),
     lastSeq: integer('last_seq').notNull().default(0),
@@ -352,6 +353,75 @@ export const colleague = sqliteTable(
   (t) => [index('idx_colleague_ws').on(t.workspaceId, t.pinnedAt, t.createdAt)]
 )
 
+/**
+ * 项目:独立于"资料库"的协作实体。
+ *
+ * 项目保存自己的指令与技能边界,归属项目的任务通过 conversation.project_id 聚合。
+ * 本地版没有云端成员,但字段仍按真实产品建模,避免以后只能靠改名硬塞。
+ */
+export const project = sqliteTable(
+  'project',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    instructions: text('instructions').notNull().default(''),
+    skillNames: text('skill_names').notNull().default('[]'),
+    pinnedAt: text('pinned_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull()
+  },
+  (t) => [index('idx_project_ws').on(t.workspaceId, t.pinnedAt, t.updatedAt)]
+)
+
+/**
+ * 外部服务连接。
+ *
+ * status 只在真正探测成功后才置为 connected:没有凭据时绝不伪造"已连接"。
+ * endpoint 只保存脱敏后的地址,不含 query/fragment,避免把 token 写进数据库。
+ */
+export const serviceConnection = sqliteTable(
+  'service_connection',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['mailbox', 'tencentDocs', 'ima', 'lexiang'] }).notNull(),
+    status: text('status', { enum: ['not_connected', 'connecting', 'connected', 'error'] })
+      .notNull()
+      .default('not_connected'),
+    endpoint: text('endpoint'),
+    account: text('account'),
+    lastError: text('last_error'),
+    lastCheckedAt: text('last_checked_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull()
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.provider] })]
+)
+
+/** 灵感社区:本地信息流,发布/收藏都持久化,不借用技能或资料库的存储。 */
+export const inspirationPost = sqliteTable(
+  'inspiration_post',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    body: text('body').notNull().default(''),
+    source: text('source').notNull().default('本地'),
+    tags: text('tags').notNull().default('[]'),
+    favorite: integer('favorite').notNull().default(0),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull()
+  },
+  (t) => [index('idx_inspiration_ws').on(t.workspaceId, t.createdAt)]
+)
+
 export const schema = {
   workspace,
   conversation,
@@ -368,5 +438,8 @@ export const schema = {
   pendingEvent,
   channelArtifact,
   workspaceSetting,
-  colleague
+  colleague,
+  project,
+  serviceConnection,
+  inspirationPost
 }

@@ -10,6 +10,7 @@ export function sha256(text: string): string {
 export interface PromptTrace {
   modeId: string
   fragments: Array<{ name: string; bytes: number }>
+  /** 模式模板自身的哈希(不含项目/助理/场景等动态注入),用于 P2 的提示词稳定性比对 */
   outputSha256: string
   outputBytes: number
   timestamp: string
@@ -17,13 +18,23 @@ export interface PromptTrace {
   allowedTools?: string[]
   /** 本轮激活的技能名;未加载技能时不写该字段 */
   skill?: string
+  /** 本轮生效的项目 ID(仅用于核对项目上下文是否进入运行链) */
+  projectId?: string
+  /** 本轮最终 system 文本的摘要:包含项目、助理、场景、上下文文件等动态注入 */
+  systemSha256?: string
+  systemBytes?: number
+  /** 本轮注入 system 的上下文段落名(只记类型,不落原文,避免泄漏记忆与文件内容) */
+  injected?: string[]
 }
 
 export function buildTrace(
   modeId: string,
   assembled: AssembledPrompt,
   allowedTools?: string[],
-  skill?: string
+  skill?: string,
+  projectId?: string,
+  systemText?: string,
+  injected?: string[]
 ): PromptTrace {
   return {
     modeId,
@@ -32,7 +43,15 @@ export function buildTrace(
     outputBytes: Buffer.byteLength(assembled.text, 'utf8'),
     timestamp: new Date().toISOString(),
     ...(allowedTools ? { allowedTools } : {}),
-    ...(skill ? { skill } : {})
+    ...(skill ? { skill } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(systemText !== undefined
+      ? {
+          systemSha256: sha256(systemText),
+          systemBytes: Buffer.byteLength(systemText, 'utf8')
+        }
+      : {}),
+    ...(injected && injected.length > 0 ? { injected } : {})
   }
 }
 

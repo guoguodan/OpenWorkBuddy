@@ -346,6 +346,56 @@ ALTER TABLE colleague ADD COLUMN pinned_at TEXT;
 DROP INDEX IF EXISTS idx_colleague_ws;
 CREATE INDEX idx_colleague_ws ON colleague(workspace_id, pinned_at, created_at);
 `
+  },
+  {
+    version: 8,
+    name: 'projects_connections_inspiration',
+    sql: `-- 项目:独立协作实体。归属项目的任务通过 conversation.project_id 聚合,
+-- 不是资料库的别名;项目指令/技能会进入运行链。
+CREATE TABLE project (
+  id            TEXT PRIMARY KEY,
+  workspace_id  TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  description   TEXT NOT NULL DEFAULT '',
+  instructions  TEXT NOT NULL DEFAULT '',
+  skill_names   TEXT NOT NULL DEFAULT '[]',
+  pinned_at     TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX idx_project_ws ON project(workspace_id, pinned_at, updated_at);
+ALTER TABLE conversation ADD COLUMN project_id TEXT REFERENCES project(id) ON DELETE SET NULL;
+CREATE INDEX idx_conversation_project ON conversation(project_id, updated_at);
+
+-- 外部服务连接:未探测成功前保持 not_connected,不得伪造成已连接。
+CREATE TABLE service_connection (
+  workspace_id    TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  provider        TEXT NOT NULL CHECK (provider IN ('mailbox','tencentDocs','ima','lexiang')),
+  status          TEXT NOT NULL DEFAULT 'not_connected'
+                  CHECK (status IN ('not_connected','connecting','connected','error')),
+  endpoint        TEXT,
+  account         TEXT,
+  last_error      TEXT,
+  last_checked_at TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, provider)
+);
+
+-- 灵感社区:本地信息流,与技能/资料库分离。
+CREATE TABLE inspiration_post (
+  id           TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  title        TEXT NOT NULL,
+  body         TEXT NOT NULL DEFAULT '',
+  source       TEXT NOT NULL DEFAULT '本地',
+  tags         TEXT NOT NULL DEFAULT '[]',
+  favorite     INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX idx_inspiration_ws ON inspiration_post(workspace_id, created_at DESC);
+`
   }
 ]
 

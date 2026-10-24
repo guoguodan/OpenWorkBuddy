@@ -36,6 +36,7 @@ export interface ConversationRecord {
   title: string
   modeId: string
   colleagueId: string | null
+  projectId: string | null
   pinnedAt: string | null
   status: 'active' | 'archived'
   lastSeq: number
@@ -51,6 +52,7 @@ export function createConversation(
     modeId: string
     channelId?: string | null
     colleagueId?: string | null
+    projectId?: string | null
   }
 ): ConversationRecord {
   const at = nowIso()
@@ -61,6 +63,7 @@ export function createConversation(
     title: input.title.slice(0, 200),
     modeId: input.modeId,
     colleagueId: input.colleagueId ?? null,
+    projectId: input.projectId ?? null,
     pinnedAt: null,
     status: 'active',
     lastSeq: 0,
@@ -135,6 +138,18 @@ export function setConversationColleague(
   const existing = getConversation(db, conversationId)
   if (!existing) return undefined
   db.update(conversation).set({ colleagueId }).where(eq(conversation.id, conversationId)).run()
+  return getConversation(db, conversationId)
+}
+
+/** 项目归属只影响分组与运行上下文,不推进 updatedAt。 */
+export function setConversationProject(
+  db: AppDatabase,
+  conversationId: string,
+  projectId: string | null
+): ConversationRecord | undefined {
+  const existing = getConversation(db, conversationId)
+  if (!existing) return undefined
+  db.update(conversation).set({ projectId }).where(eq(conversation.id, conversationId)).run()
   return getConversation(db, conversationId)
 }
 

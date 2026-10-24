@@ -76,6 +76,24 @@ contextBridge.exposeInMainWorld('openwb', {
     update: (input: unknown) => ipcRenderer.invoke('colleagues.update', input),
     remove: (id: string) => ipcRenderer.invoke('colleagues.delete', id)
   },
+  projects: {
+    list: () => ipcRenderer.invoke('projects.list'),
+    create: (input: unknown) => ipcRenderer.invoke('projects.create', input),
+    update: (input: unknown) => ipcRenderer.invoke('projects.update', input),
+    remove: (id: string) => ipcRenderer.invoke('projects.delete', id),
+    tasks: (id: string) => ipcRenderer.invoke('projects.tasks', id)
+  },
+  connections: {
+    list: () => ipcRenderer.invoke('connections.list'),
+    set: (input: unknown) => ipcRenderer.invoke('connections.set', input),
+    disconnect: (provider: string) => ipcRenderer.invoke('connections.disconnect', provider)
+  },
+  inspiration: {
+    list: () => ipcRenderer.invoke('inspiration.list'),
+    create: (input: unknown) => ipcRenderer.invoke('inspiration.create', input),
+    favorite: (input: unknown) => ipcRenderer.invoke('inspiration.favorite', input),
+    remove: (id: string) => ipcRenderer.invoke('inspiration.delete', id)
+  },
   approval: {
     respond: (input: unknown) => ipcRenderer.invoke('approval.respond', input),
     list: () => ipcRenderer.invoke('approval.list'),

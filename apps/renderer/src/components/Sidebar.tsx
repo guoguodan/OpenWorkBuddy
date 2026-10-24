@@ -25,6 +25,8 @@ export interface ConversationSummary {
   pinnedAt?: string | null
   channelId?: string | null
   channelName?: string | null
+  projectId?: string | null
+  projectName?: string | null
   updatedAt: string
   lastSeq: number
   messageCount?: number
@@ -296,6 +298,12 @@ export function Sidebar({
             {pinned || c.pinnedAt ? <IconPin size={12} className="owb-conv-item__pin" /> : null}
             {c.title}
             {c.channelName ? <span className="owb-conv-item__channel">#{c.channelName}</span> : null}
+            {c.projectName ? (
+              <span className="owb-conv-item__project" title={`所属项目：${c.projectName}`}>
+                <IconFolder size={11} />
+                {c.projectName}
+              </span>
+            ) : null}
           </span>
           <span className="owb-conv-item__meta">{dayLabel(c.updatedAt)}</span>
         </>

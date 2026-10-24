@@ -17,6 +17,8 @@ interface ConversationInfo {
   pinnedAt?: string | null
   channelId?: string | null
   channelName?: string | null
+  projectId?: string | null
+  projectName?: string | null
   updatedAt: string
   lastSeq: number
 }
@@ -187,6 +189,51 @@ interface ColleagueInputInfo {
   modeId?: string
 }
 
+interface ProjectInfo {
+  id: string
+  name: string
+  description: string
+  instructions: string
+  skillNames: string[]
+  pinnedAt: string | null
+  stats: { taskCount: number; lastActiveAt: string | null }
+  createdAt: string
+  updatedAt: string
+}
+
+interface ProjectInputInfo {
+  name: string
+  description?: string
+  instructions?: string
+  skillNames?: string[]
+  pinned?: boolean
+}
+
+type ServiceProviderInfo = 'mailbox' | 'tencentDocs' | 'ima' | 'lexiang'
+type ServiceStatusInfo = 'not_connected' | 'connecting' | 'connected' | 'error'
+
+interface ServiceConnectionInfo {
+  provider: ServiceProviderInfo
+  status: ServiceStatusInfo
+  endpoint: string | null
+  account: string | null
+  lastError: string | null
+  lastCheckedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface InspirationPostInfo {
+  id: string
+  title: string
+  body: string
+  source: string
+  tags: string[]
+  favorite: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 interface AutomationInfo {
   id: string
   name: string
@@ -247,6 +294,7 @@ interface Window {
         mode?: string
         channelId?: string
         colleagueId?: string
+        projectId?: string
       }) => Promise<{ conversationId: string }>
       pin: (input: { conversationId: string; pinned: boolean }) => Promise<{
         conversationId: string
@@ -280,6 +328,33 @@ interface Window {
       list: () => Promise<{ colleagues: ColleagueInfo[] }>
       create: (input: ColleagueInputInfo) => Promise<{ colleague: ColleagueInfo }>
       update: (input: Partial<ColleagueInputInfo> & { id: string }) => Promise<{ colleague: ColleagueInfo }>
+      remove: (id: string) => Promise<{ id: string; removed: boolean }>
+    }
+    projects: {
+      list: () => Promise<{ projects: ProjectInfo[] }>
+      create: (input: ProjectInputInfo) => Promise<{ project: ProjectInfo }>
+      update: (input: Partial<ProjectInputInfo> & { id: string }) => Promise<{ project: ProjectInfo }>
+      remove: (id: string) => Promise<{ id: string; removed: boolean }>
+      tasks: (id: string) => Promise<{
+        projectId: string
+        tasks: Array<{ id: string; title: string; updatedAt: string; colleagueId: string | null; pinnedAt: string | null }>
+      }>
+    }
+    connections: {
+      list: () => Promise<{ connections: ServiceConnectionInfo[] }>
+      set: (input: {
+        provider: ServiceProviderInfo
+        status: ServiceStatusInfo
+        endpoint?: string | null
+        account?: string | null
+        lastError?: string | null
+      }) => Promise<{ connection: ServiceConnectionInfo }>
+      disconnect: (provider: ServiceProviderInfo) => Promise<{ connection: ServiceConnectionInfo }>
+    }
+    inspiration: {
+      list: () => Promise<{ posts: InspirationPostInfo[] }>
+      create: (input: { title: string; body?: string; source?: string; tags?: string[] }) => Promise<{ post: InspirationPostInfo }>
+      favorite: (input: { id: string; favorite: boolean }) => Promise<{ post: InspirationPostInfo }>
       remove: (id: string) => Promise<{ id: string; removed: boolean }>
     }
     automation: {

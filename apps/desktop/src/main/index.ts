@@ -130,14 +130,15 @@ ipcMain.handle('artifact.preview', async (_e, input: PreviewTarget & { confirmed
   return resolved
 })
 
-ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string; colleagueId?: string }) => {
+ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string; colleagueId?: string; projectId?: string }) => {
   await daemonReady
   return request<{ conversationId: string }>({
     cmd: 'conversation.new',
     ...(input?.title ? { title: input.title } : {}),
     ...(input?.mode ? { mode: input.mode } : {}),
     ...(input?.channelId ? { channelId: input.channelId } : {}),
-    ...(input?.colleagueId ? { colleagueId: input.colleagueId } : {})
+    ...(input?.colleagueId ? { colleagueId: input.colleagueId } : {}),
+    ...(input?.projectId ? { projectId: input.projectId } : {})
   })
 })
 
@@ -273,6 +274,75 @@ ipcMain.handle('colleagues.delete', async (_e, id: string) => {
   await daemonReady
   if (typeof id !== 'string' || !id) throw new Error('非法助理 ID')
   return request<{ id: string; removed: boolean }>({ cmd: 'colleagues.delete', id })
+})
+
+ipcMain.handle('projects.list', async () => {
+  await daemonReady
+  return request<{ projects: unknown[] }>({ cmd: 'projects.list' })
+})
+
+ipcMain.handle('projects.create', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.name !== 'string' || !input.name.trim()) throw new Error('缺少项目名称')
+  return request<{ project: unknown }>({ cmd: 'projects.create', ...input })
+})
+
+ipcMain.handle('projects.update', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.id !== 'string') throw new Error('缺少项目 ID')
+  return request<{ project: unknown }>({ cmd: 'projects.update', ...input })
+})
+
+ipcMain.handle('projects.delete', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法项目 ID')
+  return request<{ id: string; removed: boolean }>({ cmd: 'projects.delete', id })
+})
+
+ipcMain.handle('projects.tasks', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法项目 ID')
+  return request<{ projectId: string; tasks: unknown[] }>({ cmd: 'projects.tasks', id })
+})
+
+ipcMain.handle('connections.list', async () => {
+  await daemonReady
+  return request<{ connections: unknown[] }>({ cmd: 'connections.list' })
+})
+
+ipcMain.handle('connections.set', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.provider !== 'string') throw new Error('缺少服务类型')
+  return request<{ connection: unknown }>({ cmd: 'connections.set', ...input })
+})
+
+ipcMain.handle('connections.disconnect', async (_e, provider: string) => {
+  await daemonReady
+  if (typeof provider !== 'string' || !provider) throw new Error('缺少服务类型')
+  return request<{ connection: unknown }>({ cmd: 'connections.disconnect', provider })
+})
+
+ipcMain.handle('inspiration.list', async () => {
+  await daemonReady
+  return request<{ posts: unknown[] }>({ cmd: 'inspiration.list' })
+})
+
+ipcMain.handle('inspiration.create', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.title !== 'string' || !input.title.trim()) throw new Error('缺少灵感标题')
+  return request<{ post: unknown }>({ cmd: 'inspiration.create', ...input })
+})
+
+ipcMain.handle('inspiration.favorite', async (_e, input: { id?: string; favorite?: boolean }) => {
+  await daemonReady
+  if (!input || typeof input.id !== 'string' || typeof input.favorite !== 'boolean') throw new Error('非法收藏请求')
+  return request<{ post: unknown }>({ cmd: 'inspiration.favorite', id: input.id, favorite: input.favorite })
+})
+
+ipcMain.handle('inspiration.delete', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法灵感 ID')
+  return request<{ id: string; removed: boolean }>({ cmd: 'inspiration.delete', id })
 })
 
 ipcMain.handle(

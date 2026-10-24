@@ -63,6 +63,21 @@ import {
   listLibraryArtifacts,
   listColleagues,
   getColleague,
+  listProjects,
+  getProject,
+  createProject,
+  updateProject,
+  deleteProject,
+  assertProjectInWorkspace,
+  setConversationProject,
+  listConnections,
+  setConnection,
+  disconnectService,
+  isServiceProvider,
+  listInspirations,
+  createInspiration,
+  setInspirationFavorite,
+  deleteInspiration,
   createColleague,
   updateColleague,
   deleteColleague,
@@ -906,6 +921,19 @@ const MAX_CONTEXT_FILES = 20
 const MAX_CONTEXT_FILE_BYTES = 64 * 1024
 const MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
 
+/** trace 只记录"哪些上下文段落进入了 system",不落原文,避免把记忆/文件内容写进审计。 */
+function injectedSections(
+  input: RunInput,
+  project?: { name: string } | null
+): string[] {
+  const sections: string[] = []
+  if (project) sections.push('project')
+  if (input.scene) sections.push('scene')
+  if (input.colleagueId) sections.push('colleague')
+  if ((input.contextPaths ?? []).length > 0) sections.push('context')
+  return sections
+}
+
 /**
  * 把首页/输入框里的隐式意图变成运行时可见的上下文。
  *
@@ -914,9 +942,22 @@ const MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
  */
 async function applyHarnessContext(
   input: RunInput,
-  prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt }
+  prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt },
+  project?: { name: string; description: string; instructions: string } | null
 ): Promise<string> {
   let system = prepared.system
+
+  if (project) {
+    const lines = [
+      '',
+      '# 项目上下文',
+      `当前任务归属于项目「${project.name}」。`,
+      project.description ? `项目简介: ${project.description}` : '',
+      project.instructions ? `项目指令(优先遵守):\n${project.instructions}` : '',
+      '项目内产出应服务于该项目目标;不要假设你拥有未提供的项目成员或云端权限。'
+    ].filter(Boolean)
+    system += `\n${lines.join('\n')}`
+  }
 
   if (input.scene) {
     system += `\n\n# 场景\n${SCENE_PROMPTS[input.scene]}`
@@ -1070,6 +1111,9 @@ async function runMock(
 ): Promise<'done'> {
   const db = requireDb()
   const colleague = input.colleagueId ? getColleague(db, input.colleagueId) : undefined
+  const runConversation = getConversation(db, input.conversationId)
+  const runProject = runConversation?.projectId ? getProject(db, runConversation.projectId) : undefined
+  const runSkill = skills.activeSkill()?.name
   const taskId = createTask(db, { conversationId: input.conversationId, title: input.text.slice(0, 80) || '未命名任务' })
   transitionTask(db, taskId, 'running')
   appendEvent(db, input.conversationId, 'run.started', { taskId, mode: input.mode.id })
@@ -1118,7 +1162,15 @@ async function runMock(
       content: { text: reply },
       model: 'mock'
     })
-    const mockTrace = buildTrace(input.mode.id, prepared.assembled, effectiveTools(input.mode, colleague ?? null))
+    const mockTrace = buildTrace(
+      input.mode.id,
+      prepared.assembled,
+      effectiveTools(input.mode, colleague ?? null),
+      runSkill,
+      runProject?.id,
+      prepared.system,
+      injectedSections(input, runProject)
+    )
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
     notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
@@ -1165,7 +1217,15 @@ async function runMock(
       content: { text: reply },
       model: 'mock'
     })
-    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    const mockTrace = buildTrace(
+      input.mode.id,
+      prepared.assembled,
+      modeTools(input.mode),
+      runSkill,
+      runProject?.id,
+      prepared.system,
+      injectedSections(input, runProject)
+    )
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
     notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
@@ -1210,7 +1270,15 @@ async function runMock(
       content: { text: reply },
       model: 'mock'
     })
-    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    const mockTrace = buildTrace(
+      input.mode.id,
+      prepared.assembled,
+      modeTools(input.mode),
+      runSkill,
+      runProject?.id,
+      prepared.system,
+      injectedSections(input, runProject)
+    )
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
     notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
@@ -1244,7 +1312,15 @@ async function runMock(
       content: { text: reply },
       model: 'mock'
     })
-    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    const mockTrace = buildTrace(
+      input.mode.id,
+      prepared.assembled,
+      modeTools(input.mode),
+      runSkill,
+      runProject?.id,
+      prepared.system,
+      injectedSections(input, runProject)
+    )
     await writeTrace(TRACE_DIR, mockTrace)
     const missing = checkDelivery(taskId, input.conversationId, true)
     transitionTask(db, taskId, 'done', {
@@ -1291,7 +1367,15 @@ async function runMock(
       content: { text: reply },
       model: 'mock'
     })
-    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    const mockTrace = buildTrace(
+      input.mode.id,
+      prepared.assembled,
+      modeTools(input.mode),
+      runSkill,
+      runProject?.id,
+      prepared.system,
+      injectedSections(input, runProject)
+    )
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
     notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
@@ -1335,7 +1419,15 @@ async function runMock(
     model: 'mock'
   })
   // mock 也要产出 trace:P2 的"提示词稳定性"验收靠它比对 sha256
-  const trace = buildTrace(input.mode.id, prepared.assembled, effectiveTools(input.mode, colleague ?? null))
+  const trace = buildTrace(
+    input.mode.id,
+    prepared.assembled,
+    effectiveTools(input.mode, colleague ?? null),
+    runSkill,
+    runProject?.id,
+    prepared.system,
+    injectedSections(input, runProject)
+  )
   const file = await writeTrace(TRACE_DIR, trace)
   process.stderr.write(
     `[trace] ${input.mode.id} sha256=${trace.outputSha256.slice(0, 12)} tools=[${effectiveTools(input.mode, colleague ?? null).join(',')}] skill=- -> ${file}\n`
@@ -1353,6 +1445,9 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
   const db = requireDb()
   const { text, mode, conversationId } = input
 
+  const conversationRow = getConversation(db, conversationId)
+  const project = conversationRow?.projectId ? getProject(db, conversationRow.projectId) : undefined
+
   markScanTurn(conversationId, text)
 
   // 每一轮都从干净状态开始:上一轮模型自加载的技能不能悄悄影响新任务。
@@ -1366,8 +1461,15 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
     emit({ type: 'error', code: 'COLLEAGUE_PAUSED', message: `助理「${colleague.name}」已暂停,恢复后才能继续执行任务`, retryable: false })
     return 'failed'
   }
-  // 助理声明了技能时,本轮索引、load_skill 与工具收窄都只在这个集合内。
-  skills.setAllowed(colleague && colleague.skillNames.length > 0 ? colleague.skillNames : null)
+  // 项目与助理都可能是技能白名单。两者同时存在时取交集:
+  // 项目约束"这个项目能用什么",助理约束"这个角色能用什么",不能互相放宽。
+  const colleagueSkills = colleague && colleague.skillNames.length > 0 ? colleague.skillNames : null
+  const projectSkills = project && project.skillNames.length > 0 ? project.skillNames : null
+  const allowedSkills =
+    colleagueSkills && projectSkills
+      ? colleagueSkills.filter((name) => projectSkills.includes(name))
+      : (colleagueSkills ?? projectSkills)
+  skills.setAllowed(allowedSkills)
 
   emit({ type: 'mode.selected', modeId: mode.id, displayName: mode.displayName })
 
@@ -1406,7 +1508,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
       explicitSkill = loaded.name
       prepared.system += `\n\n# 用户指定技能\n${loaded.body}`
     }
-    prepared.system = await applyHarnessContext(input, prepared)
+    prepared.system = await applyHarnessContext(input, prepared, project ?? null)
   } catch (err) {
     emit({ type: 'error', code: 'CONTEXT_FAILED', message: (err as Error).message, retryable: false })
     return 'failed'
@@ -1547,7 +1649,15 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
     }
 
     const finalNames = effectiveTools(mode, colleague ?? null)
-    const trace = buildTrace(mode.id, prepared.assembled, finalNames, activeSkill)
+    const trace = buildTrace(
+      mode.id,
+      prepared.assembled,
+      finalNames,
+      activeSkill,
+      project?.id,
+      prepared.system,
+      injectedSections(input, project)
+    )
     const file = await writeTrace(TRACE_DIR, trace)
     process.stderr.write(
       `[trace] ${mode.id} sha256=${trace.outputSha256.slice(0, 12)} tools=[${finalNames.join(',')}] skill=${activeSkill ?? '-'} -> ${file}\n`
@@ -1996,6 +2106,10 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
           ? (colleagues.find((x) => x.id === c.colleagueId)?.name ?? null)
           : null,
         pinnedAt: c.pinnedAt,
+        projectId: c.projectId,
+        projectName: c.projectId
+          ? (listProjects(db, workspaceId).find((x) => x.id === c.projectId)?.name ?? null)
+          : null,
         channelId: c.channelId,
         channelName: c.channelId
           ? (listChannels(db, workspaceId).find((ch) => ch.id === c.channelId)?.name ?? null)
@@ -2044,12 +2158,16 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     if (colleagueId) {
       assertColleagueAssignable(db, workspaceId, colleagueId, channelId)
     }
+    const projectId =
+      typeof msg.projectId === 'string' && msg.projectId.trim() ? msg.projectId.trim() : null
+    if (projectId) assertProjectInWorkspace(db, workspaceId, projectId)
     const conv = createConversation(db, {
       workspaceId,
       title: typeof msg.title === 'string' && msg.title ? msg.title : '新会话',
       modeId: typeof msg.mode === 'string' ? msg.mode : 'craft',
       channelId,
-      colleagueId
+      colleagueId,
+      projectId
     })
     activeConversationId = conv.id
     emit({ ...base, type: 'conversation.created', conversationId: conv.id })
@@ -2268,6 +2386,138 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     if (typeof msg.runId !== 'string' || msg.runId.length === 0) throw new Error('缺少 runId')
     const cancelled = workflowService.cancel(msg.runId)
     emit({ ...base, type: 'workflow.cancelled', runId: msg.runId, cancelled })
+    return true
+  }
+
+  if (msg.cmd === 'projects.list') {
+    emit({ ...base, type: 'projects.list', projects: listProjects(db, workspaceId) })
+    return true
+  }
+
+  if (msg.cmd === 'projects.create') {
+    if (typeof msg.name !== 'string' || !msg.name.trim()) throw new Error('缺少项目名称')
+    const project = createProject(db, {
+      workspaceId,
+      name: msg.name,
+      ...(typeof msg.description === 'string' ? { description: msg.description } : {}),
+      ...(typeof msg.instructions === 'string' ? { instructions: msg.instructions } : {}),
+      ...(Array.isArray(msg.skillNames)
+        ? { skillNames: msg.skillNames.filter((x): x is string => typeof x === 'string') }
+        : {}),
+      ...(typeof msg.pinned === 'boolean' ? { pinned: msg.pinned } : {})
+    })
+    emit({ ...base, type: 'projects.created', project })
+    return true
+  }
+
+  if (msg.cmd === 'projects.update') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少项目 ID')
+    assertProjectInWorkspace(db, workspaceId, msg.id)
+    const project = updateProject(db, msg.id, {
+      ...(typeof msg.name === 'string' ? { name: msg.name } : {}),
+      ...(typeof msg.description === 'string' ? { description: msg.description } : {}),
+      ...(typeof msg.instructions === 'string' ? { instructions: msg.instructions } : {}),
+      ...(Array.isArray(msg.skillNames)
+        ? { skillNames: msg.skillNames.filter((x): x is string => typeof x === 'string') }
+        : {}),
+      ...(typeof msg.pinned === 'boolean' ? { pinned: msg.pinned } : {})
+    })
+    if (!project) throw new Error('项目不存在')
+    emit({ ...base, type: 'projects.updated', project })
+    return true
+  }
+
+  if (msg.cmd === 'projects.delete') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少项目 ID')
+    assertProjectInWorkspace(db, workspaceId, msg.id)
+    const removed = deleteProject(db, msg.id)
+    emit({ ...base, type: 'projects.deleted', id: msg.id, removed })
+    return true
+  }
+
+  if (msg.cmd === 'projects.tasks') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少项目 ID')
+    assertProjectInWorkspace(db, workspaceId, msg.id)
+    emit({
+      ...base,
+      type: 'projects.tasks',
+      projectId: msg.id,
+      tasks: listConversations(db, workspaceId)
+        .filter((c) => c.projectId === msg.id)
+        .map((c) => ({
+          id: c.id,
+          title: c.title,
+          updatedAt: c.updatedAt,
+          colleagueId: c.colleagueId,
+          pinnedAt: c.pinnedAt
+        }))
+    })
+    return true
+  }
+
+  if (msg.cmd === 'connections.list') {
+    emit({ ...base, type: 'connections.list', connections: listConnections(db, workspaceId) })
+    return true
+  }
+
+  if (msg.cmd === 'connections.set') {
+    if (!isServiceProvider(msg.provider)) throw new Error('未知服务')
+    const status =
+      msg.status === 'connecting' || msg.status === 'connected' || msg.status === 'error' || msg.status === 'not_connected'
+        ? msg.status
+        : null
+    if (!status) throw new Error('未知连接状态')
+    const connection = setConnection(db, {
+      workspaceId,
+      provider: msg.provider,
+      status,
+      ...(typeof msg.endpoint === 'string' || msg.endpoint === null ? { endpoint: msg.endpoint } : {}),
+      ...(typeof msg.account === 'string' || msg.account === null ? { account: msg.account } : {}),
+      ...(typeof msg.lastError === 'string' || msg.lastError === null ? { lastError: msg.lastError } : {}),
+      check: true
+    })
+    emit({ ...base, type: 'connections.updated', connection })
+    return true
+  }
+
+  if (msg.cmd === 'connections.disconnect') {
+    if (!isServiceProvider(msg.provider)) throw new Error('未知服务')
+    const connection = disconnectService(db, workspaceId, msg.provider)
+    emit({ ...base, type: 'connections.updated', connection })
+    return true
+  }
+
+  if (msg.cmd === 'inspiration.list') {
+    emit({ ...base, type: 'inspiration.list', posts: listInspirations(db, workspaceId) })
+    return true
+  }
+
+  if (msg.cmd === 'inspiration.create') {
+    if (typeof msg.title !== 'string' || !msg.title.trim()) throw new Error('缺少灵感标题')
+    const post = createInspiration(db, {
+      workspaceId,
+      title: msg.title,
+      ...(typeof msg.body === 'string' ? { body: msg.body } : {}),
+      ...(typeof msg.source === 'string' ? { source: msg.source } : {}),
+      ...(Array.isArray(msg.tags) ? { tags: msg.tags.filter((x): x is string => typeof x === 'string') } : {})
+    })
+    emit({ ...base, type: 'inspiration.created', post })
+    return true
+  }
+
+  if (msg.cmd === 'inspiration.favorite') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少灵感 ID')
+    if (typeof msg.favorite !== 'boolean') throw new Error('缺少收藏状态')
+    const post = setInspirationFavorite(db, workspaceId, msg.id, msg.favorite)
+    if (!post) throw new Error('灵感不存在')
+    emit({ ...base, type: 'inspiration.updated', post })
+    return true
+  }
+
+  if (msg.cmd === 'inspiration.delete') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少灵感 ID')
+    const removed = deleteInspiration(db, workspaceId, msg.id)
+    emit({ ...base, type: 'inspiration.deleted', id: msg.id, removed })
     return true
   }
 
