@@ -92,6 +92,26 @@ type Sheet =
 const THEME_KEY = 'owb.theme'
 const COLLAPSE_KEY = 'owb.sidebar.collapsed'
 const FILTER_KEY = 'owb.task.filter.v1'
+/**
+ * 运行诊断开关。
+ *
+ * "本轮可用工具""已注入记忆""本轮回合计费"是排障信息,真实产品的对话页不展示,
+ * 常驻会让界面看起来像控制台。默认隐藏;需要排查时在开发者工具里执行
+ * `localStorage.setItem('owb.showRunDiagnostics','1')` 并刷新即可。
+ */
+const DIAGNOSTICS_KEY = 'owb.showRunDiagnostics'
+
+function showRunDiagnostics(): boolean {
+  try {
+    return localStorage.getItem(DIAGNOSTICS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function isDiagnosticNotice(kind: SystemLine['kind']): boolean {
+  return kind === 'tools' || kind === 'memory' || kind === 'skill' || kind === 'usage'
+}
 
 function readTaskFilter(): TaskFilterState {
   try {
@@ -210,6 +230,12 @@ export default function App() {
   const note = useCallback((kind: SystemLine['kind'], text: string) => {
     setNotices((list) => [...list, { id: `${kind}-${Date.now()}-${list.length}`, kind, text }])
   }, [])
+
+  // 备注仍然记录在状态里(切到诊断模式后能看到同一轮的完整信息),
+  // 只是默认不渲染。这里在渲染期读取开关,避免为了一个调试项再加一次状态同步。
+  const visibleNotices = showRunDiagnostics()
+    ? notices
+    : notices.filter((item) => !isDiagnosticNotice(item.kind))
 
   const loadConversations = useCallback(async (selectId?: string) => {
     const r = await window.openwb.conversation.list()
@@ -1129,9 +1155,9 @@ export default function App() {
                       </span>
                     </div>
                   ) : null}
-                  {notices.length > 0 ? (
+                  {visibleNotices.length > 0 ? (
                     <div className="owb-notices">
-                      {notices.map((n) => (
+                      {visibleNotices.map((n) => (
                         <div
                           key={n.id}
                           className={`owb-status${n.kind === 'system' ? ' owb-status--error' : n.kind === 'skill' ? ' owb-status--skill' : n.kind === 'warn' ? ' owb-status--warn' : ' owb-status--info'}`}

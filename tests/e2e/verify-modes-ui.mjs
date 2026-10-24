@@ -186,8 +186,20 @@ try {
   }
   check(convCount >= 1, 'conversation-list-visible', String(convCount))
 
-  // P3: 让模型加载内置技能,界面应出现"已加载技能"且工具被收窄
+  // 默认界面不能展示工具清单这类运行诊断:真实产品对话页没有这些控制台信息。
+  // localStorage 按 Electron 用户目录持久化,先清掉上一步测试可能留下的开关。
+  await evaluate("localStorage.removeItem('owb.showRunDiagnostics')")
   await submit('请加载 code-review 技能,然后只回复"已加载"。不要修改任何文件。')
+  await waitBusy()
+  const quietIdle = await waitIdle()
+  const quietBody = await evaluate('document.body.innerText')
+  check(quietIdle, 'diagnostics-turn-finished')
+  check(!quietBody.includes('本轮可用工具'), 'diagnostics-hidden-by-default')
+  check(!quietBody.includes('已加载技能'), 'skill-notice-hidden-by-default')
+
+  // 验收内部事件时显式打开诊断开关;产品默认保持干净。
+  await evaluate("localStorage.setItem('owb.showRunDiagnostics','1')")
+  await submit('请再次加载 code-review 技能,然后只回复"已加载"。不要修改任何文件。')
   await waitBusy()
   const skillIdle = await waitIdle()
   const skillBody = await evaluate('document.body.innerText')
@@ -298,7 +310,10 @@ try {
         waiting2.set(myId, (m) => { clearTimeout(timer); res(m) })
         ws2.send(JSON.stringify({ id: myId, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }))
       })
-      if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.text)
+      if (r.result?.exceptionDetails) {
+        const details = r.result.exceptionDetails
+        throw new Error(details.exception?.description ?? details.text ?? '(未提供异常详情)')
+      }
       return r.result?.result?.value
     }
     let body2 = ''
