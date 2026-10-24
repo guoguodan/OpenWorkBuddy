@@ -7,6 +7,7 @@ import {
   IconChat,
   IconChevron,
   IconClock,
+  IconFolder,
   IconGrid,
   IconMail,
   IconPin,
@@ -143,6 +144,22 @@ export function Sidebar({
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
   const renameRef = useRef<HTMLInputElement>(null)
+  const [taskListOpen, setTaskListOpen] = useState(false)
+  const taskListTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 真实产品在折叠侧栏中始终保留"任务列表"入口;悬停打开,离开稍延迟关闭。
+  const openTaskList = () => {
+    if (taskListTimer.current) clearTimeout(taskListTimer.current)
+    setTaskListOpen(true)
+  }
+  const closeTaskListSoon = () => {
+    if (taskListTimer.current) clearTimeout(taskListTimer.current)
+    taskListTimer.current = setTimeout(() => setTaskListOpen(false), 150)
+  }
+
+  useEffect(() => () => {
+    if (taskListTimer.current) clearTimeout(taskListTimer.current)
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(SECTION_STATE_KEY, JSON.stringify(sectionState))
@@ -426,6 +443,80 @@ export function Sidebar({
       </nav>
 
       <div className="owb-sidebar__sections">
+        {collapsed && conversations.length > 0 ? (
+          <div
+            className="owb-task-popover-wrap"
+            onMouseEnter={openTaskList}
+            onMouseLeave={closeTaskListSoon}
+          >
+            <button
+              className="owb-task-popover-trigger"
+              title="任务列表"
+              aria-label="任务列表"
+              data-testid="task-list-trigger"
+              onClick={() => setTaskListOpen((v) => !v)}
+            >
+              <IconChat size={17} />
+            </button>
+            {taskListOpen ? (
+              <div className="owb-task-popover" role="dialog" aria-label="任务列表" data-testid="task-list-popover">
+                {grouped.tasks.length > 0 ? (
+                  <div className="owb-task-popover__group">
+                    <div className="owb-task-popover__header">任务</div>
+                    {grouped.tasks.map((c) => (
+                      <button
+                        key={c.id}
+                        className={`owb-task-popover__item${c.id === activeId ? ' owb-task-popover__item--active' : ''}`}
+                        onClick={() => {
+                          setTaskListOpen(false)
+                          onSelect(c.id)
+                        }}
+                      >
+                        {c.title}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {grouped.workspaces.length > 0 ? (
+                  <div className="owb-task-popover__group">
+                    <div className="owb-task-popover__header">工作空间</div>
+                    {grouped.workspaces.map((g) => {
+                      const key = `popover:${g.key}`
+                      const folded = Boolean(sectionState.collapsedGroups[key])
+                      return (
+                        <div key={g.key} className="owb-task-popover__subgroup">
+                          <button
+                            className="owb-task-popover__subheader"
+                            aria-expanded={!folded}
+                            onClick={() => toggleGroup(key)}
+                          >
+                            <IconFolder size={14} />
+                            <span>{g.title}</span>
+                            <span className={`owb-sidebar__chevron${folded ? '' : ' owb-sidebar__chevron--open'}`}>
+                              <IconChevron size={12} />
+                            </span>
+                          </button>
+                          {folded ? null : g.conversations.map((c) => (
+                            <button
+                              key={c.id}
+                              className={`owb-task-popover__item owb-task-popover__item--nested${c.id === activeId ? ' owb-task-popover__item--active' : ''}`}
+                              onClick={() => {
+                                setTaskListOpen(false)
+                                onSelect(c.id)
+                              }}
+                            >
+                              {c.title}
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {conversations.length === 0 ? <div className="owb-conv-empty">还没有任务</div> : null}
         {renderSection('pinned', '置顶', grouped.pinned, { pinned: true })}
         {renderSection('tasks', '任务', grouped.tasks)}

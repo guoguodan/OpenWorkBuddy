@@ -131,6 +131,8 @@ try {
     for (let i = 1; i <= 7; i++) {
       await window.openwb.conversation.create({ title: '分组任务 ' + i, mode: 'craft' })
     }
+    const channel = await window.openwb.channel.create({ name: '品牌空间' })
+    await window.openwb.conversation.create({ title: '品牌空间任务', mode: 'craft', channelId: channel.channel.id })
     const colleague = await window.openwb.colleagues.create({ name: '研究助理', title: '行业研究' })
     await window.openwb.conversation.create({
       title: '与助理协作',
@@ -304,6 +306,47 @@ try {
     8000
   )
   check(unpinned, 'unpin-removes-section')
+
+  // ---------- 9. 折叠侧栏的任务列表悬浮面板 ----------
+  await evaluate(`document.querySelector('.owb-topbar__btn[title="收起侧边栏"]').click()`)
+  await sleep(350)
+  const triggerShown = await evaluate(`Boolean(document.querySelector('[data-testid="task-list-trigger"]'))`)
+  check(triggerShown, 'collapsed-task-list-trigger')
+  await evaluate(`document.querySelector('[data-testid="task-list-trigger"]').click()`)
+  const popoverOpen = await waitFor(
+    evaluate,
+    `Boolean(document.querySelector('[data-testid="task-list-popover"]'))`
+  )
+  check(popoverOpen, 'task-list-popover-opens')
+  const popoverText = await evaluate(`document.querySelector('[data-testid="task-list-popover"]')?.innerText ?? ''`)
+  check(
+    popoverText.includes('任务') && popoverText.includes('工作空间') && popoverText.includes('品牌空间'),
+    'task-list-popover-groups',
+    popoverText.replace(/\n/g, ' | ')
+  )
+  const subheader = `document.querySelectorAll('.owb-task-popover__subheader')[0]`
+  const beforeFold = await evaluate(
+    `document.querySelectorAll('.owb-task-popover__item--nested').length`
+  )
+  await evaluate(`${subheader}.click()`)
+  await sleep(250)
+  const afterFold = await evaluate(
+    `document.querySelectorAll('.owb-task-popover__item--nested').length`
+  )
+  check(beforeFold > 0 && afterFold === 0, 'task-list-subgroup-collapses', `${beforeFold} -> ${afterFold}`)
+  await evaluate(`${subheader}.click()`)
+  await sleep(250)
+  check(
+    (await evaluate(`document.querySelectorAll('.owb-task-popover__item--nested').length`)) === beforeFold,
+    'task-list-subgroup-expands'
+  )
+  await evaluate(`document.querySelector('[data-testid="task-list-popover"] .owb-task-popover__item').click()`)
+  const popoverClosed = await waitFor(
+    evaluate,
+    `!document.querySelector('[data-testid="task-list-popover"]')`,
+    5000
+  )
+  check(popoverClosed, 'task-list-select-closes')
 } catch (err) {
   failed++
   console.error(`FAIL 运行异常: ${err?.message ?? err}`)
