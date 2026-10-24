@@ -42,6 +42,7 @@ import { ProjectsPanel } from './components/ProjectsPanel'
 import { ConnectionsPanel } from './components/ConnectionsPanel'
 import { InspirationPanel } from './components/InspirationPanel'
 import { MessageCenter } from './components/MessageCenter'
+import { PluginRecommendations } from './components/PluginRecommendations'
 import { IconCheck, IconSparkle, IconTool } from './components/Icons'
 import './styles/tokens.css'
 import './styles/app.css'
@@ -293,6 +294,14 @@ export default function App() {
   const [activeExpert, setActiveExpert] = useState<{ id: string; name: string } | null>(null)
   // 互斥提示:已有专家时再选另一个,先让用户明确"会退出前一个",确认后才真的切换。
   const [pendingExpert, setPendingExpert] = useState<{ id: string; name: string } | null>(null)
+  /**
+   * 任务匹配推荐(WM-PLUGIN-04)。
+   *
+   * 推荐由 daemon 的本地规则计算:已连接的连接器、当前会话的专家都不会返回。
+   * 用户点关闭只对本次运行生效,不写入设置,避免一次误点永久关闭推荐。
+   */
+  const [recommendations, setRecommendations] = useState<PluginRecommendationInfo[]>([])
+  const [dismissedRecommendations, setDismissedRecommendations] = useState<string[]>([])
   const streaming = useRef(false)
   const activeConversation = useRef('')
 
@@ -424,6 +433,36 @@ export default function App() {
       // 通知计数失败不能阻塞主流程
     }
   }, [])
+
+  const recommendSeq = useRef(0)
+  const loadRecommendations = useCallback(async (text: string) => {
+    const seq = ++recommendSeq.current
+    try {
+      const r = await window.openwb.plugins.recommend({
+        text,
+        ...(activeExpert?.id ? { activeExpertId: activeExpert.id } : {})
+      })
+      if (seq === recommendSeq.current) setRecommendations(r.recommendations ?? [])
+    } catch {
+      // 推荐是辅助信息:失败时静默隐藏,不影响发送
+      if (seq === recommendSeq.current) setRecommendations([])
+    }
+  }, [activeExpert?.id])
+
+  /**
+   * 输入停顿后再算推荐。逐字请求会让 daemon 每键都扫一遍插件清单,
+   * 也会让卡片在打字过程中闪烁;350ms 足以让文字稳定下来。
+   */
+  useEffect(() => {
+    const text = input.trim()
+    if (text.length < 2) {
+      recommendSeq.current++
+      setRecommendations([])
+      return
+    }
+    const timer = window.setTimeout(() => void loadRecommendations(text), 350)
+    return () => window.clearTimeout(timer)
+  }, [input, loadRecommendations])
 
   useEffect(() => {
     // ready 帧在本监听注册前就已发出,工作区路径必须主动拉一次。
@@ -1477,8 +1516,47 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
+  const visibleRecommendations = recommendations.filter(
+    (item) => !dismissedRecommendations.includes(item.name)
+  )
+
+  /**
+   * 推荐卡片里的"连接"必须真的启用连接器,而不是把用户带到列表里再找一遍。
+   * shell 权限沿用连接器面板的二次确认:推荐入口不能成为绕过授权检查的捷径。
+   */
+  const connectFromRecommendation = async (item: PluginRecommendationInfo) => {
+    try {
+      if (item.permissions.includes('shell')) {
+        const ok = window.confirm(
+          `${item.displayName} 申请 shell 权限:可执行本机任意命令。\n\n确认连接吗?`
+        )
+        if (!ok) return
+      }
+      await window.openwb.plugins.setEnabled({
+        name: item.name,
+        enabled: true,
+        ...(item.permissions.includes('shell') ? { confirmShell: true } : {})
+      })
+      note('info', `已连接「${item.displayName}」,本轮可直接使用它的工具。`)
+      setDismissedRecommendations((list) => [...list, item.name])
+      await loadRecommendations(input)
+    } catch (err) {
+      note('system', `连接「${item.displayName}」失败: ${(err as Error).message}`)
+    }
+  }
+
   const composer = (autoFocus = false) => (
-    <Composer
+    <>
+      <PluginRecommendations
+        items={visibleRecommendations}
+        busy={busy}
+        onUseConnector={(item) => void connectFromRecommendation(item)}
+        onUseExpert={(item) => void useExpert({ id: item.name, name: item.displayName })}
+        onDismiss={(name) =>
+          setDismissedRecommendations((list) => (list.includes(name) ? list : [...list, name]))
+        }
+      />
+      <Composer
       value={input}
       busy={busy}
       autoFocus={autoFocus}
@@ -1532,7 +1610,8 @@ export default function App() {
       onRemoveAttachment={(path) => setAttachments((list) => list.filter((a) => a.path !== path))}
       onPickAttachments={pickAttachments}
       onImportDroppedFiles={importDroppedFiles}
-    />
+      />
+    </>
   )
 
   return (

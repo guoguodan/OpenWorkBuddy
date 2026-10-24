@@ -115,6 +115,17 @@ interface PluginSnapshotInfo {
   team?: Array<{ ref: string; role: string | null }>
 }
 
+interface PluginRecommendationInfo {
+  name: string
+  displayName: string
+  kind: 'connector' | 'expert'
+  description: string
+  reason: string
+  matched: string[]
+  score: number
+  permissions: string[]
+}
+
 interface HistoryMessage {
   id: string
   seq: number
@@ -666,6 +677,9 @@ interface Window {
     }
     plugins: {
       list: () => Promise<{ plugins: PluginSnapshotInfo[] }>
+      recommend: (input: { text: string; activeExpertId?: string | null }) => Promise<{
+        recommendations: PluginRecommendationInfo[]
+      }>
       install: (input: { sourceDir: string; confirmShell?: boolean }) => Promise<{ plugin: PluginSnapshotInfo | null }>
       uninstall: (name: string) => Promise<{ name: string }>
       retry: (name: string) => Promise<{ plugin: PluginSnapshotInfo | null }>

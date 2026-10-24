@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('openwb', {
   },
   plugins: {
     list: () => ipcRenderer.invoke('plugins.list'),
+    recommend: (input: unknown) => ipcRenderer.invoke('plugins.recommend', input),
     install: (input: unknown) => ipcRenderer.invoke('plugins.install', input),
     uninstall: (name: string) => ipcRenderer.invoke('plugins.uninstall', name),
     retry: (name: string) => ipcRenderer.invoke('plugins.retry', name),

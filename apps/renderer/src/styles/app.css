@@ -442,6 +442,58 @@ input, textarea { font-family: inherit; }
 
 /* ============ 输入框 ============ */
 .owb-composer { width: 100%; min-width: 0; }
+/* 任务匹配推荐:贴在输入框上方,高度受控,不挤压对话区 */
+.owb-recommend { width: 100%; margin-bottom: 8px; }
+.owb-recommend__head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  color: var(--owb-text-tertiary); font-size: 12px;
+}
+.owb-recommend__head svg { color: var(--owb-brand-8); }
+.owb-recommend__count {
+  min-width: 16px; padding: 0 5px; border-radius: 8px;
+  background: var(--owb-bg-tertiary); color: var(--owb-text-secondary);
+  font-size: 11px; text-align: center;
+}
+.owb-recommend__list { display: flex; flex-direction: column; gap: 6px; }
+.owb-recommend__card {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--owb-border-subtle);
+  background: var(--owb-bg-elevated);
+}
+.owb-recommend__icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex: 0 0 26px; border-radius: 8px;
+  background: var(--owb-bg-tertiary); color: var(--owb-brand-8);
+}
+.owb-recommend__body { flex: 1 1 auto; min-width: 0; }
+.owb-recommend__title-row { display: flex; align-items: center; gap: 6px; }
+.owb-recommend__title { font-size: 13px; color: var(--owb-text-primary); }
+.owb-recommend__badge {
+  padding: 0 5px; border-radius: 6px; font-size: 10px;
+  background: var(--owb-bg-tertiary); color: var(--owb-text-tertiary);
+}
+.owb-recommend__badge--expert { color: var(--owb-brand-8); }
+.owb-recommend__reason {
+  margin: 3px 0 0; color: var(--owb-text-secondary); font-size: 12px; line-height: 1.5;
+}
+.owb-recommend__warn {
+  margin: 4px 0 0; color: #c98a00; font-size: 11px;
+}
+.owb-recommend__actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.owb-recommend__use {
+  padding: 4px 10px; border-radius: 8px; border: 1px solid var(--owb-border-default);
+  background: transparent; color: var(--owb-text-primary);
+  font-size: 12px; cursor: pointer;
+}
+.owb-recommend__use:hover:not(:disabled) { background: var(--owb-bg-hover); }
+.owb-recommend__use:disabled { opacity: 0.5; cursor: not-allowed; }
+.owb-recommend__dismiss {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border: none; border-radius: 6px;
+  background: transparent; color: var(--owb-text-tertiary); cursor: pointer;
+}
+.owb-recommend__dismiss:hover { background: var(--owb-bg-hover); color: var(--owb-text-primary); }
 .owb-composer__drop {
   position: fixed; inset: 0; z-index: 140; display: flex;
   align-items: center; justify-content: center; padding: 32px;

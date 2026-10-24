@@ -21,6 +21,7 @@ import {
   ExpertConflictError,
   type ExpertInfo
 } from './expert-mode.js'
+import { recommendPlugins, type RecommendablePlugin } from './plugin-recommend.js'
 import { transcribeAudio, VOICE_MESSAGES } from './transcribe.js'
 import { probeServiceEndpoint } from './service-probe.js'
 import { budgetExceededMessage, evaluateTokenBudget } from './budget.js'
@@ -697,6 +698,7 @@ function pluginStatusList() {
         .map((row) => ({
           name: row.name,
           displayName: row.name,
+          description: '',
           version: row.version ?? '0.0.0',
           kind: row.kind === 'expert' ? ('expert' as const) : ('connector' as const),
           state: 'unloaded' as const,
@@ -713,6 +715,32 @@ function pluginStatusList() {
         }))
     : []
   return [...snapshots, ...missing].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * 把运行时快照转成推荐所需的纯数据。
+ *
+ * 推荐只在"尚未连接 / 尚未启用"的对象里挑:
+ * 连接器一旦 enabled 就代表用户已授权并保持连接,再推荐只会显得嘈杂;
+ * 专家按会话互斥,当前专家也不再推荐。
+ */
+function recommendablePlugins(): RecommendablePlugin[] {
+  return pluginStatusList().map((plugin) => ({
+    name: plugin.name,
+    displayName: plugin.displayName,
+    description: plugin.description,
+    kind: plugin.kind,
+    enabled: plugin.enabled,
+    permissions: plugin.permissions,
+    tools: plugin.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+    instructions: plugin.instructions,
+    team: plugin.team
+  }))
+}
+
+/** 供界面在输入停顿时调用;不落库、不产生副作用,同一输入可重复得到同一结果。 */
+function pluginRecommendations(task: string, activeExpertId?: string | null) {
+  return recommendPlugins(task, recommendablePlugins(), { activeExpertId: activeExpertId ?? null })
 }
 
 function orderedModes(): ModePolicy[] {
@@ -2795,6 +2823,17 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
 
   if (msg.cmd === 'plugins.list') {
     emit({ ...base, type: 'plugins.list', plugins: pluginStatusList() })
+    return true
+  }
+
+  if (msg.cmd === 'plugins.recommend') {
+    const task = typeof msg.text === 'string' ? msg.text : ''
+    const activeExpertId = typeof msg.activeExpertId === 'string' ? msg.activeExpertId : null
+    emit({
+      ...base,
+      type: 'plugins.recommend',
+      recommendations: pluginRecommendations(task, activeExpertId)
+    })
     return true
   }
 

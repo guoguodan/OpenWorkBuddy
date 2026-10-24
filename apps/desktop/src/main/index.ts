@@ -719,6 +719,19 @@ ipcMain.handle('plugins.list', async () => {
   return request<{ plugins: unknown[] }>({ cmd: 'plugins.list' })
 })
 
+ipcMain.handle(
+  'plugins.recommend',
+  async (_e, input: { text?: string; activeExpertId?: string | null }) => {
+    await daemonReady
+    if (typeof input?.text !== 'string') throw new Error('缺少任务文本')
+    return request<{ recommendations: unknown[] }>({
+      cmd: 'plugins.recommend',
+      text: input.text,
+      ...(typeof input.activeExpertId === 'string' ? { activeExpertId: input.activeExpertId } : {})
+    })
+  }
+)
+
 ipcMain.handle('plugins.install', async (_e, input: { sourceDir?: string; confirmShell?: boolean }) => {
   await daemonReady
   if (typeof input?.sourceDir !== 'string' || !input.sourceDir) throw new Error('缺少插件目录')
