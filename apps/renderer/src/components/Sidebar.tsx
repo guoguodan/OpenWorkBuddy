@@ -23,6 +23,8 @@ export interface ConversationSummary {
   modeId: string
   colleagueId?: string | null
   colleagueName?: string | null
+  expertId?: string | null
+  expertName?: string | null
   pinnedAt?: string | null
   pinOrder?: number | null
   channelId?: string | null
@@ -453,6 +455,11 @@ export function Sidebar({
               <span className="owb-conv-item__project" title={`所属项目：${c.projectName}`}>
                 <IconFolder size={11} />
                 {c.projectName}
+              </span>
+            ) : null}
+            {c.expertName ? (
+              <span className="owb-conv-item__expert" title={`专家:${c.expertName}`}>
+                {c.expertName}
               </span>
             ) : null}
           </span>

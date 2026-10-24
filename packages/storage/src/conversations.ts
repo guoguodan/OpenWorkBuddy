@@ -37,6 +37,7 @@ export interface ConversationRecord {
   modeId: string
   colleagueId: string | null
   projectId: string | null
+  expertId: string | null
   pinnedAt: string | null
   pinOrder: number | null
   status: 'active' | 'archived'
@@ -71,6 +72,7 @@ export function createConversation(
     channelId?: string | null
     colleagueId?: string | null
     projectId?: string | null
+    expertId?: string | null
   }
 ): ConversationRecord {
   const at = nowIso()
@@ -82,6 +84,7 @@ export function createConversation(
     modeId: input.modeId,
     colleagueId: input.colleagueId ?? null,
     projectId: input.projectId ?? null,
+    expertId: input.expertId ?? null,
     pinnedAt: null,
     pinOrder: null,
     status: 'active',
@@ -287,6 +290,18 @@ export function setConversationProject(
   const existing = getConversation(db, conversationId)
   if (!existing) return undefined
   db.update(conversation).set({ projectId }).where(eq(conversation.id, conversationId)).run()
+  return getConversation(db, conversationId)
+}
+
+/** 专家归属只影响运行上下文;切换会话时按 expertId 恢复显示。 */
+export function setConversationExpert(
+  db: AppDatabase,
+  conversationId: string,
+  expertId: string | null
+): ConversationRecord | undefined {
+  const existing = getConversation(db, conversationId)
+  if (!existing) return undefined
+  db.update(conversation).set({ expertId }).where(eq(conversation.id, conversationId)).run()
   return getConversation(db, conversationId)
 }
 

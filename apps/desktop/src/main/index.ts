@@ -169,7 +169,7 @@ ipcMain.handle('artifact.preview', async (_e, input: PreviewTarget & { confirmed
   return resolved
 })
 
-ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string; colleagueId?: string; projectId?: string }) => {
+ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string; colleagueId?: string; projectId?: string; expertId?: string }) => {
   await daemonReady
   return request<{ conversationId: string }>({
     cmd: 'conversation.new',
@@ -177,7 +177,8 @@ ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: s
     ...(input?.mode ? { mode: input.mode } : {}),
     ...(input?.channelId ? { channelId: input.channelId } : {}),
     ...(input?.colleagueId ? { colleagueId: input.colleagueId } : {}),
-    ...(input?.projectId ? { projectId: input.projectId } : {})
+    ...(input?.projectId ? { projectId: input.projectId } : {}),
+    ...(input?.expertId ? { expertId: input.expertId } : {})
   })
 })
 
@@ -573,6 +574,7 @@ ipcMain.handle(
       conversationId?: string
       skill?: string
       colleagueId?: string
+      expertId?: string
       scene?: string
       contextPaths?: string[]
     }
@@ -587,6 +589,9 @@ ipcMain.handle(
   if (input.skill !== undefined && typeof input.skill !== 'string') throw new Error('非法技能')
   if (input.colleagueId !== undefined && typeof input.colleagueId !== 'string') {
     throw new Error('非法助理 ID')
+  }
+  if (input.expertId !== undefined && typeof input.expertId !== 'string') {
+    throw new Error('非法专家 ID')
   }
   if (
     input.scene !== undefined &&
@@ -610,6 +615,7 @@ ipcMain.handle(
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.skill ? { skill: input.skill } : {}),
       ...(input.colleagueId ? { colleagueId: input.colleagueId } : {}),
+      ...(input.expertId ? { expertId: input.expertId } : {}),
       ...(input.scene ? { scene: input.scene } : {}),
       ...(input.contextPaths && input.contextPaths.length > 0 ? { contextPaths: input.contextPaths } : {}),
       clientRequestId: `main-${Date.now()}-${++seq}`

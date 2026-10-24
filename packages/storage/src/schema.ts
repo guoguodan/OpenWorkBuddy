@@ -33,6 +33,7 @@ export const conversation = sqliteTable(
     modeId: text('mode_id').notNull(),
     colleagueId: text('colleague_id').references(() => colleague.id, { onDelete: 'set null' }),
     projectId: text('project_id').references(() => project.id, { onDelete: 'set null' }),
+    expertId: text('expert_id'),
     pinnedAt: text('pinned_at'),
     pinOrder: integer('pin_order'),
     status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),

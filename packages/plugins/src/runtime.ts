@@ -58,6 +58,8 @@ export interface PluginSnapshot {
   warnings: string[]
   verifiedPublisher: boolean
   permissions: string[]
+  /** 专家角色指令;连接器与未声明时为空串 */
+  instructions: string
 }
 
 export interface PluginRuntimeEvent {
@@ -591,7 +593,8 @@ export class PluginRuntime {
         .filter((pid): pid is number => typeof pid === 'number'),
       warnings: instance.plugin.warnings,
       verifiedPublisher: instance.plugin.verifiedPublisher,
-      permissions: manifest.permissions
+      permissions: manifest.permissions,
+      instructions: manifest.instructions ?? ''
     }
   }
 

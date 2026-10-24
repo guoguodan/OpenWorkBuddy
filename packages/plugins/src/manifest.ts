@@ -69,7 +69,9 @@ export const PluginManifestSchema = z
     credentials: z.array(CredentialDeclSchema).default([]),
     highCreditTools: z.record(z.string(), HighCreditToolSchema).default({}),
     /** 声明了 highCreditTools 却不能延迟加载的工具,见 §6.6 */
-    skills: z.array(z.string()).optional()
+    skills: z.array(z.string()).optional(),
+    /** 专家角色指令:只有 kind=expert 可用,由运行时注入 system prompt */
+    instructions: z.string().max(20_000).optional()
   })
   .strict()
 
@@ -110,6 +112,9 @@ export function assertManifestCoherent(manifest: PluginManifest): void {
   }
   if (manifest.kind === 'expert' && Object.keys(manifest.mcpServers).length > 0) {
     throw new ManifestError('expert 插件是纯清单,不能声明 mcpServers')
+  }
+  if (manifest.kind === 'connector' && manifest.instructions !== undefined) {
+    throw new ManifestError('connector 插件不能声明 instructions')
   }
 
   const credentialKeys = new Set(manifest.credentials.map((c) => c.key))

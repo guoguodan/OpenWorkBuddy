@@ -14,6 +14,8 @@ interface ConversationInfo {
   modeId: string
   colleagueId?: string | null
   colleagueName?: string | null
+  expertId?: string | null
+  expertName?: string | null
   pinnedAt?: string | null
   pinOrder?: number | null
   channelId?: string | null
@@ -102,6 +104,7 @@ interface PluginSnapshotInfo {
   warnings: string[]
   verifiedPublisher: boolean
   permissions: string[]
+  instructions: string
 }
 
 interface HistoryMessage {
@@ -300,6 +303,7 @@ interface Window {
         conversationId?: string
         skill?: string
         colleagueId?: string
+        expertId?: string
         scene?: 'working' | 'coding' | 'design'
         contextPaths?: string[]
       }) => Promise<void>
@@ -315,6 +319,7 @@ interface Window {
         channelId?: string
         colleagueId?: string
         projectId?: string
+        expertId?: string
       }) => Promise<{ conversationId: string }>
       pin: (input: { conversationId: string; pinned: boolean }) => Promise<{
         conversationId: string

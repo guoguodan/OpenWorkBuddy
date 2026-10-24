@@ -406,6 +406,13 @@ ALTER TABLE conversation ADD COLUMN pin_order INTEGER;
 DROP INDEX IF EXISTS idx_conversation_pinned;
 CREATE INDEX idx_conversation_pinned ON conversation(workspace_id, pinned_at, pin_order);
 `
+  },
+  {
+    version: 10,
+    name: 'conversation_expert',
+    sql: `-- 每个任务最多绑定一个专家;专家是插件清单资产,删除插件后保留历史归属.
+ALTER TABLE conversation ADD COLUMN expert_id TEXT;
+`
   }
 ]
 

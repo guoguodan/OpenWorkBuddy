@@ -47,6 +47,7 @@ import {
   renameConversation,
   reorderPinnedConversations,
   setConversationColleague,
+  setConversationExpert,
   setConversationPinned,
   listMessages,
   listPlugins,
@@ -87,6 +88,8 @@ import {
   updateColleague,
   deleteColleague,
   assertColleagueAssignable,
+  type AppDatabase,
+  type ConversationRecord,
   createNotification,
   listNotifications,
   markNotificationRead,
@@ -930,6 +933,8 @@ interface RunInput {
   contextPaths?: string[]
   /** 助理身份:人设指令与本轮默认技能。 */
   colleagueId?: string
+  /** 专家角色:来自插件清单,一个会话最多一个。 */
+  expertId?: string
   /** 首页场景:办公 / 开发 / 设计。 */
   scene?: 'working' | 'coding' | 'design'
 }
@@ -956,8 +961,54 @@ function injectedSections(
   if (project) sections.push('project')
   if (input.scene) sections.push('scene')
   if (input.colleagueId) sections.push('colleague')
+  if (input.expertId) sections.push('expert')
   if ((input.contextPaths ?? []).length > 0) sections.push('context')
   return sections
+}
+
+/**
+ * 解析本轮要使用的专家。
+ *
+ * 专家是插件清单资产,可能被卸载或关闭;每次发送都重新校验,
+ * 避免已失效的 expert_id 继续以旧身份运行。
+ */
+function requireExpert(expertId: string): { id: string; name: string; description: string; instructions: string } {
+  const plugin = pluginRuntime.snapshotOf(expertId)
+  if (!plugin || plugin.kind !== 'expert') {
+    throw new Error(`专家不存在: ${expertId}`)
+  }
+  if (!plugin.enabled) throw new Error(`专家已关闭: ${plugin.displayName}`)
+  return {
+    id: plugin.name,
+    name: plugin.displayName,
+    description: plugin.description,
+    instructions: plugin.instructions
+  }
+}
+
+/**
+ * 会话已绑定专家时,插件可能在之后被关闭或卸载。
+ * 这种情况不应让用户永久无法发送:解除绑定并提示一次,后续按普通会话运行。
+ */
+function resolveConversationExpert(db: AppDatabase, conversationId: string, requested: string | undefined, existing: ConversationRecord | undefined): string | undefined {
+  const candidate = requested ?? existing?.expertId ?? undefined
+  if (!candidate) return undefined
+  try {
+    requireExpert(candidate)
+    return candidate
+  } catch (err) {
+    if (requested) throw err
+    setConversationExpert(db, conversationId, null)
+    process.stderr.write(`[expert] 已解除失效专家绑定 ${conversationId}: ${(err as Error).message}\n`)
+    emit({ type: 'expert.released', conversationId, expertId: candidate, reason: (err as Error).message })
+    return undefined
+  }
+}
+
+function expertLabel(expertId: string | null): string | null {
+  if (!expertId) return null
+  const plugin = pluginRuntime.snapshotOf(expertId)
+  return plugin && plugin.kind === 'expert' ? plugin.displayName : null
 }
 
 /**
@@ -1001,6 +1052,19 @@ async function applyHarnessContext(
       colleague.description ? `职责简介: ${colleague.description}` : '',
       colleague.instructions ? `必须遵守的工作准则:\n${colleague.instructions}` : '',
       '保持该身份的语气与职责边界;不要声称自己拥有未提供的权限。'
+    ].filter(Boolean)
+    system += `\n${lines.join('\n')}`
+  }
+
+  if (input.expertId) {
+    const expert = requireExpert(input.expertId)
+    const lines = [
+      '',
+      '# 专家角色',
+      `你正在以「${expert.name}」专家身份工作。`,
+      expert.description ? `专长: ${expert.description}` : '',
+      expert.instructions ? `必须遵守的专业准则:\n${expert.instructions}` : '',
+      '保持专业边界;不要声称拥有未提供的权限。'
     ].filter(Boolean)
     system += `\n${lines.join('\n')}`
   }
@@ -2263,6 +2327,8 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
         colleagueName: c.colleagueId
           ? (colleagues.find((x) => x.id === c.colleagueId)?.name ?? null)
           : null,
+        expertId: c.expertId,
+        expertName: expertLabel(c.expertId),
         pinnedAt: c.pinnedAt,
         pinOrder: c.pinOrder,
         projectId: c.projectId,
@@ -2327,13 +2393,17 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     const projectId =
       typeof msg.projectId === 'string' && msg.projectId.trim() ? msg.projectId.trim() : null
     if (projectId) assertProjectInWorkspace(db, workspaceId, projectId)
+    const expertId =
+      typeof msg.expertId === 'string' && msg.expertId.trim() ? msg.expertId.trim() : null
+    if (expertId) requireExpert(expertId)
     const conv = createConversation(db, {
       workspaceId,
       title: typeof msg.title === 'string' && msg.title ? msg.title : '新会话',
       modeId: typeof msg.mode === 'string' ? msg.mode : 'craft',
       channelId,
       colleagueId,
-      projectId
+      projectId,
+      expertId
     })
     activeConversationId = conv.id
     emit({ ...base, type: 'conversation.created', conversationId: conv.id })
@@ -2807,6 +2877,10 @@ async function handleFrame(value: unknown) {
     typeof msg.colleagueId === 'string' && msg.colleagueId.trim().length > 0
       ? msg.colleagueId.trim()
       : undefined
+  const expertId =
+    typeof msg.expertId === 'string' && msg.expertId.trim().length > 0
+      ? msg.expertId.trim()
+      : undefined
   const scene =
     msg.scene === 'working' || msg.scene === 'coding' || msg.scene === 'design'
       ? msg.scene
@@ -2824,6 +2898,7 @@ async function handleFrame(value: unknown) {
   if (effectiveColleagueId) {
     assertColleagueAssignable(db, workspaceId, effectiveColleagueId, existingConversation?.channelId ?? null)
   }
+  const effectiveExpertId = resolveConversationExpert(db, conversationId, expertId, existingConversation)
   const saved = appendMessage(db, {
     conversationId,
     role: 'user',
@@ -2850,6 +2925,7 @@ async function handleFrame(value: unknown) {
     ...(clientRequestId ? { clientRequestId } : {}),
     ...(skill ? { skill } : {}),
     ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),
+    ...(effectiveExpertId ? { expertId: effectiveExpertId } : {}),
     ...(scene ? { scene } : {}),
     ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
   })

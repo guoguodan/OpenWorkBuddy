@@ -29,6 +29,7 @@ interface SkillsHubPanelProps {
   onClose: () => void
   onNotify: (kind: 'system' | 'info', text: string) => void
   onSkillsChanged: (skills: HubSkill[]) => void
+  onUseExpert: (expert: { id: string; name: string }) => void
 }
 
 const STATE_LABEL: Record<PluginSnapshotInfo['state'], string> = {
@@ -71,7 +72,8 @@ export function SkillsHubPanel({
   initialTab = 'skills',
   onClose,
   onNotify,
-  onSkillsChanged
+  onSkillsChanged,
+  onUseExpert
 }: SkillsHubPanelProps) {
   const [tab, setTab] = useState<HubTab>(initialTab)
   const [skillTab, setSkillTab] = useState<SkillTab>('installed')
@@ -517,6 +519,15 @@ export function SkillsHubPanel({
                   <button className="owb-hub__link" onClick={() => void togglePlugin(plugin)} disabled={working !== null}>
                     {plugin.enabled ? '关闭' : '启用'}
                   </button>
+                  <button
+                    className="owb-hub__action owb-hub__action--primary"
+                    disabled={!plugin.enabled || working !== null}
+                    title={plugin.enabled ? '新建任务并绑定该专家' : '请先启用该专家'}
+                    data-testid={`use-expert-${plugin.name}`}
+                    onClick={() => onUseExpert({ id: plugin.name, name: plugin.displayName })}
+                  >
+                    在任务中使用
+                  </button>
                 </div>
               </article>
             ))}
@@ -612,6 +623,20 @@ export function SkillsHubPanel({
                     卸载
                   </button>
                 </>
+              ) : null}
+              {detailPlugin?.kind === 'expert' ? (
+                <button
+                  className="owb-hub__action owb-hub__action--primary"
+                  disabled={!detailPlugin.enabled}
+                  data-testid="use-expert-detail"
+                  onClick={() => {
+                    const plugin = detailPlugin
+                    setDetail(null)
+                    onUseExpert({ id: plugin.name, name: plugin.displayName })
+                  }}
+                >
+                  在任务中使用
+                </button>
               ) : null}
               <button className="owb-hub__action owb-hub__action--primary" onClick={() => setDetail(null)}>
                 完成

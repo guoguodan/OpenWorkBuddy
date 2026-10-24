@@ -175,6 +175,7 @@ export default function App() {
   })
   const [modelLabel, setModelLabel] = useState('')
   const [activeColleague, setActiveColleague] = useState<{ id: string; name: string } | null>(null)
+  const [activeExpert, setActiveExpert] = useState<{ id: string; name: string } | null>(null)
   const streaming = useRef(false)
   const activeConversation = useRef('')
 
@@ -283,7 +284,16 @@ export default function App() {
     void (async () => {
       try {
         const id = await loadConversations()
-        if (id) await loadHistory(id)
+        if (id) {
+          const list = await window.openwb.conversation.list()
+          const target = list.conversations.find((c) => c.id === id)
+          setActiveExpert(
+            target?.expertId && target.expertName
+              ? { id: target.expertId, name: target.expertName }
+              : null
+          )
+          await loadHistory(id)
+        }
         await loadMemories()
         await loadChannels()
         await loadSyncStatus()
@@ -363,6 +373,9 @@ export default function App() {
           'warn',
           'DELIVERY_MISSING:本轮写了文件但没有交付,成果还在工作区里。请让助手调用 present_files,否则你拿不到可点击的交付物。'
         )
+      } else if (e.type === 'expert.released') {
+        setActiveExpert(null)
+        note('warn', '当前专家已关闭或卸载,已自动退出专家模式;本会话将按普通会话继续。')
       } else if (e.type === 'approval.request' && e.request) {
         const request = e.request as ApprovalRequestInfo
         setApprovalQueue((list) => (list.some((item) => item.id === request.id) ? list : [...list, request]))
@@ -427,6 +440,7 @@ export default function App() {
         ...(conversationId ? { conversationId } : {}),
         ...(selectedSkill ? { skill: selectedSkill } : {}),
         ...(activeColleague ? { colleagueId: activeColleague.id } : {}),
+        ...(activeExpert ? { expertId: activeExpert.id } : {}),
         ...(contextPaths.length > 0 ? { contextPaths } : {})
       })
     } catch (err) {
@@ -448,6 +462,9 @@ export default function App() {
         ? { id: target.colleagueId, name: target.colleagueName }
         : null
     )
+    setActiveExpert(
+      target?.expertId && target.expertName ? { id: target.expertId, name: target.expertName } : null
+    )
     setFocusTarget(null)
     setTools([])
     setNotices([])
@@ -466,6 +483,7 @@ export default function App() {
     setConversationId(r.conversationId)
     activeConversation.current = r.conversationId
     setActiveColleague(colleague)
+    setActiveExpert(null)
     setMessages([])
     setFocusTarget(null)
     setTools([])
@@ -473,6 +491,49 @@ export default function App() {
     await loadConversations(r.conversationId)
     if (colleague) note('info', `已指派给助理「${colleague.name}」,直接描述任务即可。`)
     return r.conversationId
+  }
+
+  const useExpert = async (expert: { id: string; name: string }) => {
+    if (busy) return
+    try {
+      const r = await window.openwb.conversation.create({
+        title: `与「${expert.name}」协作`,
+        mode,
+        expertId: expert.id,
+        ...(activeChannelId ? { channelId: activeChannelId } : {})
+      })
+      setPanel(null)
+      setConversationId(r.conversationId)
+      activeConversation.current = r.conversationId
+      setActiveExpert(expert)
+      setActiveColleague(null)
+      setMessages([])
+      setFocusTarget(null)
+      setTools([])
+      setNotices([])
+      await loadConversations(r.conversationId)
+      note('info', `已切换到专家「${expert.name}」,直接描述任务即可。`)
+    } catch (err) {
+      note('system', `启用专家失败: ${(err as Error).message}`)
+    }
+  }
+
+  const releaseExpert = async () => {
+    if (busy) return
+    try {
+      const r = await window.openwb.conversation.create({ title: '新会话', mode })
+      setConversationId(r.conversationId)
+      activeConversation.current = r.conversationId
+      setActiveExpert(null)
+      setActiveColleague(null)
+      setMessages([])
+      setFocusTarget(null)
+      setTools([])
+      setNotices([])
+      await loadConversations(r.conversationId)
+    } catch (err) {
+      note('system', `退出专家失败: ${(err as Error).message}`)
+    }
   }
 
   const newProjectTask = async (project: ProjectInfo) => {
@@ -487,6 +548,7 @@ export default function App() {
       setConversationId(r.conversationId)
       activeConversation.current = r.conversationId
       setActiveColleague(null)
+      setActiveExpert(null)
       setMessages([])
       setFocusTarget(null)
       setTools([])
@@ -509,6 +571,7 @@ export default function App() {
       activeConversation.current = r.conversationId
       setMessages([])
       setActiveColleague(null)
+      setActiveExpert(null)
       setFocusTarget(null)
       setTools([])
       setNotices([])
@@ -799,6 +862,17 @@ export default function App() {
                     </span>
                   </div>
                 ) : null}
+                {activeExpert ? (
+                  <div className="owb-status owb-status--info owb-status--welcome" data-testid="active-expert-banner">
+                    <IconSparkle size={13} />
+                    <span>
+                      正在与专家「{activeExpert.name}」协作
+                      <button className="owb-status__link" onClick={() => void releaseExpert()}>
+                        退出
+                      </button>
+                    </span>
+                  </div>
+                ) : null}
                 {composer(true)}
               </WelcomeView>
             ) : (
@@ -821,6 +895,17 @@ export default function App() {
                       <span>
                         正在与助理「{activeColleague.name}」协作
                         <button className="owb-status__link" onClick={() => setActiveColleague(null)}>
+                          退出
+                        </button>
+                      </span>
+                    </div>
+                  ) : null}
+                  {activeExpert ? (
+                    <div className="owb-status owb-status--info" data-testid="active-expert-banner">
+                      <IconSparkle size={13} />
+                      <span>
+                        正在与专家「{activeExpert.name}」协作
+                        <button className="owb-status__link" onClick={() => void releaseExpert()}>
                           退出
                         </button>
                       </span>
@@ -859,6 +944,7 @@ export default function App() {
           onClose={() => setPanel(null)}
           onNotify={(kind, text) => note(kind === 'info' ? 'tools' : 'system', text)}
           onSkillsChanged={(next) => setSkills(next)}
+          onUseExpert={(expert) => void useExpert(expert)}
         />
       ) : null}
 

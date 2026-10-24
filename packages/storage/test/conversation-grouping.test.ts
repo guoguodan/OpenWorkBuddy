@@ -13,6 +13,7 @@ import {
   listConversations,
   renameConversation,
   reorderPinnedConversations,
+  setConversationExpert,
   setConversationPinned
 } from '../src/conversations.js'
 import { createTask, transitionTask } from '../src/tasks.js'
@@ -103,6 +104,28 @@ describe('conversation grouping fields', () => {
 
     expect(deleteColleague(handle.db, colleague.id)).toBe(true)
     expect(getConversation(handle.db, conv.id)?.colleagueId).toBeNull()
+  })
+
+  it('stores expert ownership per conversation and defaults to null', () => {
+    const plain = createConversation(handle.db, { workspaceId, title: '无专家', modeId: 'craft' })
+    expect(plain.expertId).toBeNull()
+    expect(getConversation(handle.db, plain.id)?.expertId).toBeNull()
+
+    const conv = createConversation(handle.db, {
+      workspaceId,
+      title: '与专家协作',
+      modeId: 'craft',
+      expertId: 'research-expert'
+    })
+    expect(conv.expertId).toBe('research-expert')
+    expect(getConversation(handle.db, conv.id)?.expertId).toBe('research-expert')
+    expect(listConversations(handle.db, workspaceId).find((item) => item.id === conv.id)?.expertId).toBe(
+      'research-expert'
+    )
+
+    setConversationExpert(handle.db, conv.id, null)
+    expect(getConversation(handle.db, conv.id)?.expertId).toBeNull()
+    expect(setConversationExpert(handle.db, 'missing', 'research-expert')).toBeUndefined()
   })
 
   it('aggregates task and artifact facts per conversation for filtering', () => {

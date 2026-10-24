@@ -340,6 +340,13 @@ input, textarea { font-family: inherit; }
   color: var(--owb-text-secondary); background: var(--owb-bg-tertiary);
   border-radius: var(--owb-radius-sm); vertical-align: 1px;
 }
+.owb-conv-item__expert {
+  display: inline-flex; align-items: center; margin-left: 6px;
+  padding: 0 5px; font-size: 10px; font-weight: 400;
+  color: var(--owb-brand-9); background: color-mix(in srgb, var(--owb-brand-8) 12%, transparent);
+  border-radius: var(--owb-radius-sm); vertical-align: 1px;
+}
+:root[data-theme='dark'] .owb-conv-item__expert { color: var(--owb-brand-5); }
 .owb-conv-item__meta { font-size: 11px; color: var(--owb-text-tertiary); flex-shrink: 0; }
 .owb-sidebar--collapsed .owb-conv-item { justify-content: center; padding: 10px; }
 .owb-sidebar--collapsed .owb-conv-item__title, .owb-sidebar--collapsed .owb-conv-item__meta { display: none; }

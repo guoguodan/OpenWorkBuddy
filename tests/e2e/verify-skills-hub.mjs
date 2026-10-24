@@ -10,7 +10,7 @@
  */
 import { spawn } from 'node:child_process'
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -169,7 +169,8 @@ const connectorDir = await makePlugin(pluginSource, 'hub-connector', {
 const expertDir = await makePlugin(pluginSource, 'hub-expert', {
   kind: 'expert',
   displayName: '行业研究专家',
-  description: '擅长行业分析与趋势判断'
+  description: '擅长行业分析与趋势判断',
+  instructions: '先给出结论,再列出关键证据;引用数据时必须说明来源与时间。'
 })
 
 const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${port}`], {
@@ -335,9 +336,15 @@ try {
     `window.openwb.plugins.install({ sourceDir: ${JSON.stringify(expertDir)}, confirmShell: true })`
   )
   check(installedExpert?.plugin?.kind === 'expert', 'expert-installed', JSON.stringify(installedExpert).slice(0, 200))
+  check(
+    installedExpert?.plugin?.instructions?.includes('先给出结论'),
+    'expert-instructions-exposed-in-snapshot',
+    JSON.stringify(installedExpert?.plugin ?? null).slice(0, 300)
+  )
 
   await evaluate(`document.querySelector('[aria-label="关闭"]')?.click()`)
   await evaluate(`document.querySelector('[data-testid="open-skills"]').click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="hub-tab-connectors"]'))`)
   await evaluate(`document.querySelector('[data-testid="hub-tab-connectors"]').click()`)
   await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="connector-card-hub-connector"]'))`)
   const connectorText = await evaluate(`document.querySelector('[data-testid="connector-card-hub-connector"]')?.innerText ?? ''`)
@@ -369,6 +376,7 @@ try {
   await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="expert-card-hub-expert"]'))`)
   const expertText = await evaluate(`document.querySelector('[data-testid="expert-card-hub-expert"]')?.innerText ?? ''`)
   check(expertText.includes('行业研究专家') && expertText.includes('专家'), 'expert-card-rendered', expertText)
+  check(expertText.includes('在任务中使用'), 'expert-card-has-use-action', expertText)
   check(!(await evaluate(`Boolean(document.querySelector('[data-testid="expert-card-hub-connector"]'))`)), 'connector-not-in-experts')
   await evaluate(`(() => {
     const el = document.querySelector('[aria-label="搜索专家"]')
@@ -378,6 +386,58 @@ try {
   check(await waitFor(evaluate, `document.body.innerText.includes('没有找到匹配的专家')`), 'expert-search-empty')
   await shot('skills-hub-experts')
 
+  await evaluate(`document.querySelector('[aria-label="清空搜索"]')?.click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="use-expert-hub-expert"]'))`)
+  await evaluate(`document.querySelector('[data-testid="use-expert-hub-expert"]')?.click()`)
+  const expertBound = await waitFor(
+    evaluate,
+    `Boolean(document.querySelector('[data-testid="active-expert-banner"]'))`,
+    20000
+  )
+  const activeBanner = await evaluate(
+    `document.querySelector('[data-testid="active-expert-banner"]')?.innerText ?? ''`
+  )
+  check(expertBound && activeBanner.includes('行业研究专家'), 'expert-use-creates-bound-conversation', activeBanner)
+  check(
+    !(await evaluate(`Boolean(document.querySelector('[aria-label="专家·技能·连接器"]'))`)),
+    'expert-use-closes-hub'
+  )
+  const listAfterExpert = await evaluate(`window.openwb.conversation.list()`)
+  const bound = (listAfterExpert?.conversations ?? []).find((c) => c.expertId === 'hub-expert')
+  check(
+    Boolean(bound) && bound.expertName === '行业研究专家' && bound.title.includes('行业研究专家'),
+    'expert-binding-visible-in-sidebar-data',
+    JSON.stringify(bound ?? null).slice(0, 300)
+  )
+  await shot('skills-hub-expert-bound')
+
+  await evaluate(`window.openwb.conversation.send({
+    text: '只回复 ok',
+    mode: 'craft',
+    conversationId: ${JSON.stringify(bound?.id ?? '')}
+  })`)
+  const replyVisible = await waitFor(
+    evaluate,
+    `document.body.innerText.includes('[mock:craft]')`,
+    30000
+  )
+  check(replyVisible, 'expert-run-completes')
+  try {
+    const traceFiles = readdirSync(join(workspace, '.openwb/traces'))
+      .filter((name) => name.startsWith('prompt-'))
+      .sort()
+    const latest = JSON.parse(readFileSync(join(workspace, '.openwb/traces', traceFiles.at(-1)), 'utf8'))
+    check(Array.isArray(latest.injected) && latest.injected.includes('expert'), 'expert-section-traced', JSON.stringify(latest.injected ?? null))
+    check(
+      !JSON.stringify(latest).includes('先给出结论,再列出关键证据'),
+      'trace-does-not-leak-expert-instructions'
+    )
+  } catch (err) {
+    check(false, 'expert-trace-readable', err.message)
+  }
+
+  await evaluate(`document.querySelector('[data-testid="open-skills"]').click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="hub-tab-connectors"]'))`)
   await evaluate(`document.querySelector('[data-testid="hub-tab-connectors"]').click()`)
   await evaluate(`(() => {
     const b = Array.from(document.querySelectorAll('[aria-label="连接器分类"] button')).find((x) => x.textContent.includes('企业连接器'))
