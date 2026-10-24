@@ -150,6 +150,9 @@ try {
   )
   check(activeScene === '办公', 'default-scene-working', activeScene)
 
+  const heroSubtitle = await evaluate(`document.querySelector('.owb-welcome__hero p')?.textContent?.trim() ?? ''`)
+  check(heroSubtitle === '你的职场超能力', 'hero-subtitle-working', heroSubtitle)
+
   const capabilities = await evaluate(
     `Array.from(document.querySelectorAll('.owb-capability')).map((b) => b.textContent.trim())`
   )
@@ -226,6 +229,56 @@ try {
 
   const suggestions = await evaluate(`document.querySelectorAll('.owb-suggestion').length`)
   check(suggestions === 4, 'suggestion-count', String(suggestions))
+
+  // 场景切换不仅换 tab,能力和推荐内容也要随之变化。
+  const workingCaps = capabilities
+  const firstSuggestions = await evaluate(
+    `Array.from(document.querySelectorAll('.owb-suggestion')).map((b) => b.textContent.trim())`
+  )
+  await evaluate(`document.querySelector('.owb-scene-tab[data-scene="coding"]').click()`)
+  await sleep(300)
+  const codingCaps = await evaluate(
+    `Array.from(document.querySelectorAll('.owb-capability')).map((b) => b.textContent.trim())`
+  )
+  const codingSubtitle = await evaluate(`document.querySelector('.owb-welcome__hero p')?.textContent?.trim() ?? ''`)
+  const codingSuggestions = await evaluate(
+    `Array.from(document.querySelectorAll('.owb-suggestion')).map((b) => b.textContent.trim())`
+  )
+  check(codingSubtitle === '你的开发超能力', 'hero-subtitle-coding', codingSubtitle)
+  check(
+    codingCaps.includes('代码审查') && codingCaps.join('|') !== workingCaps.join('|'),
+    'capabilities-per-scene',
+    JSON.stringify(codingCaps)
+  )
+  check(
+    JSON.stringify(codingSuggestions) !== JSON.stringify(firstSuggestions),
+    'suggestions-per-scene'
+  )
+
+  await evaluate(`document.querySelector('[data-testid="refresh-suggestions"]').click()`)
+  await sleep(300)
+  const refreshedSuggestions = await evaluate(
+    `Array.from(document.querySelectorAll('.owb-suggestion')).map((b) => b.textContent.trim())`
+  )
+  check(
+    JSON.stringify(refreshedSuggestions) !== JSON.stringify(codingSuggestions),
+    'suggestions-refresh',
+    JSON.stringify(refreshedSuggestions)
+  )
+  const refreshedDraft = await evaluate(`document.querySelector('textarea[data-testid="composer-input"]')?.value ?? ''`)
+  check(refreshedDraft === '', 'refresh-does-not-fill-input', refreshedDraft)
+
+  await evaluate(`document.querySelector('.owb-scene-tab[data-scene="design"]').click()`)
+  await sleep(300)
+  const designCaps = await evaluate(
+    `Array.from(document.querySelectorAll('.owb-capability')).map((b) => b.textContent.trim())`
+  )
+  const designSubtitle = await evaluate(`document.querySelector('.owb-welcome__hero p')?.textContent?.trim() ?? ''`)
+  check(designSubtitle === '你的设计超能力', 'hero-subtitle-design', designSubtitle)
+  check(designCaps.includes('页面设计'), 'capabilities-design', JSON.stringify(designCaps))
+
+  await evaluate(`document.querySelector('.owb-scene-tab[data-scene="working"]').click()`)
+  await sleep(300)
 
   // 能力胶囊只填充输入框,不应偷偷发送。
   await evaluate(`Array.from(document.querySelectorAll('.owb-capability')).find((b) => b.textContent.trim() === '文档').click()`)

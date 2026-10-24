@@ -1078,6 +1078,14 @@ input, textarea { font-family: inherit; }
 .owb-suggestion:hover { background: var(--owb-bg-hover); color: var(--owb-text-primary); }
 .owb-suggestion__arrow { color: var(--owb-text-tertiary); flex-shrink: 0; }
 .owb-suggestion:disabled { opacity: 0.5; cursor: not-allowed; }
+.owb-suggestion-refresh {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 8px; padding: 6px 10px; border: none; background: transparent;
+  border-radius: var(--owb-radius-full); color: var(--owb-text-tertiary);
+  font-size: 12px; cursor: pointer;
+}
+.owb-suggestion-refresh:hover:not(:disabled) { background: var(--owb-bg-hover); color: var(--owb-text-secondary); }
+.owb-suggestion-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .owb-footer {
   flex-shrink: 0; padding: 12px 0 16px; text-align: center;
