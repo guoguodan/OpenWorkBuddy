@@ -201,6 +201,7 @@ export default function App() {
     model: null
   })
   const [modelLabel, setModelLabel] = useState('')
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [activeColleague, setActiveColleague] = useState<{ id: string; name: string } | null>(null)
   const [activeExpert, setActiveExpert] = useState<{ id: string; name: string } | null>(null)
   const streaming = useRef(false)
@@ -307,10 +308,14 @@ export default function App() {
   }, [])
 
   const loadSettings = useCallback(async () => {
-    const r = await window.openwb.settings.get()
-    setSettings(r.settings)
-    setModelLabel(r.model)
-    return r
+    try {
+      const r = await window.openwb.settings.get()
+      setSettings(r.settings)
+      setModelLabel(r.model)
+      return r
+    } finally {
+      setSettingsLoaded(true)
+    }
   }, [])
 
   const loadUnreadNotifications = useCallback(async () => {
@@ -967,6 +972,18 @@ export default function App() {
     }
   }
 
+  const changeModel = async (name: string | null) => {
+    const value = name?.trim() || null
+    try {
+      const r = await window.openwb.settings.set({ key: 'model', value })
+      setSettings(r.settings)
+      await loadSettings()
+      note('info', `已切换模型: ${value ?? '跟随环境默认'}`)
+    } catch (err) {
+      note('system', `切换模型失败: ${(err as Error).message}`)
+    }
+  }
+
   const handleMore = (entry: MoreEntry) => {
     if (entry === 'projects') {
       setSheet('projects')
@@ -1009,13 +1026,16 @@ export default function App() {
       workspaceLabel={workspaceLabel}
       workspacePath={workspacePath}
       permission={settings.permissionMode}
-      modelLabel={modelLabel || '未配置模型'}
+      modelLabel={modelLabel}
+      modelLoading={!settingsLoaded}
+      modelOptions={[...new Set([modelLabel, 'gpt-4o-mini', 'gpt-4.1-mini', 'bai/deepseek-v4-flash'].filter(Boolean))]}
       attachments={attachments}
       onChange={setInput}
       onSend={() => void send()}
       onStop={() => void stopGenerate()}
       onPickSkill={setSelectedSkill}
       onPickPermission={(next) => void changePermission(next)}
+      onPickModel={(next) => void changeModel(next)}
       onOpenWorkspace={() => void openWorkspace()}
       onListFiles={async () => {
         const r = await window.openwb.workspace.files({ limit: 400, maxDepth: 4 })

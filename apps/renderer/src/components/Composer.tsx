@@ -37,11 +37,14 @@ interface ComposerProps {
   workspacePath: string
   permission: PermissionMode
   modelLabel: string
+  modelLoading?: boolean
+  modelOptions?: string[]
   onChange: (v: string) => void
   onSend: () => void
   onStop: () => void
   onPickSkill: (name: string | null) => void
   onPickPermission: (mode: PermissionMode) => void
+  onPickModel: (name: string) => void
   onOpenWorkspace: () => void
   onListFiles: () => Promise<ComposerAttachment[]>
   onAddAttachment: (file: ComposerAttachment) => void
@@ -106,11 +109,14 @@ export function Composer({
   workspacePath,
   permission,
   modelLabel,
+  modelLoading = false,
+  modelOptions = [],
   onChange,
   onSend,
   onStop,
   onPickSkill,
   onPickPermission,
+  onPickModel,
   onOpenWorkspace,
   onListFiles,
   onAddAttachment,
@@ -118,7 +124,8 @@ export function Composer({
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
-  const [menu, setMenu] = useState<'file' | 'skill' | 'permission' | null>(null)
+  const [menu, setMenu] = useState<'file' | 'skill' | 'permission' | 'model' | null>(null)
+  const [modelDraft, setModelDraft] = useState('')
   const [atQuery, setAtQuery] = useState('')
   const [slashQuery, setSlashQuery] = useState('')
   const [files, setFiles] = useState<ComposerAttachment[]>([])
@@ -150,6 +157,19 @@ export function Composer({
   useEffect(resize, [value])
 
   const currentPermission = PERMISSIONS.find((item) => item.id === permission) ?? PERMISSIONS[0]!
+  // 设置是通过 IPC 异步读取的。首帧直接显示“未配置模型”会让用户误以为
+  // 模型丢了,所以加载阶段单独显示占位状态。
+  const currentModel = modelLoading ? '加载中…' : modelLabel.trim() || '未配置模型'
+  const models = useMemo(() => {
+    return [...new Set([modelLabel, ...modelOptions].map((item) => item.trim()).filter(Boolean))]
+  }, [modelLabel, modelOptions])
+  const pickModel = (name: string) => {
+    const next = name.trim()
+    if (!next) return
+    onPickModel(next)
+    setModelDraft('')
+    setMenu(null)
+  }
 
   const loadFiles = async () => {
     if (filesLoading) return
@@ -446,11 +466,67 @@ export function Composer({
           </div>
 
           <div className="owb-composer__right">
-            <span className="owb-composer__model" title="当前模型">
+            <button
+              type="button"
+              className="owb-composer__model"
+              title="切换模型"
+              aria-label="切换模型"
+              aria-haspopup="menu"
+              aria-expanded={menu === 'model'}
+              aria-disabled={modelLoading}
+              data-testid="model-picker-trigger"
+              onClick={() => {
+                if (modelLoading) return
+                setModelDraft('')
+                setMenu(menu === 'model' ? null : 'model')
+              }}
+            >
               <IconModel size={15} className="owb-composer__model-icon" />
-              <span className="owb-composer__model-text">{modelLabel}</span>
+              <span className="owb-composer__model-text">{currentModel}</span>
               <IconChevron size={12} className="owb-composer__model-chevron" />
-            </span>
+            </button>
+            {menu === 'model' ? (
+              <div className="owb-composer__menu owb-composer__menu--model" role="menu" aria-label="选择模型" data-testid="model-picker">
+                <div className="owb-composer__menu-title">选择模型</div>
+                {models.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={name === modelLabel.trim()}
+                    className="owb-composer__menu-item"
+                    onClick={() => pickModel(name)}
+                    data-testid={`model-option-${name}`}
+                  >
+                    <span className="owb-composer__picker-name">
+                      <IconModel size={14} />
+                      {name}
+                    </span>
+                    {name === modelLabel.trim() ? <span className="owb-composer__tick">✓</span> : null}
+                  </button>
+                ))}
+                <div className="owb-composer__menu-divider" />
+                <form
+                  className="owb-composer__model-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    pickModel(modelDraft)
+                  }}
+                >
+                  <input
+                    value={modelDraft}
+                    onChange={(event) => setModelDraft(event.target.value)}
+                    placeholder="输入模型名,例如 gpt-4o-mini"
+                    aria-label="自定义模型名"
+                    data-testid="model-input"
+                  />
+                  <button type="submit" disabled={!modelDraft.trim()} data-testid="model-use-custom">
+                    使用
+                  </button>
+                </form>
+                <div className="owb-composer__menu-hint">模型需与当前 OPENAI_BASE_URL 网关兼容。</div>
+              </div>
+            ) : null}
             <button type="button" className="owb-icon-btn owb-composer__icon" title="语音输入" aria-label="语音输入">
               <IconMic size={17} />
             </button>

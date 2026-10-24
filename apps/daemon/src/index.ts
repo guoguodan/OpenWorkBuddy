@@ -12,7 +12,7 @@ import {
   type ToolExecutionOptions
 } from 'ai'
 import { z } from 'zod'
-import { model } from './model.js'
+import { modelFor, resolveModelName } from './model.js'
 import {
   loadModes,
   assertRequiredModes,
@@ -250,7 +250,6 @@ const HISTORY_LIMITS: HistoryLimits = {
 }
 /** 压缩后至少保留原文的条数;低于 6 条时模型很难接上"刚才那个"这类指代。 */
 const HISTORY_MIN_KEEP = 6
-const MODEL_NAME = process.env.OPENWB_MODEL ?? 'unknown'
 const SYNC_URL = process.env.OPENWB_SYNC_URL?.trim() ?? ''
 const SYNC_TOKEN = process.env.OPENWB_SYNC_TOKEN?.trim() || undefined
 /** 审批授权默认 30 天;显式配置用于测试与合规缩短 */
@@ -1348,8 +1347,11 @@ async function maybeAutoTitle(input: {
   let title = fallbackConversationTitle(input.text)
   if (!MOCK) {
     try {
+      // 标题生成与外层对话使用同一个模型,否则用户切换模型后标题仍由旧模型
+      // 产生,在计费与一致性上都会出现难以解释的偏差。
+      const titleModel = modelFor(getWorkspaceSettings(db, workspaceId).model)
       const result = await generateText({
-        model,
+        model: titleModel,
         system:
           '你是会话标题生成器。根据用户的第一条请求,输出一个中文短标题。要求:只输出标题本身;不超过 16 个汉字;不要标点、引号、编号或"标题:"前缀;概括任务目标,不要复述客套话。',
         prompt: input.text.slice(0, 2000),
@@ -1967,8 +1969,9 @@ async function prepareModelHistory(input: {
     let fallback = false
     let nextSummary = ''
     try {
+      const summaryModel = modelFor(getWorkspaceSettings(input.db, workspaceId).model)
       const result = await generateText({
-        model,
+        model: summaryModel,
         system: prompt.system,
         prompt: prompt.prompt,
         maxTokens: 800,
@@ -2121,6 +2124,11 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   transitionTask(db, taskId, 'running')
   appendEvent(db, conversationId, 'run.started', { taskId, mode: mode.id })
 
+  // 模型在一轮开始时确定:中途改设置不能改变已经发出的请求,
+  // 否则同一条回复可能前半段来自 A、后半段来自 B,日志也无法解释。
+  const selectedModel = resolveModelName(getWorkspaceSettings(db, workspaceId).model)
+  const activeModel = modelFor(selectedModel)
+
   // 从这里开始才是可取消的模型运行。准备阶段(记忆、提示词)很快,
   // 提前注册反而会让"停止"落在还没开始的请求上。
   const controller = new AbortController()
@@ -2183,7 +2191,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
         let producedOutput = false
         try {
           const attemptResult = streamText({
-            model,
+            model: activeModel,
             system: prepared.system,
             messages,
             tools,
@@ -2288,7 +2296,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
     if (!reply.trim()) {
       try {
         const wrapUp = streamText({
-          model,
+          model: activeModel,
           system: `${prepared.system}\n\n# 收尾\n工具调用预算已用尽。不要再调用工具,直接基于目前已知的信息回答用户;拿不到的信息要明确说明没查到。`,
           messages: [
             ...messages,
@@ -2341,7 +2349,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
       conversationId,
       role: 'assistant',
       content: { text: reply },
-      ...(activeSkill ? { model: `${MODEL_NAME}#${activeSkill}` } : { model: MODEL_NAME }),
+      ...(activeSkill ? { model: `${selectedModel}#${activeSkill}` } : { model: selectedModel }),
       tokenIn: totalInput,
       tokenOut: totalOutput
     })
@@ -2383,7 +2391,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
         role: 'assistant',
         content: { text: reply },
         status: 'interrupted',
-        ...(activeSkill ? { model: `${MODEL_NAME}#${activeSkill}` } : { model: MODEL_NAME }),
+        ...(activeSkill ? { model: `${selectedModel}#${activeSkill}` } : { model: selectedModel }),
         tokenIn: totalInput,
         tokenOut: totalOutput
       })
@@ -2507,12 +2515,13 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
   }
 
   if (msg.cmd === 'settings.get') {
+    const current = getWorkspaceSettings(db, workspaceId)
     emit({
       ...base,
       type: 'settings.get',
-      settings: getWorkspaceSettings(db, workspaceId),
+      settings: current,
       workspace: WORKSPACE,
-      model: process.env.OPENWB_MODEL ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+      model: resolveModelName(current.model),
       openSkillsDir: userSkillsRoot()
     })
     return true
@@ -2526,9 +2535,20 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     if (key === 'permissionMode' && msg.value !== 'default' && msg.value !== 'fullAccess' && msg.value !== 'readOnly') {
       throw new Error('permissionMode 必须是 default / fullAccess / readOnly')
     }
+    if (key === 'model' && msg.value !== null && typeof msg.value !== 'string') {
+      throw new Error('model 必须是字符串或 null')
+    }
+    if (key === 'model' && typeof msg.value === 'string' && msg.value.includes('\n')) {
+      throw new Error('model 不能包含换行')
+    }
     const value = msg.value === null ? null : typeof msg.value === 'string' ? msg.value : String(msg.value)
     const settings = setWorkspaceSetting(db, workspaceId, key as SettingKey, value)
-    emit({ ...base, type: 'settings.updated', settings })
+    emit({
+      ...base,
+      type: 'settings.updated',
+      settings,
+      ...(key === 'model' ? { model: resolveModelName(settings.model) } : {})
+    })
     return true
   }
 

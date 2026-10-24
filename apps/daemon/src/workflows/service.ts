@@ -13,6 +13,7 @@ import {
   skipAutomation,
   transitionTask,
   updateAutomation,
+  getWorkspaceSettings,
   type AutomationRecord
 } from '@openwb/storage'
 import type { ToolRegistry } from '@openwb/tools'
@@ -302,6 +303,7 @@ export class WorkflowService {
       const { outcome } = await runWorkflow({
         manifest,
         runId,
+        modelName: getWorkspaceSettings(this.deps.db, this.deps.workspaceId).model,
         inputs: input.inputs,
         workspaceRoot: this.deps.workspaceRoot,
         registry: this.deps.registry,

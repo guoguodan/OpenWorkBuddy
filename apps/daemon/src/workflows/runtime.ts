@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { resolve } from 'node:path'
 import { generateText } from 'ai'
-import { model } from '../model.js'
+import { modelFor } from '../model.js'
 import type { ToolRegistry } from '@openwb/tools'
 import {
   FileRunStore,
@@ -123,14 +123,17 @@ function mockPrompt(controls: MockControls) {
   }
 }
 
-async function realPrompt(req: PromptRequest): Promise<string> {
-  const result = await generateText({
-    model,
-    system: '你是工作流执行器中的一个步骤。严格按用户要求的格式输出。只输出要求的 JSON 或正文,不要额外寒暄。',
-    prompt: req.repair ? `${req.prompt}\n\n上一次输出不合格:${req.repair}\n请修正后重新输出。` : req.prompt,
-    abortSignal: req.signal
-  })
-  return result.text
+function realPromptFor(modelName: string | null | undefined) {
+  const active = modelFor(modelName)
+  return async (req: PromptRequest): Promise<string> => {
+    const result = await generateText({
+      model: active,
+      system: '你是工作流执行器中的一个步骤。严格按用户要求的格式输出。只输出要求的 JSON 或正文,不要额外寒暄。',
+      prompt: req.repair ? `${req.prompt}\n\n上一次输出不合格:${req.repair}\n请修正后重新输出。` : req.prompt,
+      abortSignal: req.signal
+    })
+    return result.text
+  }
 }
 
 export interface ToolResolverDeps {
@@ -171,6 +174,8 @@ export function buildToolResolver(deps: ToolResolverDeps) {
 export interface RunWorkflowInput {
   manifest: WorkflowManifest
   runId: string
+  /** 用户在工作区设置里选择的模型;空值表示使用环境变量默认值 */
+  modelName?: string | null
   inputs: Record<string, unknown>
   workspaceRoot: string
   registry: ToolRegistry
@@ -187,7 +192,7 @@ export async function runWorkflow(input: RunWorkflowInput) {
   const store = new FileRunStore(input.workspaceRoot)
   const controls = mockControls()
   const engine = new WorkflowEngine(input.manifest, {
-    prompt: mock ? mockPrompt(controls) : realPrompt,
+    prompt: mock ? mockPrompt(controls) : realPromptFor(input.modelName),
     tool: buildToolResolver({
       registry: input.registry,
       workspaceRoot: input.workspaceRoot,
