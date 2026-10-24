@@ -237,6 +237,19 @@ try {
     '刷新后重命名结果从数据库恢复'
   )
 
+  await evaluate(`document.querySelector('[data-testid="artifact-view-all"]')?.click()`)
+  check(
+    await waitFor(evaluate, `Boolean(document.querySelector('.owb-sheet')) && document.body.textContent.includes('资料库')`),
+    '查看所有产物打开资料库'
+  )
+  await evaluate(`document.querySelector('[aria-label="关闭资料库"]')?.click()`)
+  await waitFor(evaluate, `!document.querySelector('.owb-sheet')`)
+  await evaluate(`document.querySelector('[data-testid="artifact-panel-trigger"]')?.click()`)
+  check(
+    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="artifact-panel"]'))`),
+    '关闭资料库后重新打开产物面板'
+  )
+
   await evaluate(`window.confirm = () => true`)
   await evaluate(`document.querySelector('[data-testid="artifact-remove"]')?.click()`)
   check(

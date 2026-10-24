@@ -97,14 +97,14 @@ export function ContentHeader({
         <button
           type="button"
           className="owb-content-header__tool"
-          title="交付物"
-          aria-label="交付物"
+          title="产物"
+          aria-label="产物"
           aria-pressed={artifactPanelOpen}
           data-testid="artifact-panel-trigger"
           onClick={onToggleArtifacts}
         >
           <IconFile size={16} />
-          <span>交付物</span>
+          <span>产物</span>
           {artifactCount > 0 ? <span className="owb-content-header__badge">{artifactCount}</span> : null}
         </button>
         <button

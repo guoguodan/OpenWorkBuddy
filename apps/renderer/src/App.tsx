@@ -1343,6 +1343,10 @@ export default function App() {
                 onRename={(item, title) => void renameArtifact(item, title)}
                 onRemove={(item) => void removeArtifact(item)}
                 onReveal={(item) => void revealArtifact(item)}
+                onOpenAll={() => {
+                  setShowArtifacts(false)
+                  setSheet('library')
+                }}
                 onNotify={note}
               />
             ) : null}

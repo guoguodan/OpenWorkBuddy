@@ -12,6 +12,7 @@ interface ArtifactPanelProps {
   onRename: (artifact: ArtifactInfo, title: string) => void
   onRemove: (artifact: ArtifactInfo) => void
   onReveal: (artifact: ArtifactInfo) => void
+  onOpenAll: () => void
   onNotify: (kind: 'info' | 'system', text: string) => void
 }
 
@@ -44,7 +45,7 @@ function sizeText(size: number | undefined): string {
 }
 
 /**
- * 会话级交付物面板。
+ * 会话级产物面板。
  *
  * 任务过程中产生的成果需要在同一个地方集中查看,否则用户只能往回翻消息。
  * 面板只负责展示与记录级操作;打开文件、定位和删除磁盘文件都交给主进程
@@ -58,6 +59,7 @@ export function ArtifactPanel({
   onRename,
   onRemove,
   onReveal,
+  onOpenAll,
   onNotify
 }: ArtifactPanelProps) {
   const [filter, setFilter] = useState<FilterKind>('all')
@@ -124,22 +126,22 @@ export function ArtifactPanel({
 
   const remove = (item: ArtifactInfo) => {
     const confirmed = window.confirm(
-      `从交付物列表移除「${item.title}」?\n\n只会删除这条记录,工作区里的文件仍然保留。`
+      `从产物列表移除「${item.title}」?\n\n只会删除这条记录,工作区里的文件仍然保留。`
     )
     if (confirmed) onRemove(item)
   }
 
   return (
-    <aside className="owb-artifact-panel" data-testid="artifact-panel" aria-label="交付物">
+    <aside className="owb-artifact-panel" data-testid="artifact-panel" aria-label="产物">
       <header className="owb-artifact-panel__header">
         <div className="owb-artifact-panel__heading">
-          <h2>交付物</h2>
+          <h2>产物</h2>
           <span className="owb-artifact-panel__count">{artifacts.length}</span>
         </div>
         <button
           type="button"
           className="owb-icon-btn"
-          aria-label="关闭交付物面板"
+          aria-label="关闭产物面板"
           data-testid="artifact-panel-close"
           onClick={onClose}
         >
@@ -152,8 +154,8 @@ export function ArtifactPanel({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索交付物"
-          aria-label="搜索交付物"
+          placeholder="搜索产物"
+          aria-label="搜索产物"
           data-testid="artifact-panel-search"
         />
       </div>
@@ -179,13 +181,13 @@ export function ArtifactPanel({
         {artifacts.length === 0 ? (
           <div className="owb-artifact-panel__empty">
             <IconFile size={28} />
-            <strong>还没有交付物</strong>
-            <span>助手完成任务并交付文件后，会集中出现在这里。</span>
+            <strong>还没有产物</strong>
+            <span>对话过程中产生的所有产物都沉淀在这里。</span>
           </div>
         ) : visible.length === 0 ? (
           <div className="owb-artifact-panel__empty">
             <IconSearch size={26} />
-            <strong>没有匹配的交付物</strong>
+            <strong>没有匹配的产物</strong>
             <span>换个关键词或筛选项试试。</span>
           </div>
         ) : (
@@ -213,7 +215,7 @@ export function ArtifactPanel({
                         data-testid="artifact-rename-input"
                         value={draft}
                         maxLength={200}
-                        aria-label="交付物名称"
+                        aria-label="产物名称"
                         onClick={(event) => event.stopPropagation()}
                         onChange={(event) => setDraft(event.target.value)}
                         onBlur={() => {
@@ -296,6 +298,17 @@ export function ArtifactPanel({
           })
         )}
       </div>
+
+      <footer className="owb-artifact-panel__footer">
+        <button
+          type="button"
+          className="owb-artifact-panel__all"
+          data-testid="artifact-view-all"
+          onClick={onOpenAll}
+        >
+          查看所有产物
+        </button>
+      </footer>
     </aside>
   )
 }
