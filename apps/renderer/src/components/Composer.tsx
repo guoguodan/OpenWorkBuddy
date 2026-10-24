@@ -5,8 +5,10 @@ import {
   IconChevron,
   IconFile,
   IconFolder,
+  IconImage,
   IconMic,
   IconModel,
+  IconPlus,
   IconStop,
   IconTool,
   IconX
@@ -23,6 +25,7 @@ export interface ComposerAttachment {
   path: string
   name: string
   size: number
+  kind?: 'file' | 'image'
 }
 
 interface ComposerProps {
@@ -51,7 +54,10 @@ interface ComposerProps {
   onOpenWorkspace: () => void
   onListFiles: () => Promise<ComposerAttachment[]>
   onAddAttachment: (file: ComposerAttachment) => void
+  onAddAttachments: (files: ComposerAttachment[]) => void
   onRemoveAttachment: (path: string) => void
+  onPickAttachments: () => Promise<void>
+  onImportDroppedFiles: (files: File[]) => Promise<void>
 }
 
 const PERMISSIONS: Array<{ id: PermissionMode; label: string; detail: string }> = [
@@ -60,7 +66,7 @@ const PERMISSIONS: Array<{ id: PermissionMode; label: string; detail: string }> 
   { id: 'readOnly', label: '只读', detail: '禁止写入、删除与执行命令' }
 ]
 
-const MAX_ATTACHMENTS = 20
+const MAX_ATTACHMENTS = 50
 
 function formatSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return ''
@@ -126,7 +132,10 @@ export function Composer({
   onOpenWorkspace,
   onListFiles,
   onAddAttachment,
-  onRemoveAttachment
+  onAddAttachments,
+  onRemoveAttachment,
+  onPickAttachments,
+  onImportDroppedFiles
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -139,6 +148,8 @@ export function Composer({
   const [filesLoaded, setFilesLoaded] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const pendingRef = useRef<{ kind: 'file' | 'skill'; start: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
 
   useEffect(() => {
     if (autoFocus) ref.current?.focus()
@@ -161,6 +172,49 @@ export function Composer({
   }
 
   useEffect(resize, [value])
+
+  /**
+   * 文件拖拽是全窗口行为:用户不会精确瞄准输入框,只要把文件拖进页面就应能添加。
+   * dragenter/dragleave 会冒泡经过大量子节点,用计数避免覆盖层闪烁。
+   */
+  useEffect(() => {
+    const hasFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types ?? []).includes('Files')
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      dragDepth.current += 1
+      setDragging(true)
+    }
+    const onDragOver = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    }
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      dragDepth.current = Math.max(0, dragDepth.current - 1)
+      if (dragDepth.current === 0) setDragging(false)
+    }
+    const onDrop = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      dragDepth.current = 0
+      setDragging(false)
+      const dropped = Array.from(event.dataTransfer?.files ?? [])
+      if (dropped.length > 0) void onImportDroppedFiles(dropped)
+    }
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [onImportDroppedFiles])
 
   const currentPermission = PERMISSIONS.find((item) => item.id === permission) ?? PERMISSIONS[0]!
   // 设置是通过 IPC 异步读取的。首帧直接显示“未配置模型”会让用户误以为
@@ -333,6 +387,15 @@ export function Composer({
 
   return (
     <div className="owb-composer" data-testid="composer" ref={rootRef}>
+      {dragging ? (
+        <div className="owb-composer__drop" data-testid="attachment-drop-overlay" aria-live="polite">
+          <div className="owb-composer__drop-card">
+            <IconPlus size={24} />
+            <strong>松开即可添加文件</strong>
+            <span>支持文档、代码与图片，最多 {MAX_ATTACHMENTS} 个</span>
+          </div>
+        </div>
+      ) : null}
       <div className="owb-composer__box">
         {menu === 'file' ? (
           <div className="owb-composer__picker" role="listbox" aria-label="添加上下文" data-testid="composer-picker">
@@ -415,8 +478,8 @@ export function Composer({
           {attachments.length > 0 ? (
             <div className="owb-composer__attachments" aria-label="已添加上下文">
               {attachments.map((file) => (
-                <span key={file.path} className="owb-composer__attachment" data-testid="attachment-chip" title={file.path}>
-                  <IconFile size={13} />
+                <span key={file.path} className="owb-composer__attachment" data-testid="attachment-chip" data-kind={file.kind ?? 'file'} title={file.name}>
+                  {file.kind === 'image' ? <IconImage size={13} /> : <IconFile size={13} />}
                   <span className="owb-composer__attachment-name">{file.name}</span>
                   <button
                     type="button"
@@ -457,6 +520,16 @@ export function Composer({
 
         <div className="owb-composer__toolbar">
           <div className="owb-composer__left">
+            <button
+              type="button"
+              className="owb-icon-btn owb-composer__icon"
+              title="添加文件"
+              aria-label="添加文件"
+              data-testid="attachment-picker-trigger"
+              onClick={() => void onPickAttachments()}
+            >
+              <IconPlus size={17} />
+            </button>
             {selectedSkill ? (
               <button
                 type="button"

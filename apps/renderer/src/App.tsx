@@ -106,6 +106,8 @@ const FILTER_KEY = 'owb.task.filter.v1'
  * `localStorage.setItem('owb.showRunDiagnostics','1')` 并刷新即可。
  */
 const DIAGNOSTICS_KEY = 'owb.showRunDiagnostics'
+/** 与主进程附件模块保持一致:输入框与发送协议都不能绕过这个上限。 */
+const MAX_COMPOSER_ATTACHMENTS = 50
 
 function showRunDiagnostics(): boolean {
   try {
@@ -164,7 +166,36 @@ function parseContextPaths(text: string): string[] {
     const value = match[1]?.trim()
     if (value && !found.includes(value)) found.push(value)
   }
-  return found.slice(0, 20)
+  return found.slice(0, MAX_COMPOSER_ATTACHMENTS)
+}
+
+/**
+ * 用户消息里的附件是结构化元数据,而不是拼进正文的 @ 路径。
+ * 恢复历史时只接受完整字段,避免旧数据或外部输入把内部路径渲染成正文。
+ */
+function attachmentListFromContent(content: unknown): ComposerAttachment[] {
+  if (!content || typeof content !== 'object') return []
+  const raw = (content as { attachments?: unknown }).attachments
+  if (!Array.isArray(raw)) return []
+  const out: ComposerAttachment[] = []
+  const seen = new Set<string>()
+  for (const item of raw.slice(0, MAX_COMPOSER_ATTACHMENTS)) {
+    if (!item || typeof item !== 'object') continue
+    const path = (item as { path?: unknown }).path
+    const name = (item as { name?: unknown }).name
+    const size = (item as { size?: unknown }).size
+    const kind = (item as { kind?: unknown }).kind
+    if (typeof path !== 'string' || !path || typeof name !== 'string' || !name) continue
+    if (seen.has(path)) continue
+    seen.add(path)
+    out.push({
+      path,
+      name,
+      size: typeof size === 'number' && Number.isFinite(size) && size >= 0 ? size : 0,
+      kind: kind === 'image' ? 'image' : 'file'
+    })
+  }
+  return out
 }
 
 export default function App() {
@@ -284,6 +315,7 @@ export default function App() {
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => {
           const content = m.content as { text?: string } | null
+          const messageAttachments = attachmentListFromContent(m.content)
           return {
             id: m.id,
             role: m.role === 'user' ? 'user' : 'assistant',
@@ -291,7 +323,8 @@ export default function App() {
             seq: m.seq,
             createdAt: m.createdAt,
             feedback: m.feedback ?? null,
-            feedbackReason: m.feedbackReason ?? null
+            feedbackReason: m.feedbackReason ?? null,
+            ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {})
           } satisfies ChatMessage
         })
     )
@@ -308,15 +341,19 @@ export default function App() {
           Boolean(item) && typeof item === 'object' &&
           ((item as { role?: string }).role === 'user' || (item as { role?: string }).role === 'assistant')
         )
-        .map((m) => ({
-          id: m.id,
-          role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
-          text: m.content?.text ?? '',
-          ...(m.seq !== undefined ? { seq: m.seq } : {}),
-          ...(m.createdAt !== undefined ? { createdAt: m.createdAt } : {}),
-          feedback: m.feedback ?? null,
-          feedbackReason: m.feedbackReason ?? null
-        }) satisfies ChatMessage)
+        .map((m) => {
+          const messageAttachments = attachmentListFromContent(m.content)
+          return {
+            id: m.id,
+            role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
+            text: m.content?.text ?? '',
+            ...(m.seq !== undefined ? { seq: m.seq } : {}),
+            ...(m.createdAt !== undefined ? { createdAt: m.createdAt } : {}),
+            feedback: m.feedback ?? null,
+            feedbackReason: m.feedbackReason ?? null,
+            ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {})
+          } satisfies ChatMessage
+        })
     )
   }, [])
 
@@ -434,6 +471,19 @@ export default function App() {
         const bytes = e.bytes ?? 0
         const size = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} 字节`
         note('info', `已附加 ${e.injected ?? 0} 个文件 · ${size}${(e.paths ?? []).length > (e.injected ?? 0) ? ' · 部分文件读取失败' : ''}`)
+      } else if (e.type === 'attachment.loaded') {
+        const bytes = e.bytes ?? 0
+        const size = bytes >= 1024 * 1024
+          ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+          : bytes >= 1024
+            ? `${(bytes / 1024).toFixed(1)} KB`
+            : `${bytes} 字节`
+        note('info', `已读取 ${e.injected ?? 0} 个附件 · ${size}`)
+      } else if (e.type === 'attachment.rejected') {
+        const items = (e as { items?: Array<{ name?: string; reason?: string }> }).items ?? []
+        if (items.length > 0) {
+          note('warn', `附件未能读取: ${items.map((item) => `${item.name ?? ''} ${item.reason ?? ''}`.trim()).join('；')}`)
+        }
       } else if (e.type === 'memory.injected') {
         const truncated = e.truncatedTotal ?? 0
         const counts = (e.blocks ?? []).map((b) => `${b.scope}:${b.count}`).join(' ')
@@ -608,6 +658,61 @@ export default function App() {
     })
   }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, loadSettings, loadUnreadNotifications, note, applySnapshot])
 
+  /**
+   * 选择器与拖拽共用同一套合并规则:同一路径只保留一次,达到上限时不静默截断。
+   * 主进程负责复制与类型校验;这里只处理用户可见的结果。
+   */
+  const addImportedAttachments = useCallback(
+    (result: {
+      attachments: Array<{ path: string; name: string; size: number; kind: 'file' | 'image' }>
+      rejected: Array<{ name: string; reason: string }>
+      canceled?: boolean
+    }) => {
+      if (result.canceled) return
+      setAttachments((list) => {
+        const next = [...list]
+        for (const file of result.attachments) {
+          if (next.some((item) => item.path === file.path)) continue
+          if (next.length >= MAX_COMPOSER_ATTACHMENTS) break
+          next.push(file)
+        }
+        return next
+      })
+      if (result.rejected.length > 0) {
+        const first = result.rejected[0]!
+        const extra = result.rejected.length > 1 ? ` 等 ${result.rejected.length} 项` : ''
+        note('warn', `附件处理失败，请重试: ${first.name} ${first.reason}${extra}`)
+      }
+    },
+    [note]
+  )
+
+  const pickAttachments = useCallback(async () => {
+    try {
+      addImportedAttachments(await window.openwb.attachments.pick())
+    } catch (err) {
+      note('warn', `附件处理失败，请重试: ${(err as Error).message}`)
+    }
+  }, [addImportedAttachments, note])
+
+  const importDroppedFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return
+      try {
+        const payload = await Promise.all(
+          files.map(async (file) => ({
+            name: file.name,
+            data: new Uint8Array(await file.arrayBuffer())
+          }))
+        )
+        addImportedAttachments(await window.openwb.attachments.importData(payload))
+      } catch (err) {
+        note('warn', `附件处理失败，请重试: ${(err as Error).message}`)
+      }
+    },
+    [addImportedAttachments, note]
+  )
+
   const send = async () => {
     const text = input.trim()
     if ((!text && attachments.length === 0) || busy) return
@@ -619,24 +724,38 @@ export default function App() {
     setInput('')
     setTools([])
     setNotices([])
+    const sentAttachments = attachments
     setMessages((list) => [
       ...list,
       {
         id: `u-${Date.now()}-${list.length}`,
         role: 'user',
-        text: attachments.length > 0 ? `${outgoing}\n\n@ ${attachments.map((a) => a.path).join(' ')}` : outgoing,
+        text: outgoing,
+        ...(sentAttachments.length > 0 ? { attachments: sentAttachments } : {}),
         createdAt: new Date().toISOString()
       }
     ])
     const typedPaths = parseContextPaths(outgoing)
-    const contextPaths = Array.from(new Set([...attachments.map((a) => a.path), ...typedPaths])).slice(0, 20)
-    const sentAttachments = attachments
+    const contextPaths = Array.from(new Set(typedPaths)).slice(
+      0,
+      MAX_COMPOSER_ATTACHMENTS
+    )
     setAttachments([])
     try {
       await window.openwb.conversation.send({
         text: outgoing,
         mode,
         scene,
+        ...(sentAttachments.length > 0
+          ? {
+              attachments: sentAttachments.map(({ path, name, size, kind }) => ({
+                path,
+                name,
+                size,
+                kind: kind ?? 'file'
+              }))
+            }
+          : {}),
         ...(conversationId ? { conversationId } : {}),
         ...(selectedSkill ? { skill: selectedSkill } : {}),
         ...(activeColleague ? { colleagueId: activeColleague.id } : {}),
@@ -1201,9 +1320,26 @@ export default function App() {
         return r.files
       }}
       onAddAttachment={(file) =>
-        setAttachments((list) => (list.some((a) => a.path === file.path) || list.length >= 20 ? list : [...list, file]))
+        setAttachments((list) =>
+          list.some((a) => a.path === file.path) || list.length >= MAX_COMPOSER_ATTACHMENTS
+            ? list
+            : [...list, file]
+        )
+      }
+      onAddAttachments={(files) =>
+        setAttachments((list) => {
+          const next = [...list]
+          for (const file of files) {
+            if (next.some((item) => item.path === file.path)) continue
+            if (next.length >= MAX_COMPOSER_ATTACHMENTS) break
+            next.push(file)
+          }
+          return next
+        })
       }
       onRemoveAttachment={(path) => setAttachments((list) => list.filter((a) => a.path !== path))}
+      onPickAttachments={pickAttachments}
+      onImportDroppedFiles={importDroppedFiles}
     />
   )
 

@@ -58,7 +58,21 @@ export function trimHistoryMessages(
 function textOf(message: MessageRecord): string {
   const content = message.content as { text?: unknown } | null
   const text = content && typeof content === 'object' ? content.text : undefined
-  return typeof text === 'string' ? text.trim() : ''
+  if (typeof text !== 'string' || !text.trim()) return ''
+  // 历史里附件已经落到磁盘,重放时才是权威输入;这里只提醒模型前一轮带过附件,
+  // 避免把附件正文重复塞进上下文,也避免模型忘记自己看过哪些文件。
+  const raw = (content as { attachments?: unknown } | null)?.attachments
+  if (!Array.isArray(raw) || raw.length === 0) return text.trim()
+  const names = raw
+    .slice(0, 50)
+    .map((item) =>
+      item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string'
+        ? (item as { name: string }).name
+        : ''
+    )
+    .filter(Boolean)
+  if (names.length === 0) return text.trim()
+  return `${text.trim()}\n\n[上一轮附带文件:${names.join('、')}]`
 }
 
 /**

@@ -6,6 +6,12 @@ import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openw
 import { openExternal, openHtmlPreview, openImagePreview, openWithSystem, resolvePreview, type PreviewTarget } from './preview.js'
 import { readTextPreview } from './preview-policy.js'
 import { listWorkspaceFiles } from './workspace-files.js'
+import {
+  ATTACHMENT_ACCEPT,
+  importAttachmentData,
+  importAttachmentPaths,
+  type AttachmentImportData
+} from './attachments.js'
 
 app.setName('OpenWorkBuddy')
 
@@ -67,6 +73,55 @@ ipcMain.handle('workspace.open', async () => {
   return { path: target }
 })
 
+/**
+ * 输入框附件入口。
+ *
+ * 选择器返回的是系统路径，拖拽在渲染进程拿不到路径时直接传字节；
+ * 两条路径都在主进程校验并复制到工作区，daemon 仍然只读取工作区内文件。
+ */
+ipcMain.handle('attachment.pick', async () => {
+  await daemonReady
+  const result = await dialog.showOpenDialog({
+    title: '添加文件',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: '支持的文件', extensions: ATTACHMENT_ACCEPT.split(',').map((item) => item.slice(1)) },
+      { name: '所有文件', extensions: ['*'] }
+    ]
+  })
+  if (result.canceled || result.filePaths.length === 0) {
+    return { attachments: [], rejected: [], canceled: true }
+  }
+  const workspace = resolvedWorkspace ?? resolveWorkspace()
+  const imported = await importAttachmentPaths(workspace, result.filePaths)
+  return { ...imported, canceled: false }
+})
+
+ipcMain.handle('attachment.importPaths', async (_e, input: { paths?: unknown }) => {
+  await daemonReady
+  if (!input || !Array.isArray(input.paths) || input.paths.some((item) => typeof item !== 'string')) {
+    throw new Error('非法附件路径')
+  }
+  const workspace = resolvedWorkspace ?? resolveWorkspace()
+  return importAttachmentPaths(workspace, input.paths as string[])
+})
+
+ipcMain.handle('attachment.importData', async (_e, input: { files?: unknown }) => {
+  await daemonReady
+  if (!input || !Array.isArray(input.files)) throw new Error('非法附件数据')
+  const files: AttachmentImportData[] = []
+  for (const item of input.files) {
+    if (!item || typeof item !== 'object') throw new Error('非法附件数据')
+    const name = (item as { name?: unknown }).name
+    const data = (item as { data?: unknown }).data
+    if (typeof name !== 'string' || !name) throw new Error('缺少附件名称')
+    if (data instanceof Uint8Array) files.push({ name, data })
+    else if (data instanceof ArrayBuffer) files.push({ name, data })
+    else throw new Error('附件内容非法')
+  }
+  const workspace = resolvedWorkspace ?? resolveWorkspace()
+  return importAttachmentData(workspace, files)
+})
 ipcMain.handle('workspace.files', async (_e, input?: { limit?: number; maxDepth?: number }) => {
   await daemonReady
   const target = resolvedWorkspace ?? resolveWorkspace()
@@ -657,6 +712,7 @@ ipcMain.handle(
       expertId?: string
       scene?: string
       contextPaths?: string[]
+      attachments?: Array<{ path: string; name: string; size?: number; kind?: string }>
     }
   ) => {
   await daemonReady
@@ -687,6 +743,17 @@ ipcMain.handle(
   ) {
     throw new Error('非法上下文路径')
   }
+  if (input.attachments !== undefined) {
+    if (!Array.isArray(input.attachments)) throw new Error('非法附件')
+    for (const item of input.attachments) {
+      if (!item || typeof item !== 'object') throw new Error('非法附件')
+      if (typeof item.path !== 'string' || !item.path) throw new Error('非法附件路径')
+      if (typeof item.name !== 'string' || !item.name) throw new Error('非法附件名称')
+      if (item.kind !== undefined && item.kind !== 'file' && item.kind !== 'image') {
+        throw new Error('非法附件类型')
+      }
+    }
+  }
   // client_request_id 由渲染进程生成,主进程原样透传以支持幂等重发
   daemon.stdin.write(
     encodeFrame({
@@ -698,6 +765,9 @@ ipcMain.handle(
       ...(input.expertId ? { expertId: input.expertId } : {}),
       ...(input.scene ? { scene: input.scene } : {}),
       ...(input.contextPaths && input.contextPaths.length > 0 ? { contextPaths: input.contextPaths } : {}),
+      ...(input.attachments && input.attachments.length > 0
+        ? { attachments: input.attachments }
+        : {}),
       clientRequestId: `main-${Date.now()}-${++seq}`
     })
   )

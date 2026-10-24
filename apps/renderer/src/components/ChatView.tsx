@@ -6,6 +6,8 @@ import {
   IconLoader,
   IconRefresh,
   IconClock,
+  IconFile,
+  IconImage,
   IconThumbDown,
   IconThumbUp,
   IconTool,
@@ -29,6 +31,8 @@ export interface ChatMessage {
   streaming?: boolean
   feedback?: 'like' | 'dislike' | null
   feedbackReason?: string | null
+  /** 用户本轮添加的附件。只展示原始文件名,内部存储路径不进入气泡。 */
+  attachments?: Array<{ name: string; path: string; kind?: 'file' | 'image' }>
 }
 
 interface ChatViewProps {
@@ -431,7 +435,24 @@ export function ChatView({
                     ) : null}
                   </div>
                   {m.role === 'user' ? (
-                    <div className="owb-msg__bubble">{m.text}</div>
+                    <>
+                      {m.attachments && m.attachments.length > 0 ? (
+                        <div className="owb-msg__attachments" data-testid="message-attachments">
+                          {m.attachments.map((file) => (
+                            <span
+                              key={file.path}
+                              className="owb-msg__attachment"
+                              data-kind={file.kind ?? 'file'}
+                              title={file.path}
+                            >
+                              {file.kind === 'image' ? <IconImage size={13} /> : <IconFile size={13} />}
+                              <span className="owb-msg__attachment-name">{file.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="owb-msg__bubble">{m.text}</div>
+                    </>
                   ) : (
                     <>
                       {m.text ? (

@@ -442,6 +442,22 @@ input, textarea { font-family: inherit; }
 
 /* ============ 输入框 ============ */
 .owb-composer { width: 100%; min-width: 0; }
+.owb-composer__drop {
+  position: fixed; inset: 0; z-index: 140; display: flex;
+  align-items: center; justify-content: center; padding: 32px;
+  background: color-mix(in srgb, var(--owb-bg-primary) 62%, transparent);
+  backdrop-filter: blur(2px); pointer-events: none;
+}
+.owb-composer__drop-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  width: min(440px, calc(100vw - 64px)); padding: 30px 28px;
+  border: 2px dashed var(--owb-brand-8); border-radius: var(--owb-radius-2xl);
+  background: var(--owb-bg-elevated); box-shadow: var(--owb-shadow-elevated);
+  color: var(--owb-text-primary); text-align: center;
+}
+.owb-composer__drop-card svg { color: var(--owb-brand-8); }
+.owb-composer__drop-card strong { font-size: 15px; font-weight: 600; }
+.owb-composer__drop-card span { color: var(--owb-text-tertiary); font-size: 12px; }
 .owb-composer__box {
   position: relative;
   background: var(--owb-bg-input);
@@ -529,6 +545,18 @@ input, textarea { font-family: inherit; }
 }
 .owb-msg__text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.7; }
 .owb-msg--assistant .owb-msg__text { padding: 0 16px; }
+.owb-msg__attachments {
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
+  max-width: 100%; margin-bottom: 6px;
+}
+.owb-msg__attachment {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 240px;
+  height: 26px; padding: 0 9px; border: 1px solid var(--owb-border-default);
+  border-radius: var(--owb-radius-full); background: var(--owb-bg-card);
+  color: var(--owb-text-secondary); font-size: 12px;
+}
+.owb-msg__attachment > svg { flex-shrink: 0; color: var(--owb-text-tertiary); }
+.owb-msg__attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 消息级操作:默认弱化,悬停/聚焦时显现,避免每条回复都堆一排醒目的按钮。 */
 .owb-msg-actions {

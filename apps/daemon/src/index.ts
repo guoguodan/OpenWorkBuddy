@@ -8,6 +8,7 @@ import {
   tool,
   jsonSchema,
   type CoreMessage,
+  type UserContent,
   type Tool,
   type ToolExecutionOptions
 } from 'ai'
@@ -131,6 +132,12 @@ import {
   listMemory
 } from '@openwb/memory'
 import { builtinTools, configureDestructiveTools, resolveInsideWorkspace } from './tools/builtin.js'
+import {
+  loadRunAttachments,
+  normalizeRunAttachments,
+  type RunAttachment,
+  type TurnImage
+} from './attachments.js'
 import {
   PluginRuntime,
   discoverPlugins,
@@ -1074,6 +1081,8 @@ interface RunInput {
   skill?: string
   /** @ 引用的工作区相对路径,发送前注入正文。 */
   contextPaths?: string[]
+  /** 输入框附件:已复制到工作区,文本进 system,图片走当前轮多模态输入。 */
+  attachments?: RunAttachment[]
   /** 助理身份:人设指令与本轮默认技能。 */
   colleagueId?: string
   /** 专家角色:来自插件清单,一个会话最多一个。 */
@@ -1091,7 +1100,7 @@ const SCENE_PROMPTS: Record<NonNullable<RunInput['scene']>, string> = {
     '当前是「设计」场景。优先关注信息层级、视觉一致性、可访问性与可落地的设计说明;需要产出页面时给出具体结构与样式方案。'
 }
 
-const MAX_CONTEXT_FILES = 20
+const MAX_CONTEXT_FILES = 50
 const MAX_CONTEXT_FILE_BYTES = 64 * 1024
 const MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
 
@@ -1164,8 +1173,9 @@ async function applyHarnessContext(
   input: RunInput,
   prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt },
   project?: { name: string; description: string; instructions: string } | null
-): Promise<string> {
+): Promise<{ system: string; images: TurnImage[] }> {
   let system = prepared.system
+  let images: TurnImage[] = []
 
   if (project) {
     const lines = [
@@ -1242,7 +1252,25 @@ async function applyHarnessContext(
     emit({ type: 'context.attached', paths: contextPaths, injected, bytes: total })
   }
 
-  return system
+  if ((input.attachments ?? []).length > 0) {
+    const loaded = await loadRunAttachments(WORKSPACE, input.attachments ?? [])
+    if (loaded.system) system += loaded.system
+    images = loaded.images
+    emit({
+      type: 'attachment.loaded',
+      paths: (input.attachments ?? []).map((item) => item.path),
+      injected: loaded.injected,
+      bytes: loaded.bytes
+    })
+    if (loaded.rejected.length > 0) {
+      emit({
+        type: 'attachment.rejected',
+        items: loaded.rejected
+      })
+    }
+  }
+
+  return { system, images }
 }
 
 /**
@@ -2095,6 +2123,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   }
 
   let explicitSkill: string | undefined
+  let turnImages: TurnImage[] = []
   try {
     const requested = input.skill?.trim()
     if (requested) {
@@ -2102,7 +2131,9 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
       explicitSkill = loaded.name
       prepared.system += `\n\n# 用户指定技能\n${loaded.body}`
     }
-    prepared.system = await applyHarnessContext(input, prepared, project ?? null)
+    const context = await applyHarnessContext(input, prepared, project ?? null)
+    prepared.system = context.system
+    turnImages = context.images
   } catch (err) {
     emit({ type: 'error', code: 'CONTEXT_FAILED', message: (err as Error).message, retryable: false })
     return 'failed'
@@ -2174,9 +2205,20 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
     })
     totalInput += historyResult.inputTokens
     totalOutput += historyResult.outputTokens
+    const userContent: UserContent =
+      turnImages.length > 0
+        ? [
+            { type: 'text', text },
+            ...turnImages.map((image) => ({
+              type: 'image' as const,
+              image: image.data,
+              mimeType: image.mimeType
+            }))
+          ]
+        : text
     const messages: CoreMessage[] = [
       ...(historyResult.messages as CoreMessage[]),
-      { role: 'user', content: text }
+      { role: 'user', content: userContent }
     ]
     const notice = historyResult.notice
     if (notice) {
@@ -3286,7 +3328,12 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       const saved = appendMessage(db, {
         conversationId: target.conversationId,
         role: 'user',
-        content: { text },
+        content: {
+          text,
+          ...(Array.isArray((target.content as { attachments?: unknown } | null)?.attachments)
+            ? { attachments: (target.content as { attachments?: unknown }).attachments }
+            : {})
+        },
         meta,
         clientRequestId: `replay-${target.id}-${Date.now()}`
       })
@@ -3329,6 +3376,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     const contextPaths = Array.isArray(meta.contextPaths)
       ? meta.contextPaths.filter((item): item is string => typeof item === 'string' && item.length > 0)
       : undefined
+    const attachments = normalizeRunAttachments(meta.attachments)
 
     if (!replayed) throw new Error('重放消息写入失败')
     emit({
@@ -3349,7 +3397,8 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
         ...(expertId ? { expertId } : {}),
         ...(skill ? { skill } : {}),
         ...(scene ? { scene } : {}),
-        ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
+        ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {}),
+        ...(attachments.length > 0 ? { attachments } : {})
       })
     } finally {
       startingRuns.delete(target.conversationId)
@@ -3816,6 +3865,7 @@ async function handleFrame(value: unknown) {
         .map((item) => item.trim())
         .filter((item) => item.length > 0)
     : undefined
+  const attachments = normalizeRunAttachments(msg.attachments)
 
   const db = requireDb()
   const existingConversation = getConversation(db, conversationId)
@@ -3830,7 +3880,10 @@ async function handleFrame(value: unknown) {
   const saved = appendMessage(db, {
     conversationId,
     role: 'user',
-    content: { text: msg.text },
+    content: {
+      text: msg.text,
+      ...(attachments.length > 0 ? { attachments } : {})
+    },
     // 记录本轮上下文:重放要复原同一模式/技能/场景/@文件,而不是只重发文本。
     meta: {
       mode: mode.id,
@@ -3838,7 +3891,8 @@ async function handleFrame(value: unknown) {
       ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),
       ...(effectiveExpertId ? { expertId: effectiveExpertId } : {}),
       ...(scene ? { scene } : {}),
-      ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
+      ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {}),
+      ...(attachments.length > 0 ? { attachments } : {})
     },
     ...(clientRequestId ? { clientRequestId } : {})
   })
@@ -3873,7 +3927,8 @@ async function handleFrame(value: unknown) {
       ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),
       ...(effectiveExpertId ? { expertId: effectiveExpertId } : {}),
       ...(scene ? { scene } : {}),
-      ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
+      ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {}),
+      ...(attachments.length > 0 ? { attachments } : {})
     })
   } finally {
     startingRuns.delete(conversationId)

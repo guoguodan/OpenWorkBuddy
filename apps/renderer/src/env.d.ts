@@ -275,6 +275,21 @@ interface Window {
     modes: {
       list: () => Promise<{ modes: Array<{ id: string; displayName: string; description: string }> }>
     }
+    attachments: {
+      pick: () => Promise<{
+        attachments: Array<{ path: string; name: string; size: number; kind: 'file' | 'image' }>
+        rejected: Array<{ name: string; reason: string }>
+        canceled: boolean
+      }>
+      importPaths: (paths: string[]) => Promise<{
+        attachments: Array<{ path: string; name: string; size: number; kind: 'file' | 'image' }>
+        rejected: Array<{ name: string; reason: string }>
+      }>
+      importData: (files: Array<{ name: string; data: ArrayBuffer | Uint8Array }>) => Promise<{
+        attachments: Array<{ path: string; name: string; size: number; kind: 'file' | 'image' }>
+        rejected: Array<{ name: string; reason: string }>
+      }>
+    }
     workspace: {
       info: () => Promise<{ path: string }>
       open: () => Promise<{ path: string }>
@@ -310,6 +325,7 @@ interface Window {
         expertId?: string
         scene?: 'working' | 'coding' | 'design'
         contextPaths?: string[]
+        attachments?: Array<{ path: string; name: string; size?: number; kind?: 'file' | 'image' }>
       }) => Promise<void>
       cancel: (conversationId?: string) => Promise<{ ok: boolean }>
       list: () => Promise<{ conversations: ConversationInfo[]; conversationId: string }>

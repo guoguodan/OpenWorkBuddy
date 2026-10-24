@@ -15,7 +15,12 @@ contextBridge.exposeInMainWorld('openwb', {
   search: {
     query: (query: string) => ipcRenderer.invoke('search.query', query)
   },
-  workspace: {
+  attachments: {
+    pick: () => ipcRenderer.invoke('attachment.pick'),
+    importPaths: (paths: string[]) => ipcRenderer.invoke('attachment.importPaths', { paths }),
+    importData: (files: Array<{ name: string; data: ArrayBuffer | Uint8Array }>) =>
+      ipcRenderer.invoke('attachment.importData', { files })
+  },  workspace: {
     info: () => ipcRenderer.invoke('workspace.info'),
     open: () => ipcRenderer.invoke('workspace.open'),
     files: (input?: unknown) => ipcRenderer.invoke('workspace.files', input)
