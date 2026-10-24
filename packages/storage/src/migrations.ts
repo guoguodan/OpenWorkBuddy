@@ -314,6 +314,16 @@ CREATE TABLE notification (
 CREATE INDEX idx_notification_ws ON notification(workspace_id, created_at DESC);
 CREATE INDEX idx_notification_pending ON notification(workspace_id, is_pending, is_read);
 `
+  },
+  {
+    version: 6,
+    name: 'conversation_pin_and_colleague',
+    sql: `-- 任务列表分组:置顶独立成组,助理任务按 colleague 归属分组。
+-- pinned_at 用时间戳而不是布尔值,便于以后实现置顶排序时直接按时间排。
+ALTER TABLE conversation ADD COLUMN colleague_id TEXT REFERENCES colleague(id) ON DELETE SET NULL;
+ALTER TABLE conversation ADD COLUMN pinned_at TEXT;
+CREATE INDEX idx_conversation_pinned ON conversation(workspace_id, pinned_at);
+`
   }
 ]
 

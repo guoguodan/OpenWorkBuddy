@@ -35,6 +35,8 @@ export interface ConversationRecord {
   channelId: string | null
   title: string
   modeId: string
+  colleagueId: string | null
+  pinnedAt: string | null
   status: 'active' | 'archived'
   lastSeq: number
   createdAt: string
@@ -43,7 +45,13 @@ export interface ConversationRecord {
 
 export function createConversation(
   db: AppDatabase,
-  input: { workspaceId: string; title: string; modeId: string; channelId?: string | null }
+  input: {
+    workspaceId: string
+    title: string
+    modeId: string
+    channelId?: string | null
+    colleagueId?: string | null
+  }
 ): ConversationRecord {
   const at = nowIso()
   const row: ConversationRecord = {
@@ -52,6 +60,8 @@ export function createConversation(
     channelId: input.channelId ?? null,
     title: input.title.slice(0, 200),
     modeId: input.modeId,
+    colleagueId: input.colleagueId ?? null,
+    pinnedAt: null,
     status: 'active',
     lastSeq: 0,
     createdAt: at,
@@ -85,6 +95,47 @@ export function listConversations(db: AppDatabase, workspaceId: string): Convers
     .where(eq(conversation.workspaceId, workspaceId))
     .orderBy(desc(conversation.updatedAt))
     .all() as ConversationRecord[]
+}
+
+/** 置顶只改排序依据,不改 updatedAt:置顶不应把任务伪装成“刚刚有活动”。 */
+export function setConversationPinned(
+  db: AppDatabase,
+  conversationId: string,
+  pinned: boolean
+): ConversationRecord | undefined {
+  const existing = getConversation(db, conversationId)
+  if (!existing) return undefined
+  db.update(conversation)
+    .set({ pinnedAt: pinned ? nowIso() : null })
+    .where(eq(conversation.id, conversationId))
+    .run()
+  return getConversation(db, conversationId)
+}
+
+/** 重命名只改标题;不推进 updatedAt,否则任务会因为改名跳到列表最前面。 */
+export function renameConversation(
+  db: AppDatabase,
+  conversationId: string,
+  title: string
+): ConversationRecord | undefined {
+  const existing = getConversation(db, conversationId)
+  if (!existing) return undefined
+  const next = title.trim().slice(0, 200)
+  if (!next) return existing
+  db.update(conversation).set({ title: next }).where(eq(conversation.id, conversationId)).run()
+  return getConversation(db, conversationId)
+}
+
+/** 指定助理后,后续消息会沿用该助理身份;新建会话时由 UI 显式传入。 */
+export function setConversationColleague(
+  db: AppDatabase,
+  conversationId: string,
+  colleagueId: string | null
+): ConversationRecord | undefined {
+  const existing = getConversation(db, conversationId)
+  if (!existing) return undefined
+  db.update(conversation).set({ colleagueId }).where(eq(conversation.id, conversationId)).run()
+  return getConversation(db, conversationId)
 }
 
 export function deleteConversation(db: AppDatabase, id: string): void {

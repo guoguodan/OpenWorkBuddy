@@ -72,6 +72,10 @@ export function IconChevron({ size = 14, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="m6 9.5 6 6 6-6" /></svg>
 }
 
+export function IconPin({ size = 14, className }: IconProps) {
+  return <svg {...base(size)} className={className}><path d="M9.5 3.5h5l-.7 5 3.2 3.1v1.4h-5.5v6l-1 1.5-1-1.5v-6H3.9v-1.4l3.2-3.1-.7-5Z" /></svg>
+}
+
 export function IconClock({ size = 18, className }: IconProps) {
   return <svg {...base(size)} className={className}><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 1.8" /></svg>
 }

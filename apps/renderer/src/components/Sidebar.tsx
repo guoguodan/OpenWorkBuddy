@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   IconBell,
   IconBook,
@@ -9,6 +9,7 @@ import {
   IconClock,
   IconGrid,
   IconMail,
+  IconPin,
   IconPlus,
   IconTool
 } from './Icons'
@@ -18,6 +19,9 @@ export interface ConversationSummary {
   id: string
   title: string
   modeId: string
+  colleagueId?: string | null
+  colleagueName?: string | null
+  pinnedAt?: string | null
   channelId?: string | null
   channelName?: string | null
   updatedAt: string
@@ -33,6 +37,38 @@ export type MoreEntry =
   | 'lexiang'
   | 'inspiration'
 
+const SECTION_STATE_KEY = 'owb.sidebar.sections.v1'
+const DEFAULT_VISIBLE = 5
+const VISIBLE_STEP = 20
+
+type SectionId = 'pinned' | 'tasks' | 'workspaces' | 'colleagues'
+
+interface SectionState {
+  collapsed: Record<SectionId, boolean>
+  visible: Record<SectionId, number>
+  collapsedGroups: Record<string, boolean>
+}
+
+function readSectionState(): SectionState {
+  const empty: SectionState = {
+    collapsed: { pinned: false, tasks: false, workspaces: false, colleagues: false },
+    visible: { pinned: DEFAULT_VISIBLE, tasks: DEFAULT_VISIBLE, workspaces: DEFAULT_VISIBLE, colleagues: DEFAULT_VISIBLE },
+    collapsedGroups: {}
+  }
+  try {
+    const raw = localStorage.getItem(SECTION_STATE_KEY)
+    if (!raw) return empty
+    const parsed = JSON.parse(raw) as Partial<SectionState>
+    return {
+      collapsed: { ...empty.collapsed, ...(parsed.collapsed ?? {}) },
+      visible: { ...empty.visible, ...(parsed.visible ?? {}) },
+      collapsedGroups: parsed.collapsedGroups ?? {}
+    }
+  } catch {
+    return empty
+  }
+}
+
 interface SidebarProps {
   conversations: ConversationSummary[]
   activeId: string
@@ -42,6 +78,8 @@ interface SidebarProps {
   onNew: () => void
   onSelect: (id: string) => void
   onDelete: (id: string) => void
+  onPin: (id: string, pinned: boolean) => void
+  onRename: (id: string, title: string) => void
   onOpenColleagues: () => void
   onOpenSkills: () => void
   onOpenAutomation: () => void
@@ -86,6 +124,8 @@ export function Sidebar({
   onNew,
   onSelect,
   onDelete,
+  onPin,
+  onRename,
   onOpenColleagues,
   onOpenSkills,
   onOpenAutomation,
@@ -99,6 +139,215 @@ export function Sidebar({
 }: SidebarProps) {
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
+  const [sectionState, setSectionState] = useState<SectionState>(readSectionState)
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
+  const renameRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    localStorage.setItem(SECTION_STATE_KEY, JSON.stringify(sectionState))
+  }, [sectionState])
+
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('.owb-conv-menu')) close()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close)
+    window.addEventListener('blur', close)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('blur', close)
+    }
+  }, [menu])
+
+  useEffect(() => {
+    if (renaming) renameRef.current?.focus()
+  }, [renaming])
+
+  const toggleSection = useCallback((id: SectionId) => {
+    setSectionState((s) => ({ ...s, collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }))
+  }, [])
+
+  const showMore = useCallback((id: SectionId) => {
+    setSectionState((s) => ({ ...s, visible: { ...s.visible, [id]: s.visible[id] + VISIBLE_STEP } }))
+  }, [])
+
+  const showLess = useCallback((id: SectionId) => {
+    setSectionState((s) => ({ ...s, visible: { ...s.visible, [id]: DEFAULT_VISIBLE } }))
+  }, [])
+
+  const toggleGroup = useCallback((key: string) => {
+    setSectionState((s) => ({
+      ...s,
+      collapsedGroups: { ...s.collapsedGroups, [key]: !s.collapsedGroups[key] }
+    }))
+  }, [])
+
+  const grouped = useMemo(() => {
+    const pinned: ConversationSummary[] = []
+    const tasks: ConversationSummary[] = []
+    const workspaces = new Map<string, ConversationSummary[]>()
+    const colleagues = new Map<string, ConversationSummary[]>()
+
+    for (const c of conversations) {
+      if (c.pinnedAt) {
+        pinned.push(c)
+        continue
+      }
+      if (c.colleagueId || c.colleagueName) {
+        const key = c.colleagueId ?? c.colleagueName ?? 'unknown'
+        colleagues.set(key, [...(colleagues.get(key) ?? []), c])
+        continue
+      }
+      if (c.channelId) {
+        const key = c.channelId
+        workspaces.set(key, [...(workspaces.get(key) ?? []), c])
+        continue
+      }
+      tasks.push(c)
+    }
+
+    return {
+      pinned,
+      tasks,
+      workspaces: Array.from(workspaces.entries()).map(([key, list]) => ({
+        key,
+        title: list[0]?.channelName ?? '未命名工作空间',
+        conversations: list
+      })),
+      colleagues: Array.from(colleagues.entries()).map(([key, list]) => ({
+        key,
+        title: list[0]?.colleagueName ?? '助理',
+        conversations: list
+      }))
+    }
+  }, [conversations])
+
+  const submitRename = (id: string) => {
+    const next = renaming?.value.trim() ?? ''
+    if (next) onRename(id, next)
+    setRenaming(null)
+  }
+
+  const renderItem = (c: ConversationSummary, pinned = false) => (
+    <div
+      key={c.id}
+      className={`owb-conv-item${c.id === activeId ? ' owb-conv-item--active' : ''}`}
+      data-testid="conversation-item"
+      data-conversation-id={c.id}
+      onClick={() => {
+        if (!busy && c.id !== activeId) onSelect(c.id)
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        setMenu({ id: c.id, x: e.clientX, y: e.clientY })
+      }}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && !busy && c.id !== activeId) onSelect(c.id)
+      }}
+    >
+      {renaming?.id === c.id ? (
+        <input
+          ref={renameRef}
+          className="owb-conv-item__rename"
+          data-testid="conversation-rename-input"
+          value={renaming.value}
+          maxLength={200}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => setRenaming({ id: c.id, value: e.target.value })}
+          onBlur={() => setRenaming(null)}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') submitRename(c.id)
+            if (e.key === 'Escape') setRenaming(null)
+          }}
+        />
+      ) : (
+        <>
+          <span className="owb-conv-item__title" title={c.title}>
+            {pinned || c.pinnedAt ? <IconPin size={12} className="owb-conv-item__pin" /> : null}
+            {c.title}
+            {c.channelName ? <span className="owb-conv-item__channel">#{c.channelName}</span> : null}
+          </span>
+          <span className="owb-conv-item__meta">{dayLabel(c.updatedAt)}</span>
+          <button
+            className="owb-conv-item__del"
+            title="删除任务"
+            aria-label={`删除任务 ${c.title}`}
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(c.id)
+            }}
+          >
+            ×
+          </button>
+        </>
+      )}
+    </div>
+  )
+
+  const renderSection = (
+    id: SectionId,
+    label: string,
+    items: ConversationSummary[],
+    options: { pinned?: boolean; key?: string } = {}
+  ) => {
+    if (items.length === 0) return null
+    const collapsed = options.key
+      ? Boolean(sectionState.collapsedGroups[options.key])
+      : sectionState.collapsed[id]
+    const visible = sectionState.visible[id]
+    const shown = items.slice(0, visible)
+    const remaining = items.length - shown.length
+    return (
+      <div className={`owb-sidebar__group${options.key ? ' owb-sidebar__group--sub' : ''}`} key={options.key ?? id}>
+        <button
+          className="owb-sidebar__section"
+          data-testid={options.key ? 'conversation-subsection' : `section-${id}`}
+          aria-expanded={!collapsed}
+          onClick={() => (options.key ? toggleGroup(options.key) : toggleSection(id))}
+        >
+          <span className={`owb-sidebar__chevron${collapsed ? '' : ' owb-sidebar__chevron--open'}`}>
+            <IconChevron size={12} />
+          </span>
+          <span>{label} ({items.length})</span>
+        </button>
+        {collapsed ? null : (
+          <div className="owb-sidebar__list">
+            {shown.map((c) => renderItem(c, options.pinned))}
+            {remaining > 0 || visible > DEFAULT_VISIBLE ? (
+              <div className="owb-sidebar__more-row">
+                {remaining > 0 ? (
+                  <button className="owb-sidebar__more" data-testid="section-show-more" onClick={() => showMore(id)}>
+                    查看更多 ({remaining})
+                  </button>
+                ) : null}
+                {visible > DEFAULT_VISIBLE ? (
+                  <button className="owb-sidebar__more" data-testid="section-show-less" onClick={() => showLess(id)}>
+                    收起
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const menuConversation = menu ? conversations.find((c) => c.id === menu.id) : null
 
   useEffect(() => {
     if (!moreOpen) return
@@ -188,46 +437,87 @@ export function Sidebar({
         </div>
       </nav>
 
-      <div className="owb-sidebar__section">
-        <span>任务 ({conversations.length})</span>
+      <div className="owb-sidebar__sections">
+        {conversations.length === 0 ? <div className="owb-conv-empty">还没有任务</div> : null}
+        {renderSection('pinned', '置顶', grouped.pinned, { pinned: true })}
+        {renderSection('tasks', '任务', grouped.tasks)}
+        {grouped.workspaces.length > 0 ? (
+          <div className="owb-sidebar__group">
+            <button
+              className="owb-sidebar__section"
+              data-testid="section-workspaces"
+              aria-expanded={!sectionState.collapsed.workspaces}
+              onClick={() => toggleSection('workspaces')}
+            >
+              <span className={`owb-sidebar__chevron${sectionState.collapsed.workspaces ? '' : ' owb-sidebar__chevron--open'}`}>
+                <IconChevron size={12} />
+              </span>
+              <span>工作空间</span>
+            </button>
+            {sectionState.collapsed.workspaces
+              ? null
+              : grouped.workspaces.map((g) => renderSection('workspaces', g.title, g.conversations, { key: `ws:${g.key}` }))}
+          </div>
+        ) : null}
+        {grouped.colleagues.length > 0 ? (
+          <div className="owb-sidebar__group">
+            <button
+              className="owb-sidebar__section"
+              data-testid="section-colleagues"
+              aria-expanded={!sectionState.collapsed.colleagues}
+              onClick={() => toggleSection('colleagues')}
+            >
+              <span className={`owb-sidebar__chevron${sectionState.collapsed.colleagues ? '' : ' owb-sidebar__chevron--open'}`}>
+                <IconChevron size={12} />
+              </span>
+              <span>助理任务</span>
+            </button>
+            {sectionState.collapsed.colleagues
+              ? null
+              : grouped.colleagues.map((g) => renderSection('colleagues', g.title, g.conversations, { key: `colleague:${g.key}` }))}
+          </div>
+        ) : null}
       </div>
 
-      <div className="owb-sidebar__list">
-        {conversations.length === 0 ? <div className="owb-conv-empty">还没有任务</div> : null}
-        {conversations.map((c) => (
-          <div
-            key={c.id}
-            className={`owb-conv-item${c.id === activeId ? ' owb-conv-item--active' : ''}`}
-            data-testid="conversation-item"
+      {menu && menuConversation ? (
+        <div
+          className="owb-conv-menu"
+          data-testid="conversation-menu"
+          role="menu"
+          style={{ left: Math.min(menu.x, window.innerWidth - 180), top: Math.min(menu.y, window.innerHeight - 150) }}
+        >
+          <button
+            role="menuitem"
             onClick={() => {
-              if (!busy && c.id !== activeId) onSelect(c.id)
-            }}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !busy && c.id !== activeId) onSelect(c.id)
+              onPin(menuConversation.id, !menuConversation.pinnedAt)
+              setMenu(null)
             }}
           >
-            <span className="owb-conv-item__title" title={c.title}>
-              {c.title}
-              {c.channelName ? <span className="owb-conv-item__channel">#{c.channelName}</span> : null}
-            </span>
-            <span className="owb-conv-item__meta">{dayLabel(c.updatedAt)}</span>
-            <button
-              className="owb-conv-item__del"
-              title="删除任务"
-              aria-label={`删除任务 ${c.title}`}
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation()
-                onDelete(c.id)
-              }}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
+            <IconPin size={14} />
+            {menuConversation.pinnedAt ? '取消置顶' : '置顶'}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setRenaming({ id: menuConversation.id, value: menuConversation.title })
+              setMenu(null)
+            }}
+          >
+            重命名
+          </button>
+          <button
+            role="menuitem"
+            className="owb-conv-menu__danger"
+            disabled={busy}
+            onClick={() => {
+              setMenu(null)
+              onDelete(menuConversation.id)
+            }}
+          >
+            删除任务
+          </button>
+        </div>
+      ) : null}
 
       <div className="owb-promo">
         <div className="owb-promo__title">做任务赢积分好礼</div>

@@ -31,6 +31,8 @@ export const conversation = sqliteTable(
     channelId: text('channel_id'),
     title: text('title').notNull(),
     modeId: text('mode_id').notNull(),
+    colleagueId: text('colleague_id').references(() => colleague.id, { onDelete: 'set null' }),
+    pinnedAt: text('pinned_at'),
     status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),
     lastSeq: integer('last_seq').notNull().default(0),
     createdAt: text('created_at').notNull(),
@@ -38,7 +40,8 @@ export const conversation = sqliteTable(
   },
   (t) => [
     index('idx_conversation_ws').on(t.workspaceId, t.updatedAt),
-    index('idx_conversation_channel').on(t.channelId, t.updatedAt)
+    index('idx_conversation_channel').on(t.channelId, t.updatedAt),
+    index('idx_conversation_pinned').on(t.workspaceId, t.pinnedAt)
   ]
 )
 

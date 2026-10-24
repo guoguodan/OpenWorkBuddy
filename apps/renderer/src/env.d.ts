@@ -12,6 +12,9 @@ interface ConversationInfo {
   id: string
   title: string
   modeId: string
+  colleagueId?: string | null
+  colleagueName?: string | null
+  pinnedAt?: string | null
   channelId?: string | null
   channelName?: string | null
   updatedAt: string
@@ -224,7 +227,20 @@ interface Window {
         artifacts: ArtifactInfoLike[]
         conversationId: string
       }>
-      create: (input?: { title?: string; mode?: string; channelId?: string }) => Promise<{ conversationId: string }>
+      create: (input?: {
+        title?: string
+        mode?: string
+        channelId?: string
+        colleagueId?: string
+      }) => Promise<{ conversationId: string }>
+      pin: (input: { conversationId: string; pinned: boolean }) => Promise<{
+        conversationId: string
+        pinnedAt: string | null
+      }>
+      rename: (input: { conversationId: string; title: string }) => Promise<{
+        conversationId: string
+        title: string
+      }>
       remove: (conversationId: string) => Promise<{ conversationId: string }>
       onEvent: (cb: (e: unknown) => void) => () => void
     }

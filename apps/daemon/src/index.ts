@@ -42,6 +42,9 @@ import {
   getConversation,
   getPlugin,
   listConversations,
+  renameConversation,
+  setConversationColleague,
+  setConversationPinned,
   listMessages,
   listPlugins,
   deletePlugin,
@@ -1937,6 +1940,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
   }
 
   if (msg.cmd === 'conversation.list') {
+    const colleagues = listColleagues(db, workspaceId)
     emit({
       ...base,
       type: 'conversation.list',
@@ -1945,6 +1949,11 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
         id: c.id,
         title: c.title,
         modeId: c.modeId,
+        colleagueId: c.colleagueId,
+        colleagueName: c.colleagueId
+          ? (colleagues.find((x) => x.id === c.colleagueId)?.name ?? null)
+          : null,
+        pinnedAt: c.pinnedAt,
         channelId: c.channelId,
         channelName: c.channelId
           ? (listChannels(db, workspaceId).find((ch) => ch.id === c.channelId)?.name ?? null)
@@ -1988,14 +1997,47 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     if (channelId && !listChannels(db, workspaceId).some((c) => c.id === channelId)) {
       throw new Error('频道不存在')
     }
+    const colleagueId =
+      typeof msg.colleagueId === 'string' && msg.colleagueId.trim() ? msg.colleagueId.trim() : null
+    if (colleagueId) {
+      const colleague = getColleague(db, colleagueId)
+      if (!colleague || colleague.workspaceId !== workspaceId) throw new Error('助理不存在')
+    }
     const conv = createConversation(db, {
       workspaceId,
       title: typeof msg.title === 'string' && msg.title ? msg.title : '新会话',
       modeId: typeof msg.mode === 'string' ? msg.mode : 'craft',
-      channelId
+      channelId,
+      colleagueId
     })
     activeConversationId = conv.id
     emit({ ...base, type: 'conversation.created', conversationId: conv.id })
+    return true
+  }
+
+  if (msg.cmd === 'conversation.pin') {
+    if (typeof msg.conversationId !== 'string' || !msg.conversationId) throw new Error('缺少 conversationId')
+    if (typeof msg.pinned !== 'boolean') throw new Error('缺少 pinned')
+    const updated = setConversationPinned(db, msg.conversationId, msg.pinned)
+    if (!updated) throw new Error('会话不存在')
+    emit({
+      ...base,
+      type: 'conversation.updated',
+      conversation: { id: updated.id, pinnedAt: updated.pinnedAt }
+    })
+    return true
+  }
+
+  if (msg.cmd === 'conversation.rename') {
+    if (typeof msg.conversationId !== 'string' || !msg.conversationId) throw new Error('缺少 conversationId')
+    if (typeof msg.title !== 'string') throw new Error('缺少 title')
+    const updated = renameConversation(db, msg.conversationId, msg.title)
+    if (!updated) throw new Error('会话不存在')
+    emit({
+      ...base,
+      type: 'conversation.updated',
+      conversation: { id: updated.id, title: updated.title }
+    })
     return true
   }
 

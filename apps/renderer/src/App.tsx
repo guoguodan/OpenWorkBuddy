@@ -134,7 +134,7 @@ export default function App() {
     model: null
   })
   const [modelLabel, setModelLabel] = useState('')
-  const [activeColleague, setActiveColleague] = useState<ColleagueInfo | null>(null)
+  const [activeColleague, setActiveColleague] = useState<{ id: string; name: string } | null>(null)
   const streaming = useRef(false)
   const activeConversation = useRef('')
 
@@ -397,7 +397,12 @@ export default function App() {
     if (busy) return
     setConversationId(id)
     activeConversation.current = id
-    setActiveColleague(null)
+    const target = conversations.find((c) => c.id === id)
+    setActiveColleague(
+      target?.colleagueId && target.colleagueName
+        ? { id: target.colleagueId, name: target.colleagueName }
+        : null
+    )
     setFocusTarget(null)
     setTools([])
     setNotices([])
@@ -410,7 +415,8 @@ export default function App() {
     const r = await window.openwb.conversation.create({
       title: colleague ? `与${colleague.name}协作` : '新会话',
       mode,
-      ...(activeChannelId ? { channelId: activeChannelId } : {})
+      ...(activeChannelId ? { channelId: activeChannelId } : {}),
+      ...(colleague ? { colleagueId: colleague.id } : {})
     })
     setConversationId(r.conversationId)
     activeConversation.current = r.conversationId
@@ -498,6 +504,24 @@ export default function App() {
     await window.openwb.conversation.remove(id)
     const next = await loadConversations()
     if (next) await loadHistory(next)
+  }
+
+  const pinConversation = async (id: string, pinned: boolean) => {
+    try {
+      await window.openwb.conversation.pin({ conversationId: id, pinned })
+      await loadConversations(activeConversation.current || undefined)
+    } catch (err) {
+      note('system', `置顶失败: ${(err as Error).message}`)
+    }
+  }
+
+  const renameConversation = async (id: string, title: string) => {
+    try {
+      await window.openwb.conversation.rename({ conversationId: id, title })
+      await loadConversations(activeConversation.current || undefined)
+    } catch (err) {
+      note('system', `重命名失败: ${(err as Error).message}`)
+    }
   }
 
   const removeMemory = async (id: string) => {
@@ -644,6 +668,8 @@ export default function App() {
           onNew={() => void newConversation()}
           onSelect={(id) => void switchConversation(id)}
           onDelete={(id) => void removeConversation(id)}
+          onPin={(id, pinned) => void pinConversation(id, pinned)}
+          onRename={(id, title) => void renameConversation(id, title)}
           onOpenColleagues={() => setSheet('colleagues')}
           onOpenSkills={() => setPanel('skills')}
           onOpenAutomation={() => setSheet('automation')}

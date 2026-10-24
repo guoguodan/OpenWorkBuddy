@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('openwb', {
     list: () => ipcRenderer.invoke('conversation.list'),
     history: (conversationId?: string) => ipcRenderer.invoke('conversation.history', conversationId),
     create: (input?: unknown) => ipcRenderer.invoke('conversation.new', input),
+    pin: (input: { conversationId: string; pinned: boolean }) => ipcRenderer.invoke('conversation.pin', input),
+    rename: (input: { conversationId: string; title: string }) => ipcRenderer.invoke('conversation.rename', input),
     remove: (conversationId: string) => ipcRenderer.invoke('conversation.delete', conversationId),
     onEvent: (cb: (e: unknown) => void) => {
       const handler = (_: unknown, e: unknown) => cb(e)

@@ -130,13 +130,36 @@ ipcMain.handle('artifact.preview', async (_e, input: PreviewTarget & { confirmed
   return resolved
 })
 
-ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string }) => {
+ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string; colleagueId?: string }) => {
   await daemonReady
   return request<{ conversationId: string }>({
     cmd: 'conversation.new',
     ...(input?.title ? { title: input.title } : {}),
     ...(input?.mode ? { mode: input.mode } : {}),
-    ...(input?.channelId ? { channelId: input.channelId } : {})
+    ...(input?.channelId ? { channelId: input.channelId } : {}),
+    ...(input?.colleagueId ? { colleagueId: input.colleagueId } : {})
+  })
+})
+
+ipcMain.handle('conversation.pin', async (_e, input: { conversationId: string; pinned: boolean }) => {
+  await daemonReady
+  if (!input || typeof input.conversationId !== 'string' || !input.conversationId) throw new Error('非法会话 ID')
+  if (typeof input.pinned !== 'boolean') throw new Error('非法置顶参数')
+  return request<{ conversationId: string; pinnedAt: string | null }>({
+    cmd: 'conversation.pin',
+    conversationId: input.conversationId,
+    pinned: input.pinned
+  })
+})
+
+ipcMain.handle('conversation.rename', async (_e, input: { conversationId: string; title: string }) => {
+  await daemonReady
+  if (!input || typeof input.conversationId !== 'string' || !input.conversationId) throw new Error('非法会话 ID')
+  if (typeof input.title !== 'string' || !input.title.trim()) throw new Error('任务标题不能为空')
+  return request<{ conversationId: string; title: string }>({
+    cmd: 'conversation.rename',
+    conversationId: input.conversationId,
+    title: input.title.trim()
   })
 })
 
