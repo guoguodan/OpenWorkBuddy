@@ -186,9 +186,14 @@ async function waitFor(evaluate, expression, timeoutMs = 20000) {
 
 const workdir = await mkdtemp(join(tmpdir(), 'owb-model-route-ws-'))
 const dataDir = await mkdtemp(join(tmpdir(), 'owb-model-route-data-'))
+// 默认 user-data-dir 与本机正在运行的实例共享,会触发单实例锁导致页面永远不就绪。
+const userData = await mkdtemp(join(tmpdir(), 'owb-model-route-user-'))
 await writeFile(join(workdir, 'package.json'), '{"name":"model-route-ws"}\n', 'utf8')
 
-const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${cdpPort}`], {
+const app = spawn(
+  electron,
+  [resolve(root, 'apps/desktop'), `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userData}`],
+  {
   cwd: workdir,
   env: {
     ...process.env,
@@ -289,6 +294,7 @@ try {
   }
   await rm(workdir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
   await rm(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
+  await rm(userData, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
 }
 
 process.exit(failed === 0 ? 0 : 1)

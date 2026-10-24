@@ -85,6 +85,8 @@ type AgentEvent = {
   fallback?: boolean
   from?: string
   to?: string
+  model?: string
+  rule?: string
   limit?: number
   used?: number
 }
@@ -271,6 +273,10 @@ export default function App() {
     taskTarget: 'local',
     model: null,
     fallbackModel: null,
+    autoRouteModel: false,
+    fastModel: null,
+    deepModel: null,
+    codeModel: null,
     reasoningEffort: null,
     tokenBudget: 0
   })
@@ -549,6 +555,9 @@ export default function App() {
         note('warn', `主模型「${e.from ?? ''}」不可用,已切换到备用模型「${e.to ?? ''}」继续生成。`)
       } else if (e.type === 'model.fallback.recovered') {
         note('info', `备用模型「${e.to ?? ''}」已恢复生成。`)
+              } else if (e.type === 'model.routed') {
+                // 路由原因属于"影响本轮结果"的信息,不能被诊断开关隐藏。
+                note('info', `自动路由:${e.reason ?? '已按任务类型选择模型'} · ${e.model ?? ''}`)
       } else if (e.type === 'budget.exceeded') {
         note('warn', e.message ?? `本轮已达到 ${e.limit ?? 0} token 成本上限,已停止后续调用。`)
       } else if (e.type === 'ready' && e.workspace) {
@@ -1311,6 +1320,32 @@ export default function App() {
     }
   }
 
+  const changeAutoRouteModel = async (enabled: boolean) => {
+    try {
+      const r = await window.openwb.settings.set({ key: 'autoRouteModel', value: enabled ? '1' : '0' })
+      setSettings(r.settings)
+      note('info', enabled ? '已开启自动路由:未手动选模型时按任务类型选择' : '已关闭自动路由')
+    } catch (err) {
+      note('system', `保存自动路由设置失败: ${(err as Error).message}`)
+    }
+  }
+
+  /**
+   * 三类偏好模型共用一个入口:设置键由任务类型映射而来,
+   * 避免在界面里复制三份几乎相同的保存逻辑。
+   */
+  const changeRoutedModel = async (kind: 'fast' | 'deep' | 'code', name: string | null) => {
+    const key = kind === 'fast' ? 'fastModel' : kind === 'deep' ? 'deepModel' : 'codeModel'
+    const label = kind === 'fast' ? '轻量模型' : kind === 'deep' ? '长上下文模型' : '代码模型'
+    try {
+      const r = await window.openwb.settings.set({ key, value: name?.trim() || null })
+      setSettings(r.settings)
+      note('info', name ? `${label}已设为: ${name}` : `${label}已清除,该规则将跟随默认模型`)
+    } catch (err) {
+      note('system', `保存${label}失败: ${(err as Error).message}`)
+    }
+  }
+
   /**
    * 思考强度是持久化偏好,而不是会话内临时状态:用户调过一次后,
    * 下次打开应用应仍是同一档位,否则每轮都要重设。
@@ -1415,6 +1450,7 @@ export default function App() {
       workspacePath={workspacePath}
       permission={settings.permissionMode}
       modelLabel={modelLabel}
+      autoRoute={settings.autoRouteModel && !settings.model}
       reasoningEffort={settings.reasoningEffort}
       modelLoading={!settingsLoaded}
       modelOptions={modelOptions}
@@ -1716,6 +1752,8 @@ export default function App() {
               }}
               onPermissionChange={changePermission}
               onFallbackModelChange={changeFallbackModel}
+              onAutoRouteChange={changeAutoRouteModel}
+              onRoutedModelChange={changeRoutedModel}
               onTokenBudgetChange={changeTokenBudget}
               onClose={() => setSheet(null)}
             />

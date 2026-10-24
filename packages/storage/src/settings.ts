@@ -14,6 +14,10 @@ export const SETTING_KEYS = [
   'taskTarget',
   'model',
   'fallbackModel',
+  'autoRouteModel',
+  'fastModel',
+  'deepModel',
+  'codeModel',
   'reasoningEffort',
   'tokenBudget',
   'disabledSkills',
@@ -37,6 +41,17 @@ export interface WorkspaceSettings {
   model: string | null
   /** 主模型连续失败且尚未产生输出时使用的备用模型;为空表示不启用降级。 */
   fallbackModel: string | null
+  /**
+   * 自动路由开关。默认关闭:历史行为是"用户不选就跟随默认模型",
+   * 静默改模型会让同一轮的前后结果无法解释,因此必须显式开启。
+   */
+  autoRouteModel: boolean
+  /** 快速模式使用的轻量模型;为空表示不启用该规则。 */
+  fastModel: string | null
+  /** 长上下文任务使用的模型;为空表示不启用该规则。 */
+  deepModel: string | null
+  /** 代码任务使用的模型;为空表示不启用该规则。 */
+  codeModel: string | null
   /** 本轮思考强度;null 表示不向网关显式传参。 */
   reasoningEffort: ReasoningEffort | null
   /** 单轮 token 硬上限(输入+输出)。0 表示不限制;超限后停止继续调用模型。 */
@@ -52,6 +67,10 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   taskTarget: 'local',
   model: null,
   fallbackModel: null,
+  autoRouteModel: false,
+  fastModel: null,
+  deepModel: null,
+  codeModel: null,
   reasoningEffort: null,
   tokenBudget: 0,
   disabledSkills: [],
@@ -89,6 +108,11 @@ export function getWorkspaceSettings(db: AppDatabase, workspaceId: string): Work
     taskTarget: 'local',
     model: map.get('model') ?? null,
     fallbackModel: map.get('fallbackModel') ?? null,
+    // 只有显式写入 '1' 才算开启;手改成其他值按关闭处理,避免静默启用。
+    autoRouteModel: map.get('autoRouteModel') === '1',
+    fastModel: map.get('fastModel') ?? null,
+    deepModel: map.get('deepModel') ?? null,
+    codeModel: map.get('codeModel') ?? null,
     reasoningEffort: parseReasoningEffort(map.get('reasoningEffort')),
     tokenBudget: parseTokenBudget(map.get('tokenBudget')),
     disabledSkills: parseNameList(map.get('disabledSkills'), true),

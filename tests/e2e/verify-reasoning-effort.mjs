@@ -169,9 +169,14 @@ async function waitFor(evaluate, expression, timeoutMs = 20000) {
 
 const workdir = await mkdtemp(join(tmpdir(), 'owb-effort-ws-'))
 const dataDir = await mkdtemp(join(tmpdir(), 'owb-effort-data-'))
+// 独立 user-data-dir:共享默认目录会被本机已运行实例的单实例锁挡住,页面无法就绪。
+const userData = await mkdtemp(join(tmpdir(), 'owb-effort-user-'))
 await writeFile(join(workdir, 'package.json'), '{"name":"effort-ws"}\n', 'utf8')
 
-const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${cdpPort}`], {
+const app = spawn(
+  electron,
+  [resolve(root, 'apps/desktop'), `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userData}`],
+  {
   cwd: workdir,
   env: {
     ...process.env,
@@ -303,6 +308,7 @@ try {
   }
   await rm(workdir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
   await rm(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
+  await rm(userData, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
 }
 
 process.exit(failed === 0 ? 0 : 1)

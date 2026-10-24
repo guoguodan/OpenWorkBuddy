@@ -78,6 +78,31 @@ describe('workspace settings', () => {
     expect(settings.model).toBe('demo-model')
   })
 
+  it('keeps auto routing off unless explicitly enabled', () => {
+    expect(getWorkspaceSettings(handle.db, workspaceId).autoRouteModel).toBe(false)
+    setWorkspaceSetting(handle.db, workspaceId, 'autoRouteModel', '1')
+    expect(getWorkspaceSettings(handle.db, workspaceId).autoRouteModel).toBe(true)
+    // 手改成任何非 '1' 的值都按关闭处理,不能让拼写错误静默开启路由。
+    setWorkspaceSetting(handle.db, workspaceId, 'autoRouteModel', 'true')
+    expect(getWorkspaceSettings(handle.db, workspaceId).autoRouteModel).toBe(false)
+    setWorkspaceSetting(handle.db, workspaceId, 'autoRouteModel', null)
+    expect(getWorkspaceSettings(handle.db, workspaceId).autoRouteModel).toBe(false)
+  })
+
+  it('stores per-task model preferences independently of the primary model', () => {
+    setWorkspaceSetting(handle.db, workspaceId, 'fastModel', 'fast-model')
+    setWorkspaceSetting(handle.db, workspaceId, 'deepModel', 'deep-model')
+    setWorkspaceSetting(handle.db, workspaceId, 'codeModel', 'code-model')
+    const settings = getWorkspaceSettings(handle.db, workspaceId)
+    expect(settings.fastModel).toBe('fast-model')
+    expect(settings.deepModel).toBe('deep-model')
+    expect(settings.codeModel).toBe('code-model')
+    expect(settings.model).toBeNull()
+    setWorkspaceSetting(handle.db, workspaceId, 'fastModel', null)
+    expect(getWorkspaceSettings(handle.db, workspaceId).fastModel).toBeNull()
+    expect(getWorkspaceSettings(handle.db, workspaceId).deepModel).toBe('deep-model')
+  })
+
   it('stores a non-negative integer token budget and ignores corrupt values', () => {
     setWorkspaceSetting(handle.db, workspaceId, 'tokenBudget', '12000.9')
     expect(getWorkspaceSettings(handle.db, workspaceId).tokenBudget).toBe(12000)

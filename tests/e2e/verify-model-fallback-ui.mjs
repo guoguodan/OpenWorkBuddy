@@ -151,9 +151,14 @@ async function waitFor(evaluate, expression, timeoutMs = 20000) {
 
 const workdir = await mkdtemp(join(tmpdir(), 'owb-fallback-ui-ws-'))
 const dataDir = await mkdtemp(join(tmpdir(), 'owb-fallback-ui-data-'))
+// 与其它 Electron 验收一致,使用独立 user-data-dir,避免被本机实例的单实例锁挡住。
+const userData = await mkdtemp(join(tmpdir(), 'owb-fallback-ui-user-'))
 await writeFile(join(workdir, 'package.json'), '{"name":"fallback-ui-ws"}\n', 'utf8')
 
-const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${cdpPort}`], {
+const app = spawn(
+  electron,
+  [resolve(root, 'apps/desktop'), `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userData}`],
+  {
   cwd: workdir,
   env: {
     ...process.env,
@@ -289,6 +294,7 @@ try {
   }
   await rm(workdir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
   await rm(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
+  await rm(userData, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
 }
 
 process.exit(failed === 0 ? 0 : 1)

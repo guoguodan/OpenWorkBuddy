@@ -14,6 +14,7 @@ import {
 } from 'ai'
 import { z } from 'zod'
 import { listRemoteModels, modelFor, reasoningProviderOptions, resolveModelName } from './model.js'
+import { routeModel } from './model-routing.js'
 import { transcribeAudio, VOICE_MESSAGES } from './transcribe.js'
 import { probeServiceEndpoint } from './service-probe.js'
 import { budgetExceededMessage, evaluateTokenBudget } from './budget.js'
@@ -2249,7 +2250,22 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   // 否则同一条回复可能前半段来自 A、后半段来自 B,日志也无法解释。
   const workspaceSettings = getWorkspaceSettings(db, workspaceId)
   const tokenBudget = workspaceSettings.tokenBudget
-  const selectedModel = resolveModelName(workspaceSettings.model)
+  // 自动路由在每轮开始时算一次,与模型/档位一致:中途改偏好不影响已发出的请求。
+  // 用户显式选择的模型永远优先;自动路由只是"未选择时"的确定性规则。
+  const route = routeModel({
+    autoRoute: workspaceSettings.autoRouteModel,
+    manualModel: workspaceSettings.model,
+    defaultModel: resolveModelName(null),
+    fastModel: workspaceSettings.fastModel,
+    deepModel: workspaceSettings.deepModel,
+    codeModel: workspaceSettings.codeModel,
+    modeId: mode.id,
+    scene: input.scene ?? null,
+    text,
+    attachmentCount: input.attachments?.length ?? 0,
+    hasImages: (input.attachments ?? []).some((item) => item.kind === 'image')
+  })
+  const selectedModel = resolveModelName(route.model)
   const configuredFallback = workspaceSettings.fallbackModel?.trim() ?? ''
   const fallbackModel = configuredFallback ? resolveModelName(configuredFallback) : null
   // 备用模型与主模型相同等于没有备用,不占用一次模型轮次。
@@ -2259,6 +2275,24 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   let usedModel = selectedModel
   let activeModel = modelFor(usedModel)
   let fallbackUsed = false
+
+  // 路由原因必须让用户看见:自动换模型而不解释,等同于静默改变行为。
+  // 手动选择与"未开启自动路由"是默认状态,不额外打扰,只在真正按规则切换时提示。
+  if (route.rule !== 'manual' && route.rule !== 'auto-off') {
+    emit({
+      type: 'model.routed',
+      model: selectedModel,
+      rule: route.rule,
+      task: route.task,
+      reason: route.reason,
+      preferredModel: route.preferredModel
+    })
+    appendEvent(db, conversationId, 'model.routed', {
+      model: selectedModel,
+      rule: route.rule,
+      task: route.task
+    })
+  }
 
   // 从这里开始才是可取消的模型运行。准备阶段(记忆、提示词)很快,
   // 提前注册反而会让"停止"落在还没开始的请求上。
@@ -2783,6 +2817,10 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       key !== 'taskTarget' &&
       key !== 'model' &&
       key !== 'fallbackModel' &&
+      key !== 'autoRouteModel' &&
+      key !== 'fastModel' &&
+      key !== 'deepModel' &&
+      key !== 'codeModel' &&
       key !== 'reasoningEffort' &&
       key !== 'tokenBudget'
     ) {
@@ -2791,10 +2829,25 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     if (key === 'permissionMode' && msg.value !== 'default' && msg.value !== 'fullAccess' && msg.value !== 'readOnly') {
       throw new Error('permissionMode 必须是 default / fullAccess / readOnly')
     }
-    if ((key === 'model' || key === 'fallbackModel') && msg.value !== null && typeof msg.value !== 'string') {
+    if (key === 'autoRouteModel') {
+      // 布尔开关只接受 '1' / '0' / null:字符串协议里再夹带 true/false
+      // 会让存储层无法区分"未设置"与"显式关闭"。
+      if (msg.value !== null && msg.value !== '1' && msg.value !== '0') {
+        throw new Error('autoRouteModel 必须是 "1" / "0" 或 null')
+      }
+    }
+    if (
+      (key === 'model' || key === 'fallbackModel' || key === 'fastModel' || key === 'deepModel' || key === 'codeModel') &&
+      msg.value !== null &&
+      typeof msg.value !== 'string'
+    ) {
       throw new Error(`${key} 必须是字符串或 null`)
     }
-    if ((key === 'model' || key === 'fallbackModel') && typeof msg.value === 'string' && msg.value.includes('\n')) {
+    if (
+      (key === 'model' || key === 'fallbackModel' || key === 'fastModel' || key === 'deepModel' || key === 'codeModel') &&
+      typeof msg.value === 'string' &&
+      msg.value.includes('\n')
+    ) {
       throw new Error(`${key} 不能包含换行`)
     }
     if (

@@ -44,6 +44,8 @@ interface ComposerProps {
   workspacePath: string
   permission: PermissionMode
   modelLabel: string
+  /** 自动路由已开启且未手动选模型:模型名旁要显示标记,否则用户会以为当前就是默认模型。 */
+  autoRoute?: boolean
   reasoningEffort: ReasoningEffort | null
   modelLoading?: boolean
   modelOptions?: string[]
@@ -138,6 +140,7 @@ export function Composer({
   workspacePath,
   permission,
   modelLabel,
+  autoRoute = false,
   reasoningEffort,
   modelLoading = false,
   modelOptions = [],
@@ -701,6 +704,11 @@ export function Composer({
             >
               <IconModel size={15} className="owb-composer__model-icon" />
               <span className="owb-composer__model-text">{currentModel}</span>
+              {autoRoute ? (
+                <span className="owb-composer__model-effort" data-testid="auto-route-badge">
+                  自动
+                </span>
+              ) : null}
               {reasoningEffort ? (
                 <span className="owb-composer__model-effort" data-testid="model-effort-badge">
                   {currentEffort.label}
@@ -711,6 +719,11 @@ export function Composer({
             {menu === 'model' ? (
               <div className="owb-composer__menu owb-composer__menu--model" role="menu" aria-label="选择模型" data-testid="model-picker">
                 <div className="owb-composer__menu-title">选择模型</div>
+                <div className="owb-composer__menu-hint" data-testid="auto-route-hint">
+                  {autoRoute
+                    ? '自动路由已开启:未手动选择时按任务类型选择模型;选择任意模型即改回手动。'
+                    : '当前为手动模式:始终使用所选模型;可在设置里开启自动路由。'}
+                </div>
                 {modelsLoading ? (
                   <div className="owb-composer__menu-empty" data-testid="model-loading">正在读取网关模型清单…</div>
                 ) : models.length === 0 ? (

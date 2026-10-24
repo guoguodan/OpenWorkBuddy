@@ -1989,6 +1989,15 @@ input, textarea { font-family: inherit; }
 .owb-fallback-row input::placeholder { color: var(--owb-text-tertiary); }
 .owb-fallback-row .owb-sheet__action { height: 30px; flex-shrink: 0; }
 .owb-settings-hint { font-size: 11px; line-height: 1.5; color: var(--owb-text-tertiary); }
+.owb-toggle-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  font-size: 12px; color: var(--owb-text-secondary); cursor: pointer;
+}
+.owb-toggle-row input { width: 15px; height: 15px; accent-color: var(--owb-accent, #3b82f6); cursor: pointer; }
+.owb-toggle-row input:disabled { cursor: not-allowed; }
+.owb-routed-models { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 4px; }
+.owb-routed-model { display: flex; flex-direction: column; gap: 4px; }
+.owb-routed-model__label { font-size: 12px; color: var(--owb-text-secondary); }
 
 /* ---- 卡片/徽标/头像 ---- */
 .owb-card-list { display: flex; flex-direction: column; gap: 8px; }

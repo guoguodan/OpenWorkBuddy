@@ -7,6 +7,10 @@ export interface WorkspaceSettingsInfo {
   taskTarget: 'local'
   model: string | null
   fallbackModel: string | null
+  autoRouteModel: boolean
+  fastModel: string | null
+  deepModel: string | null
+  codeModel: string | null
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null
   tokenBudget: number
   disabledSkills?: string[]
@@ -28,9 +32,20 @@ interface SettingsPanelProps {
   /** 备用模型候选与主模型一致,来自网关真实清单。 */
   fallbackModelDraft?: string | null
   onFallbackModelChange: (name: string | null) => Promise<void>
+  /** 自动路由开关与三类任务偏好模型;都走同一个设置通道持久化。 */
+  onAutoRouteChange: (enabled: boolean) => Promise<void>
+  onRoutedModelChange: (kind: RoutedModelKind, name: string | null) => Promise<void>
   onTokenBudgetChange: (value: number) => Promise<void>
   onClose: () => void
 }
+
+export type RoutedModelKind = 'fast' | 'deep' | 'code'
+
+const ROUTED_MODELS: Array<{ kind: RoutedModelKind; label: string; hint: string }> = [
+  { kind: 'fast', label: '轻量模型', hint: '快速模式与短对话使用;留空则跟随默认模型。' },
+  { kind: 'deep', label: '长上下文模型', hint: '长消息或多个附件时使用;留空则跟随默认模型。' },
+  { kind: 'code', label: '代码模型', hint: '开发场景或代码类任务使用;留空则跟随默认模型。' }
+]
 
 const PERMISSIONS: Array<{ id: PermissionMode; label: string; detail: string }> = [
   { id: 'default', label: '默认权限', detail: '写入、命令、删除等敏感操作在使用前弹窗确认。' },
@@ -61,12 +76,20 @@ export function SettingsPanel({
   onPermissionChange,
   fallbackModelDraft,
   onFallbackModelChange,
+  onAutoRouteChange,
+  onRoutedModelChange,
   onTokenBudgetChange,
   onClose
 }: SettingsPanelProps) {
   const [saving, setSaving] = useState<PermissionMode | null>(null)
   const [fallbackDraft, setFallbackDraft] = useState('')
   const [fallbackSaving, setFallbackSaving] = useState(false)
+  const [routeSaving, setRouteSaving] = useState(false)
+  const [routedDrafts, setRoutedDrafts] = useState<Record<RoutedModelKind, string>>({
+    fast: '',
+    deep: '',
+    code: ''
+  })
   const [budgetDraft, setBudgetDraft] = useState('')
   const [budgetSaving, setBudgetSaving] = useState(false)
 
@@ -77,6 +100,14 @@ export function SettingsPanel({
   useEffect(() => {
     setBudgetDraft(settings.tokenBudget > 0 ? String(settings.tokenBudget) : '')
   }, [settings.tokenBudget])
+
+  useEffect(() => {
+    setRoutedDrafts({
+      fast: settings.fastModel ?? '',
+      deep: settings.deepModel ?? '',
+      code: settings.codeModel ?? ''
+    })
+  }, [settings.fastModel, settings.deepModel, settings.codeModel])
 
   const currentFallback = (fallbackModelDraft ?? settings.fallbackModel ?? '').trim()
   const saveFallback = async (value: string | null) => {
@@ -173,6 +204,71 @@ export function SettingsPanel({
             <span className="owb-settings-hint">
               仅当主模型重试耗尽、且本步尚未产生任何输出时切换;已开始的回复不会中途换模型。
             </span>
+          </div>
+          <div className="owb-kv owb-kv--stack">
+            <span>自动路由</span>
+            <label className="owb-toggle-row">
+              <input
+                type="checkbox"
+                checked={settings.autoRouteModel}
+                disabled={routeSaving}
+                data-testid="auto-route-toggle"
+                onChange={(event) => {
+                  setRouteSaving(true)
+                  void onAutoRouteChange(event.target.checked).finally(() => setRouteSaving(false))
+                }}
+              />
+              <span>{settings.autoRouteModel ? '已开启:未手动选模型时按任务类型选择' : '已关闭:始终使用默认模型'}</span>
+            </label>
+            <span className="owb-settings-hint">
+              只在你没有手动选择模型时生效;每次路由都会在对话里说明使用了哪个模型与原因。
+            </span>
+            {settings.autoRouteModel ? (
+              <div className="owb-routed-models" data-testid="routed-models">
+                {ROUTED_MODELS.map((item) => {
+                  const current = (
+                    item.kind === 'fast'
+                      ? settings.fastModel
+                      : item.kind === 'deep'
+                        ? settings.deepModel
+                        : settings.codeModel
+                  ) ?? ''
+                  const draft = routedDrafts[item.kind]
+                  return (
+                    <div key={item.kind} className="owb-routed-model">
+                      <span className="owb-routed-model__label">{item.label}</span>
+                      <div className="owb-fallback-row">
+                        <input
+                          value={draft}
+                          onChange={(event) =>
+                            setRoutedDrafts((prev) => ({ ...prev, [item.kind]: event.target.value }))
+                          }
+                          placeholder="留空则跟随默认模型"
+                          aria-label={item.label}
+                          data-testid={`routed-model-${item.kind}`}
+                          disabled={routeSaving}
+                        />
+                        <button
+                          type="button"
+                          className="owb-sheet__action"
+                          disabled={routeSaving || draft.trim() === current}
+                          data-testid={`routed-model-save-${item.kind}`}
+                          onClick={() => {
+                            setRouteSaving(true)
+                            void onRoutedModelChange(item.kind, draft.trim() || null).finally(() =>
+                              setRouteSaving(false)
+                            )
+                          }}
+                        >
+                          保存
+                        </button>
+                      </div>
+                      <span className="owb-settings-hint">{item.hint}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : null}
           </div>
           <div className="owb-kv">
             <span>任务位置</span>

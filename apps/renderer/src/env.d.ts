@@ -458,6 +458,10 @@ interface Window {
           taskTarget: 'local'
           model: string | null
           fallbackModel: string | null
+          autoRouteModel: boolean
+          fastModel: string | null
+          deepModel: string | null
+          codeModel: string | null
           reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null
           tokenBudget: number
           disabledSkills: string[]
@@ -468,7 +472,17 @@ interface Window {
         openSkillsDir: string
       }>
       set: (input: {
-        key: 'permissionMode' | 'taskTarget' | 'model' | 'fallbackModel' | 'reasoningEffort' | 'tokenBudget'
+        key:
+          | 'permissionMode'
+          | 'taskTarget'
+          | 'model'
+          | 'fallbackModel'
+          | 'autoRouteModel'
+          | 'fastModel'
+          | 'deepModel'
+          | 'codeModel'
+          | 'reasoningEffort'
+          | 'tokenBudget'
         value: string | number | null
       }) => Promise<{
         settings: {
@@ -476,6 +490,10 @@ interface Window {
           taskTarget: 'local'
           model: string | null
           fallbackModel: string | null
+          autoRouteModel: boolean
+          fastModel: string | null
+          deepModel: string | null
+          codeModel: string | null
           reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null
           tokenBudget: number
           disabledSkills: string[]
