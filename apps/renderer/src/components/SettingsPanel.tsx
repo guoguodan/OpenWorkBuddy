@@ -7,7 +7,7 @@ export interface WorkspaceSettingsInfo {
   taskTarget: 'local'
   model: string | null
   fallbackModel: string | null
-  reasoningEffort: 'low' | 'medium' | 'high' | null
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null
   tokenBudget: number
   disabledSkills?: string[]
   pinnedSkills?: string[]

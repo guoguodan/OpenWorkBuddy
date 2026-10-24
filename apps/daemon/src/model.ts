@@ -98,7 +98,7 @@ export async function listRemoteModels(signal?: AbortSignal): Promise<RemoteMode
  */
 const models = new Map<string, ReturnType<typeof provider>>()
 
-export type ReasoningEffort = 'low' | 'medium' | 'high'
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export function resolveModelName(selected?: string | null): string {
   const name = selected?.trim()
@@ -115,26 +115,17 @@ export function modelFor(selected?: string | null) {
 }
 
 /**
- * 带思考强度的模型实例。
+ * 把思考强度转成单次调用的 provider 参数。
  *
- * 档位是请求级参数,不能写进 provider 的全局配置,否则同一进程里
- * 一次切档会污染其他会话。缓存键包含档位,避免"高"的实例复用给"低"。
- * 未指定档位时沿用 modelFor,保持与原行为一致。
+ * 档位必须跟着请求走,不能写进 provider 或模型实例的共享配置:
+ * 同一进程会同时服务多个会话,写进实例会让一次切档污染其他请求。
+ * SDK 的模型构造参数只接受 low/medium/high,这里改走请求级
+ * `providerOptions`,因此 xhigh/max 也能原样传给网关。
+ * 未指定档位时返回 undefined,请求体里不会出现该字段。
  */
-const effortModels = new Map<string, ReturnType<typeof provider>>()
-
-export function modelForEffort(
-  selected: string | null | undefined,
-  effort: ReasoningEffort | null | undefined
-) {
-  if (!effort) return modelFor(selected)
-  const name = resolveModelName(selected)
-  const key = `${name}::${effort}`
-  const cached = effortModels.get(key)
-  if (cached) return cached
-  const created = provider(name, { reasoningEffort: effort })
-  effortModels.set(key, created)
-  return created
+export function reasoningProviderOptions(effort: ReasoningEffort | null | undefined) {
+  if (!effort) return undefined
+  return { openai: { reasoningEffort: effort } }
 }
 
 export const model = modelFor(null)

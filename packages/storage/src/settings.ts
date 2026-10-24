@@ -29,7 +29,7 @@ export type PermissionMode = 'default' | 'fullAccess' | 'readOnly'
  * 只有用户显式选择才落库;空值表示"不干预",由模型/网关使用自身默认值。
  * 这与真实产品的"自定义 高"一致:显示当前生效档位,但不伪造模型能力。
  */
-export type ReasoningEffort = 'low' | 'medium' | 'high'
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface WorkspaceSettings {
   permissionMode: PermissionMode
@@ -109,7 +109,9 @@ export function parseTokenBudget(raw: string | null | undefined): number {
 
 /** 手改的档位值必须收敛到受支持集合,不能让任意字符串进入请求体。 */
 export function parseReasoningEffort(raw: string | null | undefined): ReasoningEffort | null {
-  return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : null
+  return raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max'
+    ? raw
+    : null
 }
 
 export function setWorkspaceSetting(

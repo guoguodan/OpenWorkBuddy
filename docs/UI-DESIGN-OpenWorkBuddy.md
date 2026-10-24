@@ -177,15 +177,17 @@
 
 ### 4.3.2 思考强度
 
-输入框右侧的「思考强度」与模型选择并列,取值 `自动 / 低 / 中 / 高`:
+思考强度与真实产品一致,放在模型选择器菜单内,不单独占用输入框右侧空间:
 
+- 已选档位以徽标形式跟在模型名后面(如 `bai/deepseek-v4-flash 高`),`自动` 不显示徽标。
+- 档位取 `自动 / 低 / 中 / 高 / 超高 / 极致`,分别对应 `null / low / medium / high / xhigh / max`。
 - 档位随工作区设置持久化,刷新与重启后保持;只影响之后的请求,不改变已发出的那一轮。
 - `自动` 不向网关发送 `reasoning_effort`,由模型与网关使用自身默认值,避免给非推理模型伪造能力。
-- 低/中/高分别以 `low/medium/high` 写入请求体 `reasoning_effort`;不支持的网关会忽略该字段,不影响本轮正常回复。
-- 档位与模型缓存键绑定(`model::effort`),避免同一进程内一次切档污染其他会话。
+- 显式档位走请求级 `providerOptions.openai.reasoningEffort`,而不是模型实例构造参数:
+  SDK 的类型枚举只到 `high`,请求级透传才能把 `xhigh/max` 原样送到网关,也不会因为进程内共享实例而串档。
 - 非法档位在 daemon 侧被拒绝,手改数据库里的异常值按「自动」兜底。
 
-验收:`node tests/e2e/verify-reasoning-effort.mjs`(12 项,含请求体断言)。
+验收:`node tests/e2e/verify-reasoning-effort.mjs`(15 项,含 high 与 xhigh 的请求体断言)。
 
 ### 4.4 消息
 

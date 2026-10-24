@@ -13,7 +13,7 @@ import {
   type ToolExecutionOptions
 } from 'ai'
 import { z } from 'zod'
-import { listRemoteModels, modelFor, modelForEffort, resolveModelName } from './model.js'
+import { listRemoteModels, modelFor, reasoningProviderOptions, resolveModelName } from './model.js'
 import { probeServiceEndpoint } from './service-probe.js'
 import { budgetExceededMessage, evaluateTokenBudget } from './budget.js'
 import {
@@ -2170,9 +2170,9 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   // 备用模型与主模型相同等于没有备用,不占用一次模型轮次。
   const effectiveFallback = fallbackModel && fallbackModel !== selectedModel ? fallbackModel : null
   // 档位在本轮开始时锁定,与模型选择一致:中途改设置不影响已发出的请求。
-  const reasoningEffort = workspaceSettings.reasoningEffort
+  const providerOptions = reasoningProviderOptions(workspaceSettings.reasoningEffort)
   let usedModel = selectedModel
-  let activeModel = modelForEffort(usedModel, reasoningEffort)
+  let activeModel = modelFor(usedModel)
   let fallbackUsed = false
 
   // 从这里开始才是可取消的模型运行。准备阶段(记忆、提示词)很快,
@@ -2253,7 +2253,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
       stepRequest: for (let round = 0; round < modelRounds; round++) {
         if (round === 1) {
           usedModel = effectiveFallback!
-          activeModel = modelForEffort(usedModel, reasoningEffort)
+          activeModel = modelFor(usedModel)
         }
         for (let attempt = 0; attempt < STREAM_MAX_ATTEMPTS; attempt++) {
           let producedOutput = false
@@ -2264,6 +2264,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
               messages,
               tools,
               maxSteps: 1,
+              ...(providerOptions ? { providerOptions } : {}),
               // 重试由本层统一负责:SDK 内建的静默重试不会发事件,
               // 用户只会看到界面卡住,而且两层重试会成倍放大请求次数。
               maxRetries: 0,
@@ -2323,7 +2324,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
               })
               if (!fallbackDecision.fallback) throw err
               usedModel = effectiveFallback!
-              activeModel = modelForEffort(usedModel, reasoningEffort)
+              activeModel = modelFor(usedModel)
               fallbackUsed = true
               emit({
                 type: 'model.fallback',
@@ -2412,6 +2413,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
         const wrapUp = streamText({
           model: activeModel,
           system: `${prepared.system}\n\n# 收尾\n工具调用预算已用尽。不要再调用工具,直接基于目前已知的信息回答用户;拿不到的信息要明确说明没查到。`,
+          ...(providerOptions ? { providerOptions } : {}),
           messages: [
             ...messages,
             {
@@ -2692,9 +2694,11 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       msg.value !== null &&
       msg.value !== 'low' &&
       msg.value !== 'medium' &&
-      msg.value !== 'high'
+      msg.value !== 'high' &&
+      msg.value !== 'xhigh' &&
+      msg.value !== 'max'
     ) {
-      throw new Error('reasoningEffort 必须是 low / medium / high 或 null')
+      throw new Error('reasoningEffort 必须是 low / medium / high / xhigh / max 或 null')
     }
     if (key === 'tokenBudget') {
       if (msg.value !== null && typeof msg.value !== 'number') {

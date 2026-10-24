@@ -1299,7 +1299,18 @@ export default function App() {
     try {
       const r = await window.openwb.settings.set({ key: 'reasoningEffort', value: effort })
       setSettings(r.settings)
-      const label = effort === 'low' ? '低' : effort === 'medium' ? '中' : effort === 'high' ? '高' : '自动'
+      const label =
+        effort === 'low'
+          ? '低'
+          : effort === 'medium'
+            ? '中'
+            : effort === 'high'
+              ? '高'
+              : effort === 'xhigh'
+                ? '超高'
+                : effort === 'max'
+                  ? '极致'
+                  : '自动'
       note('info', `思考强度已设为:${label}`)
     } catch (err) {
       note('system', `保存思考强度失败: ${(err as Error).message}`)

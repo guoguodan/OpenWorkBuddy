@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   IconArrowUp,
   IconAt,
-  IconBrain,
   IconChevron,
   IconFile,
   IconFolder,
@@ -30,7 +29,7 @@ export interface ComposerAttachment {
   source?: 'upload' | 'workspace'
 }
 
-export type ReasoningEffort = 'low' | 'medium' | 'high'
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 interface ComposerProps {
   value: string
@@ -75,14 +74,16 @@ const PERMISSIONS: Array<{ id: PermissionMode; label: string; detail: string }> 
 const MAX_ATTACHMENTS = 50
 
 /**
- * 思考强度档位与真实产品一致:低/中/高三个显式档位,外加"自动"。
+ * 思考强度档位与真实产品一致:低/中/高/超高/极致,外加"自动"。
  * 自动不向网关传参数,由模型自身决定,避免对非推理模型伪造能力。
  */
-const EFFORTS: Array<{ id: ReasoningEffort | null; label: string; detail: string }> = [
-  { id: null, label: '自动', detail: '不干预,由模型与网关决定' },
-  { id: 'low', label: '低', detail: '更快,适合简单问答与格式整理' },
-  { id: 'medium', label: '中', detail: '速度与深度平衡' },
-  { id: 'high', label: '高', detail: '更深入分析,耗时与用量更高' }
+const EFFORTS: Array<{ id: ReasoningEffort | null; label: string }> = [
+  { id: null, label: '自动' },
+  { id: 'low', label: '低' },
+  { id: 'medium', label: '中' },
+  { id: 'high', label: '高' },
+  { id: 'xhigh', label: '超高' },
+  { id: 'max', label: '极致' }
 ]
 
 function formatSize(bytes: number): string {
@@ -585,53 +586,6 @@ export function Composer({
           <div className="owb-composer__right">
             <button
               type="button"
-              className="owb-composer__effort"
-              title={`思考强度:${currentEffort.label} — ${currentEffort.detail}`}
-              aria-label="思考强度"
-              aria-haspopup="menu"
-              aria-expanded={menu === 'effort'}
-              data-testid="effort-picker-trigger"
-              onClick={() => setMenu(menu === 'effort' ? null : 'effort')}
-            >
-              <IconBrain size={14} className="owb-composer__model-icon" />
-              <span className="owb-composer__model-text">{currentEffort.label}</span>
-              <IconChevron size={12} className="owb-composer__model-chevron" />
-            </button>
-            {menu === 'effort' ? (
-              <div
-                className="owb-composer__menu owb-composer__menu--model"
-                role="menu"
-                aria-label="思考强度"
-                data-testid="effort-picker"
-              >
-                <div className="owb-composer__menu-title">思考强度</div>
-                {EFFORTS.map((item) => (
-                  <button
-                    key={item.id ?? 'auto'}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={item.id === reasoningEffort}
-                    className="owb-composer__menu-item owb-composer__menu-item--stack"
-                    data-testid={`effort-option-${item.id ?? 'auto'}`}
-                    onClick={() => {
-                      onPickReasoningEffort(item.id)
-                      setMenu(null)
-                    }}
-                  >
-                    <span>
-                      {item.label}
-                      {item.id === reasoningEffort ? <span className="owb-composer__tick"> ✓</span> : null}
-                    </span>
-                    <span className="owb-composer__menu-detail">{item.detail}</span>
-                  </button>
-                ))}
-                <div className="owb-composer__menu-hint">
-                  仅对支持思考强度的模型生效;其他模型会忽略该参数。
-                </div>
-              </div>
-            ) : null}
-            <button
-              type="button"
               className="owb-composer__model"
               title="切换模型"
               aria-label="切换模型"
@@ -649,6 +603,11 @@ export function Composer({
             >
               <IconModel size={15} className="owb-composer__model-icon" />
               <span className="owb-composer__model-text">{currentModel}</span>
+              {reasoningEffort ? (
+                <span className="owb-composer__model-effort" data-testid="model-effort-badge">
+                  {currentEffort.label}
+                </span>
+              ) : null}
               <IconChevron size={12} className="owb-composer__model-chevron" />
             </button>
             {menu === 'model' ? (
@@ -707,6 +666,29 @@ export function Composer({
                   </button>
                 </form>
                 <div className="owb-composer__menu-hint">模型需与当前 OPENAI_BASE_URL 网关兼容。</div>
+                <div className="owb-composer__menu-divider" />
+                <div className="owb-composer__menu-title">思考强度</div>
+                <div className="owb-composer__efforts" role="group" aria-label="思考强度">
+                  {EFFORTS.map((item) => (
+                    <button
+                      key={item.id ?? 'auto'}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={item.id === reasoningEffort}
+                      className={`owb-composer__effort-option${item.id === reasoningEffort ? ' owb-composer__effort-option--on' : ''}`}
+                      data-testid={`effort-option-${item.id ?? 'auto'}`}
+                      onClick={() => {
+                        onPickReasoningEffort(item.id)
+                        setMenu(null)
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="owb-composer__menu-hint">
+                  自动不发送强度参数;仅对支持思考强度的模型生效。
+                </div>
               </div>
             ) : null}
             <button type="button" className="owb-icon-btn owb-composer__icon" title="语音输入" aria-label="语音输入">

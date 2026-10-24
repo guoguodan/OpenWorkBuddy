@@ -205,32 +205,39 @@ try {
     '界面就绪'
   )
   check(
-    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="effort-picker-trigger"]'))`),
-    '输入框提供思考强度入口'
+    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="model-picker-trigger"]'))`),
+    '输入框提供模型与思考强度入口'
   )
   check(
-    await evaluate(`document.querySelector('[data-testid="effort-picker-trigger"]')?.innerText.includes('自动') ?? false`),
-    '默认档位为自动'
+    await waitFor(
+      evaluate,
+      `document.querySelector('[data-testid="model-picker-trigger"]')?.innerText.includes(${JSON.stringify(modelName)}) ?? false`
+    ),
+    '默认模型名可见'
+  )
+  check(
+    await evaluate(`Boolean(document.querySelector('[data-testid="model-effort-badge"]')) === false`),
+    '默认档位为自动且不显示强度徽标'
   )
 
-  await evaluate(`document.querySelector('[data-testid="effort-picker-trigger"]')?.click()`)
+  await evaluate(`document.querySelector('[data-testid="model-picker-trigger"]')?.click()`)
   check(
-    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="effort-picker"]'))`),
-    '打开档位菜单'
+    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="effort-option-auto"]'))`),
+    '模型菜单内提供思考强度'
   )
   check(
     await evaluate(
-      `['effort-option-auto','effort-option-low','effort-option-medium','effort-option-high'].every((id) => Boolean(document.querySelector('[data-testid="' + id + '"]')))`
+      `['effort-option-auto','effort-option-low','effort-option-medium','effort-option-high','effort-option-xhigh','effort-option-max'].every((id) => Boolean(document.querySelector('[data-testid="' + id + '"]')))`
     ),
-    '菜单列出自动/低/中/高四档'
+    '菜单列出自动/低/中/高/超高/极致六档'
   )
   await evaluate(`document.querySelector('[data-testid="effort-option-high"]')?.click()`)
   check(
     await waitFor(
       evaluate,
-      `document.querySelector('[data-testid="effort-picker-trigger"]')?.innerText.includes('高') ?? false`
+      `document.querySelector('[data-testid="model-effort-badge"]')?.innerText.includes('高') ?? false`
     ),
-    '选择高后按钮显示当前档位'
+    '选择高后模型按钮显示当前档位'
   )
   const saved = await evaluate(`window.openwb.settings.get()`)
   check(saved?.settings?.reasoningEffort === 'high', '档位已持久化', JSON.stringify(saved?.settings ?? null))
@@ -272,6 +279,15 @@ try {
   check(await idle(), '第二轮结束')
   const autoReq = requests.find((r) => String(r.lastUser).includes('第二轮'))
   check(autoReq && autoReq.hasEffort === false, '自动档位不传 reasoning_effort', JSON.stringify(autoReq ?? requests))
+
+  // 超高/极致不在 SDK 的模型构造参数枚举内,必须靠请求级参数透传;
+  // 这里验证扩展档位不是只改了界面标签。
+  await evaluate(`window.openwb.settings.set({ key: 'reasoningEffort', value: 'xhigh' })`)
+  await submit('第三轮:只回复思考强度链路验收通过')
+  await waitFor(evaluate, `(document.body.innerText.match(/思考强度链路验收通过/g) ?? []).length >= 3`, 45000)
+  check(await idle(), '第三轮结束')
+  const xhighReq = requests.find((r) => String(r.lastUser).includes('第三轮'))
+  check(xhighReq?.effort === 'xhigh', '请求体携带 reasoning_effort=xhigh', JSON.stringify(xhighReq ?? requests))
 } catch (err) {
   failed++
   console.error(`FAIL 运行异常: ${err?.message ?? err}`)
