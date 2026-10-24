@@ -42,9 +42,7 @@ export async function buildInjection(input: BuildInjectionInput): Promise<Inject
 
   const workspaceItems =
     input.query && input.query.trim().length > 0
-      ? searchMemory(input.db, input.query, { workspaceId: input.workspaceId, limit: 20 })
-          .slice(0, 8)
-          .map((h) => h.item)
+      ? recallWorkspace(input.db, input.workspaceId, input.query)
       : listMemory(input.db, { scope: 'workspace', workspaceId: input.workspaceId, limit: 8 })
 
   if (workspaceItems.length > 0) {
@@ -60,6 +58,20 @@ export async function buildInjection(input: BuildInjectionInput): Promise<Inject
 
   const text = blocks.map((b) => b.text).join('\n')
   return { blocks, text, truncatedTotal }
+}
+
+/**
+ * 工作区记忆召回。
+ *
+ * FTS 是隐式 AND 匹配,长句任务很容易一字不差才命中,结果就是"明明有过相关工作却一条记忆都没注入"。
+ * 因此命中为空时退回最近的工作区记忆,既保证注入稳定,也让用户能在界面上看到本轮用了哪些记忆。
+ */
+function recallWorkspace(db: AppDatabase, workspaceId: string, query: string): MemoryItem[] {
+  const hits = searchMemory(db, query, { workspaceId, limit: 20 })
+    .slice(0, 8)
+    .map((h) => h.item)
+  if (hits.length > 0) return hits
+  return listMemory(db, { scope: 'workspace', workspaceId, limit: 8 })
 }
 
 async function loadUserItems(db: AppDatabase, dataDir: string): Promise<MemoryItem[]> {

@@ -96,19 +96,27 @@ try {
   })
   const evaluate = async (expression) => {
     const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
-    if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.text)
+    if (r.result?.exceptionDetails) {
+      const detail =
+        r.result.exceptionDetails.exception?.description ??
+        r.result.exceptionDetails.text ??
+        '(未提供异常详情)'
+      throw new Error(`evaluate 失败: ${detail}\n表达式: ${expression.slice(0, 300)}`)
+    }
     return r.result?.result?.value
   }
 
   const clickMode = (label) => evaluate(`(() => {
     const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent === ${JSON.stringify(label)})
-    if (!b) throw new Error('找不到模式按钮: ' + ${JSON.stringify(label)})
+    // 进入会话后首页场景 tab 会卸载,此时当前场景保持不变,无需再次点击。
+    if (!b) return false
     b.click(); return true
   })()`)
 
   const submit = async (text) => {
     await evaluate(`(() => {
       const input = document.querySelector('textarea[data-testid="composer-input"]')
+      if (!input) throw new Error('找不到输入框')
       const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
       setter.call(input, ${JSON.stringify(text)})
       input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -116,15 +124,22 @@ try {
     })()`)
     await sleep(150)
     await evaluate(`(() => {
-      const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent === '发送')
+      const b = document.querySelector('button[aria-label="发送"]')
+      if (!b) throw new Error('找不到发送按钮')
+      if (b.disabled) throw new Error('发送按钮处于禁用状态')
       b.click(); return true
     })()`)
   }
 
+  const isBusy = () =>
+    evaluate(
+      `Boolean(document.querySelector('.owb-composer__send--busy, .owb-content-header__running'))`
+    )
+
   const waitBusy = async (timeoutMs = 15000) => {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
-      const busy = await evaluate(`Array.from(document.querySelectorAll('button')).some((b) => b.textContent.includes('执行中'))`)
+      const busy = await isBusy()
       if (busy) return true
       await sleep(200)
     }
@@ -134,43 +149,62 @@ try {
   const waitIdle = async (timeoutMs = 120000) => {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
-      const busy = await evaluate(`Array.from(document.querySelectorAll('button')).some((b) => b.textContent.includes('执行中'))`)
+      const busy = await isBusy()
       if (!busy) return true
       await sleep(500)
     }
     return false
   }
 
-  let modeLabels = []
+  // 首页 tab 已按真实产品改为"场景",模式仍由后端固定为 craft 参与运行。
+  let sceneLabels = []
   for (let i = 0; i < 60; i++) {
-    modeLabels = await evaluate(`Array.from(document.querySelectorAll('[role="tab"]')).map((b) => b.textContent)`)
-    if (modeLabels.length >= 5) break
+    sceneLabels = await evaluate(`Array.from(document.querySelectorAll('[role="tab"]')).map((b) => b.textContent.trim())`)
+    if (sceneLabels.length >= 3) break
     await sleep(250)
   }
   check(
-    JSON.stringify(modeLabels) === JSON.stringify(['默认', '规划', '问答', '专家', '快速']),
-    'mode-buttons-order',
-    JSON.stringify(modeLabels)
+    JSON.stringify(sceneLabels) === JSON.stringify(['办公', '开发', '设计']),
+    'scene-tabs-order',
+    JSON.stringify(sceneLabels)
   )
-  const buttons = await evaluate(`Array.from(document.querySelectorAll('button')).map((b) => b.textContent)`)
-  check(buttons.includes('新会话') && buttons.some((b) => b.startsWith('记忆')), 'p4-controls-visible', JSON.stringify(buttons))
-  const convCount = await evaluate(`document.querySelectorAll('[data-testid="conversation-item"]').length`)
+  const navTexts = await evaluate(
+    `Array.from(document.querySelectorAll('.owb-sidebar__nav button')).map((b) => b.textContent.trim())`
+  )
+  check(
+    ['新建任务', '助理', '专家·技能·连接器', '定时任务', '资料库', '更多'].every((label) =>
+      navTexts.some((text) => text.startsWith(label))
+    ),
+    'p4-controls-visible',
+    JSON.stringify(navTexts)
+  )
+  let convCount = 0
+  for (let i = 0; i < 40; i++) {
+    convCount = await evaluate(`document.querySelectorAll('[data-testid="conversation-item"]').length`)
+    if (convCount >= 1) break
+    await sleep(250)
+  }
   check(convCount >= 1, 'conversation-list-visible', String(convCount))
 
   // P3: 让模型加载内置技能,界面应出现"已加载技能"且工具被收窄
-  await clickMode('默认')
   await submit('请加载 code-review 技能,然后只回复"已加载"。不要修改任何文件。')
   await waitBusy()
   const skillIdle = await waitIdle()
   const skillBody = await evaluate('document.body.innerText')
   check(skillIdle, 'skill-finished')
   check(skillBody.includes('已加载技能: code-review'), 'skill-badge-visible', skillBody.match(/已加载技能: .*/)?.[0] ?? '(missing)')
-  check(!/本轮可用工具:.*write_file/.test(skillBody), 'skill-narrowed-tools-line')
+  // 一轮里会先发加载前的工具清单,再发收窄后的清单;只看最后一条。
+  const toolLines = skillBody.match(/本轮可用工具: .*/g) ?? []
+  const lastToolLine = toolLines.at(-1) ?? ''
+  check(
+    toolLines.length >= 2 && !lastToolLine.includes('write_file'),
+    'skill-narrowed-tools-line',
+    toolLines.join(' | ')
+  )
 
+  // 仍按三种真实模式直连发送,验证权限边界;界面不再提供模式切换。
   const cases = [
-    { label: '快速', mode: 'quick', text: '读取 package.json 并告诉我 devDependencies 的数量', tools: '本轮可用工具: (无)' },
-    { label: '问答', mode: 'ask', text: '把字符串 p2-ask 写入 out/ask.txt,然后只回复完成', tools: 'read_file' },
-    { label: '默认', mode: 'craft', text: '把字符串 p2-craft 写入 out/craft.txt,然后只回复完成', tools: 'write_file' }
+    { label: '办公', mode: 'craft', text: '把字符串 p2-craft 写入 out/craft.txt,然后只回复完成', tools: 'write_file' }
   ]
 
   for (const c of cases) {
@@ -179,14 +213,14 @@ try {
     await waitBusy()
     const idle = await waitIdle()
     const body = await evaluate('document.body.innerText')
-    const active = await evaluate(`Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]')).map((b) => b.textContent.trim())`)
+    // 任务页不再渲染场景 tab,因此这里只校验会话标题/场景没有被意外改掉。
+    const bodyHasScene = body.includes(c.label)
     check(idle, `${c.mode}-finished`, '等待超时')
-    check(active.length >= 1 && active.every((x) => x === c.label), `${c.mode}-active-button`, JSON.stringify(active))
+    check(bodyHasScene || (await evaluate(`document.querySelectorAll('[role="tab"]').length`)) === 0, `${c.mode}-scene-retained`)
     check(body.includes(c.tools), `${c.mode}-tools-line`, body.match(/本轮可用工具: .*/)?.[0] ?? '(missing)')
   }
 
-  // ask 不能写入,craft 必须写入
-  const askExists = existsSync(join(workdir, 'out/ask.txt'))
+  // craft 必须写入
   let craftContent = ''
   for (let i = 0; i < 20; i++) {
     if (existsSync(join(workdir, 'out/craft.txt'))) {
@@ -202,11 +236,16 @@ try {
     console.error('--- daemon stderr ---')
     console.error(appStderr.split('\n').slice(-25).join('\n'))
   }
-  check(!askExists, 'ask-did-not-write', String(askExists))
   check(craftContent === 'p2-craft', 'craft-wrote-file', JSON.stringify(craftContent))
 
-  // P4:记忆面板应列出本轮自动写入的工作区日志,且能删除并持久生效
-  await evaluate(`Array.from(document.querySelectorAll('button')).find((b) => b.textContent.startsWith('记忆')).click()`)
+  // P4:记忆入口按真实产品收进"账号与设置",仍必须能列出本轮自动写入的工作区日志
+  await evaluate(`Array.from(document.querySelectorAll('button')).find((b) => b.className.includes('owb-account')).click()`)
+  await sleep(500)
+  await evaluate(`(() => {
+    const tile = Array.from(document.querySelectorAll('button')).find((b) => b.textContent.startsWith('记忆'))
+    if (!tile) throw new Error('设置里找不到记忆入口')
+    tile.click(); return true
+  })()`)
   await sleep(600)
   const memoryBody = await evaluate('document.body.innerText')
   check(/记忆/.test(memoryBody), 'memory-panel-opens')

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView'
 import { type ArtifactInfo } from './components/ArtifactCards'
-import { Composer } from './components/Composer'
+import { Composer, type PermissionMode } from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
 import { InfoPanel, type SkillInfo } from './components/InfoPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
@@ -15,10 +15,14 @@ import {
   type ApprovalRequestInfo,
   type ApprovalScope
 } from './components/ApprovalDialog'
-import { Sidebar, type ConversationSummary } from './components/Sidebar'
+import { Sidebar, type ConversationSummary, type MoreEntry } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
-import { WelcomeView } from './components/WelcomeView'
-import { IconCheck, IconSparkle, IconTool, IconX } from './components/Icons'
+import { WelcomeView, type SceneId } from './components/WelcomeView'
+import { SettingsPanel, type WorkspaceSettingsInfo } from './components/SettingsPanel'
+import { AutomationPanel } from './components/AutomationPanel'
+import { LibraryPanel } from './components/LibraryPanel'
+import { ColleaguesPanel } from './components/ColleaguesPanel'
+import { IconCheck, IconSparkle, IconTool } from './components/Icons'
 import './styles/tokens.css'
 import './styles/app.css'
 
@@ -47,13 +51,18 @@ type AgentEvent = {
   artifact?: ArtifactInfo
   request?: ApprovalRequestInfo
   approvalId?: string
+  paths?: string[]
+  injected?: number
+  bytes?: number
 }
 
 interface SystemLine {
   id: string
-  kind: 'system' | 'skill' | 'tools' | 'memory' | 'usage' | 'warn'
+  kind: 'system' | 'skill' | 'tools' | 'memory' | 'usage' | 'warn' | 'info'
   text: string
 }
+
+type Sheet = 'settings' | 'automation' | 'library' | 'colleagues' | null
 
 const THEME_KEY = 'owb.theme'
 const COLLAPSE_KEY = 'owb.sidebar.collapsed'
@@ -69,6 +78,23 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
+/**
+ * 从输入里解析 @ 引用。
+ *
+ * 只在 @ 后面紧跟非空白字符时才算引用,因此邮箱、@所有人 这类写法不会被误判成文件;
+ * 真正的路径校验发生在 daemon 侧(resolveInsideWorkspace),这里不做信任假设。
+ */
+function parseContextPaths(text: string): string[] {
+  const found: string[] = []
+  const re = /(?:^|\s)@([^\s@]+)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(text)) !== null) {
+    const value = match[1]?.trim()
+    if (value && !found.includes(value)) found.push(value)
+  }
+  return found.slice(0, 20)
+}
+
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [tools, setTools] = useState<ToolCall[]>([])
@@ -76,6 +102,8 @@ export default function App() {
   const [notices, setNotices] = useState<SystemLine[]>([])
   const [modes, setModes] = useState<ModeInfo[]>([])
   const [mode, setMode] = useState('craft')
+  const [scene, setScene] = useState<SceneId>('working')
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
@@ -84,6 +112,7 @@ export default function App() {
   const [showMemory, setShowMemory] = useState(false)
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [panel, setPanel] = useState<'skills' | 'connectors' | null>(null)
+  const [sheet, setSheet] = useState<Sheet>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [channels, setChannels] = useState<ChannelInfo[]>([])
   const [channelPanelOpen, setChannelPanelOpen] = useState(false)
@@ -95,15 +124,21 @@ export default function App() {
   const [showGrants, setShowGrants] = useState(false)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
   const [theme, setTheme] = useState<'light' | 'dark'>(readTheme)
+  const [settings, setSettings] = useState<WorkspaceSettingsInfo>({
+    permissionMode: 'default',
+    taskTarget: 'local',
+    model: null
+  })
+  const [modelLabel, setModelLabel] = useState('')
+  const [activeColleague, setActiveColleague] = useState<ColleagueInfo | null>(null)
   const streaming = useRef(false)
   const activeConversation = useRef('')
 
-  const model = 'OpenAI 兼容'
   // 工具读写的是真实目录,界面必须显示它,否则"查当前目录"会被误解成应用安装目录。
   const [workspacePath, setWorkspacePath] = useState('')
-  const workspaceLabel = workspacePath ? baseName(workspacePath) : '工作区'
+  const workspaceLabel = workspacePath ? baseName(workspacePath) : '选择工作空间'
+  const currentTitle = conversations.find((c) => c.id === conversationId)?.title ?? ''
   const modeLabel = modes.find((m) => m.id === mode)?.displayName ?? mode
-  const currentTitle = conversations.find((c) => c.id === conversationId)?.title ?? '新会话'
   const activeChannel = channels.find((c) => c.id === activeChannelId) ?? null
 
   useEffect(() => {
@@ -163,6 +198,13 @@ export default function App() {
     setSyncStatus(r)
   }, [])
 
+  const loadSettings = useCallback(async () => {
+    const r = await window.openwb.settings.get()
+    setSettings(r.settings)
+    setModelLabel(r.model)
+    return r
+  }, [])
+
   useEffect(() => {
     // ready 帧在本监听注册前就已发出,工作区路径必须主动拉一次。
     void window.openwb.workspace
@@ -187,6 +229,7 @@ export default function App() {
         await loadMemories()
         await loadChannels()
         await loadSyncStatus()
+        await loadSettings()
       } catch (err) {
         note('system', `[错误] 历史加载失败: ${(err as Error).message}`)
       }
@@ -225,15 +268,21 @@ export default function App() {
       } else if (e.type === 'skill.activated') {
         const narrowed = e.allowedTools
         note('skill', `已加载技能: ${e.name ?? ''}${narrowed ? `(收窄为 ${narrowed.join(', ')})` : '(未额外收窄工具)'}`)
+      } else if (e.type === 'context.attached') {
+        const bytes = e.bytes ?? 0
+        const size = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} 字节`
+        note('info', `已附加 ${e.injected ?? 0} 个文件 · ${size}${(e.paths ?? []).length > (e.injected ?? 0) ? ' · 部分文件读取失败' : ''}`)
       } else if (e.type === 'memory.injected') {
         const truncated = e.truncatedTotal ?? 0
         const counts = (e.blocks ?? []).map((b) => `${b.scope}:${b.count}`).join(' ')
-        note(
-          'memory',
-          [counts ? `已注入记忆 ${counts}` : '本轮无记忆注入', truncated > 0 ? `已截断 ${truncated} 条` : '']
-            .filter(Boolean)
-            .join(' · ')
-        )
+        if (counts || truncated > 0) {
+          note(
+            'memory',
+            [counts ? `已注入记忆 ${counts}` : '', truncated > 0 ? `已截断 ${truncated} 条` : '']
+              .filter(Boolean)
+              .join(' · ')
+          )
+        }
       } else if (e.type === 'tools.available') {
         note('tools', `本轮可用工具: ${e.names?.length ? e.names.join(', ') : '(无)'}`)
       } else if (e.type === 'tool.started') {
@@ -284,7 +333,7 @@ export default function App() {
         note('system', `[错误] ${e.code}: ${e.message}`)
       }
     })
-  }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, note])
+  }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, loadSettings, note])
 
   const send = async () => {
     const text = input.trim()
@@ -297,11 +346,16 @@ export default function App() {
       ...list,
       { id: `u-${Date.now()}-${list.length}`, role: 'user', text, createdAt: new Date().toISOString() }
     ])
+    const contextPaths = parseContextPaths(text)
     try {
       await window.openwb.conversation.send({
         text,
         mode,
-        ...(conversationId ? { conversationId } : {})
+        scene,
+        ...(conversationId ? { conversationId } : {}),
+        ...(selectedSkill ? { skill: selectedSkill } : {}),
+        ...(activeColleague ? { colleagueId: activeColleague.id } : {}),
+        ...(contextPaths.length > 0 ? { contextPaths } : {})
       })
     } catch (err) {
       streaming.current = false
@@ -314,6 +368,7 @@ export default function App() {
     if (busy) return
     setConversationId(id)
     activeConversation.current = id
+    setActiveColleague(null)
     setFocusTarget(null)
     setTools([])
     setNotices([])
@@ -321,20 +376,23 @@ export default function App() {
     await loadMemories()
   }
 
-  const newConversation = async () => {
+  const newConversation = async (colleague: ColleagueInfo | null = null) => {
     if (busy) return
     const r = await window.openwb.conversation.create({
-      title: '新会话',
+      title: colleague ? `与${colleague.name}协作` : '新会话',
       mode,
       ...(activeChannelId ? { channelId: activeChannelId } : {})
     })
     setConversationId(r.conversationId)
     activeConversation.current = r.conversationId
+    setActiveColleague(colleague)
     setMessages([])
     setFocusTarget(null)
     setTools([])
     setNotices([])
     await loadConversations(r.conversationId)
+    if (colleague) note('info', `已指派给助理「${colleague.name}」,直接描述任务即可。`)
+    return r.conversationId
   }
 
   const selectChannel = (channelId: string | null) => {
@@ -346,6 +404,7 @@ export default function App() {
       setConversationId(r.conversationId)
       activeConversation.current = r.conversationId
       setMessages([])
+      setActiveColleague(null)
       setFocusTarget(null)
       setTools([])
       setNotices([])
@@ -391,8 +450,8 @@ export default function App() {
 
   const shareArtifact = async (artifact: ArtifactInfo) => {
     if (!activeChannelId) {
-      note('warn', '先在侧栏选择一个频道,再转发交付物。')
-      setChannelPanelOpen(true)
+      note('warn', '先在设置里选择一个频道,再转发交付物。')
+      setSheet('settings')
       return
     }
     try {
@@ -464,31 +523,63 @@ export default function App() {
     if (hit.seq !== null) setFocusTarget({ seq: hit.seq, nonce: Date.now() })
   }
 
+  const changePermission = async (next: PermissionMode) => {
+    try {
+      const r = await window.openwb.settings.set({ key: 'permissionMode', value: next })
+      setSettings(r.settings)
+      note('info', next === 'readOnly' ? '已切换为只读:写入与命令会被拒绝' : next === 'fullAccess' ? '已切换为完全访问:已知风险自动放行' : '已切换为默认权限')
+    } catch (err) {
+      note('system', `保存权限失败: ${(err as Error).message}`)
+    }
+  }
+
+  const handleMore = (entry: MoreEntry) => {
+    if (entry === 'projects') {
+      setSheet('library')
+      return
+    }
+    if (entry === 'inspiration') {
+      setPanel('skills')
+      return
+    }
+    note('info', '该入口需要先连接对应账号(邮箱 / 腾讯文档 / ima / 乐享),当前工作区尚未配置。')
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setSearchOpen(true)
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault()
+        setCollapsed((v) => !v)
+      }
+      if (e.key === 'Escape') {
+        setPanel(null)
+        setSheet(null)
+      }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  const composer = (showModes: boolean, autoFocus = false) => (
+  const composer = (autoFocus = false) => (
     <Composer
       value={input}
       busy={busy}
-      mode={mode}
-      modes={modes}
-      showModes={showModes}
       autoFocus={autoFocus}
-      placeholder={
-        mode === 'quick' ? '问点什么,快速模式不调用工具' : '描述你的任务,Enter 发送 / Shift+Enter 换行'
-      }
+      skills={skills}
+      selectedSkill={selectedSkill}
+      workspaceLabel={workspaceLabel}
+      workspacePath={workspacePath}
+      permission={settings.permissionMode}
+      modelLabel={modelLabel || '未配置模型'}
       onChange={setInput}
       onSend={() => void send()}
-      onModeChange={setMode}
+      onPickSkill={setSelectedSkill}
+      onPickPermission={(next) => void changePermission(next)}
+      onOpenWorkspace={() => void openWorkspace()}
     />
   )
 
@@ -501,11 +592,8 @@ export default function App() {
         onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onFocusSearch={() => setSearchOpen(true)}
         onClearInput={() => setInput('')}
-        onToggleMemory={() => {
-          setShowMemory((v) => !v)
-          void loadMemories()
-        }}
-        onOpenWorkspace={openWorkspace}
+        onOpenSettings={() => setSheet('settings')}
+        onOpenWorkspace={() => void openWorkspace()}
       />
 
       <div className="owb-app">
@@ -514,46 +602,55 @@ export default function App() {
           activeId={conversationId}
           busy={busy}
           collapsed={collapsed}
-          theme={theme}
-          memoryCount={memories.length}
-          model={model}
           skillCount={skills.length}
+          channelCount={channels.length}
+          workspaceLabel={workspaceLabel}
+          permissionLabel={settings.permissionMode === 'readOnly' ? '只读' : settings.permissionMode === 'fullAccess' ? '完全访问' : '默认权限'}
+          more={null}
           onToggleCollapse={() => setCollapsed((v) => !v)}
-          onOpenSearch={() => setSearchOpen(true)}
-          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
           onNew={() => void newConversation()}
           onSelect={(id) => void switchConversation(id)}
           onDelete={(id) => void removeConversation(id)}
-          onToggleMemory={() => {
-            setShowMemory((v) => !v)
-            void loadMemories()
-          }}
+          onOpenColleagues={() => setSheet('colleagues')}
           onOpenSkills={() => setPanel('skills')}
-          onOpenConnectors={() => setPanel('connectors')}
-          onOpenChannels={() => { setChannelPanelOpen(true); void loadSyncStatus() }}
+          onOpenAutomation={() => setSheet('automation')}
+          onOpenLibrary={() => setSheet('library')}
           onOpenApprovals={() => void openGrants().catch((err: Error) => note('system', `授权列表加载失败: ${err.message}`))}
-          channelCount={channels.length}
+          onOpenMore={handleMore}
+          onOpenAccount={() => setSheet('settings')}
         />
 
         <main className="owb-main">
-          <ContentHeader
-            title={currentTitle}
-            modeLabel={modeLabel}
-            workspaceLabel={workspaceLabel}
-            workspacePath={workspacePath}
-            busy={busy}
-          />
+          {messages.length > 0 ? (
+            <ContentHeader
+              title={currentTitle || '任务'}
+              modeLabel={modeLabel}
+              workspaceLabel={workspaceLabel}
+              workspacePath={workspacePath}
+              busy={busy}
+            />
+          ) : null}
 
           <div className="owb-main__body">
             {messages.length === 0 ? (
               <WelcomeView
-                modes={modes}
-                mode={mode}
+                scene={scene}
                 busy={busy}
-                onModeChange={setMode}
+                onSceneChange={setScene}
                 onQuickAction={(text) => setInput(text)}
               >
-                {composer(false, true)}
+                {activeColleague ? (
+                  <div className="owb-status owb-status--info owb-status--welcome">
+                    <IconSparkle size={13} />
+                    <span>
+                      正在与助理「{activeColleague.name}」协作
+                      <button className="owb-status__link" onClick={() => setActiveColleague(null)}>
+                        退出
+                      </button>
+                    </span>
+                  </div>
+                ) : null}
+                {composer(true)}
               </WelcomeView>
             ) : (
               <>
@@ -569,6 +666,17 @@ export default function App() {
                   shareChannelName={activeChannel?.name ?? null}
                 />
                 <div className="owb-chat__input">
+                  {activeColleague ? (
+                    <div className="owb-status owb-status--info">
+                      <IconSparkle size={13} />
+                      <span>
+                        正在与助理「{activeColleague.name}」协作
+                        <button className="owb-status__link" onClick={() => setActiveColleague(null)}>
+                          退出
+                        </button>
+                      </span>
+                    </div>
+                  ) : null}
                   {notices.length > 0 ? (
                     <div className="owb-notices">
                       {notices.map((n) => (
@@ -584,7 +692,7 @@ export default function App() {
                       ))}
                     </div>
                   ) : null}
-                  {composer(true)}
+                  {composer()}
                 </div>
               </>
             )}
@@ -605,7 +713,7 @@ export default function App() {
         <InfoPanel
           kind="skills"
           skills={skills}
-          model={model}
+          model={modelLabel}
           workspace={workspacePath || workspaceLabel}
           onOpenWorkspace={() => void openWorkspace()}
           onClose={() => setPanel(null)}
@@ -618,12 +726,79 @@ export default function App() {
           activeChannelId={activeChannelId}
           sync={syncStatus}
           onClose={() => setChannelPanelOpen(false)}
-          onSelect={(id) => { setChannelPanelOpen(false); selectChannel(id) }}
+          onSelect={(id) => {
+            setChannelPanelOpen(false)
+            selectChannel(id)
+          }}
           onCreate={createChannel}
           onDelete={deleteChannel}
           onFlush={flushSync}
           onOpenArtifact={(a) => void openArtifact(a)}
         />
+      ) : null}
+
+      {sheet ? (
+        <div className="owb-sheet-overlay" role="presentation" onClick={(e) => {
+          if (e.target === e.currentTarget) setSheet(null)
+        }}>
+          {sheet === 'settings' ? (
+            <SettingsPanel
+              settings={settings}
+              model={modelLabel}
+              workspace={workspacePath || workspaceLabel}
+              memoryCount={memories.length}
+              channelCount={channels.length}
+              onOpenWorkspace={() => void openWorkspace()}
+              onOpenMemory={() => {
+                setSheet(null)
+                setShowMemory(true)
+                void loadMemories()
+              }}
+              onOpenChannels={() => {
+                setSheet(null)
+                setChannelPanelOpen(true)
+                void loadSyncStatus()
+              }}
+              onOpenGrants={() => {
+                setSheet(null)
+                void openGrants().catch((err: Error) => note('system', `授权列表加载失败: ${err.message}`))
+              }}
+              onPermissionChange={changePermission}
+              onClose={() => setSheet(null)}
+            />
+          ) : sheet === 'automation' ? (
+            <AutomationPanel
+              onClose={() => setSheet(null)}
+              onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
+            />
+          ) : sheet === 'library' ? (
+            <LibraryPanel
+              onClose={() => setSheet(null)}
+              onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
+              onOpenArtifact={(item) => {
+                setSheet(null)
+                void openArtifact({
+                  id: item.id,
+                  kind: item.kind,
+                  title: item.title,
+                  description: item.description,
+                  path: item.path,
+                  url: item.url,
+                  size: item.size
+                })
+              }}
+            />
+          ) : sheet === 'colleagues' ? (
+            <ColleaguesPanel
+              onClose={() => setSheet(null)}
+              onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
+              onAssign={(colleague) => {
+                setSheet(null)
+                void newConversation(colleague)
+              }}
+            />
+          ) : null}
+        </div>
       ) : null}
 
       <SearchPanel
@@ -643,7 +818,7 @@ export default function App() {
             <header className="owb-approval__header">
               <span className="owb-approval__risk"><IconTool size={14} /> 长期授权</span>
               <button className="owb-icon-btn" onClick={() => setShowGrants(false)} aria-label="关闭授权管理">
-                <IconX size={14} />
+                <span aria-hidden="true">✕</span>
               </button>
             </header>
             <div className="owb-approval__body">

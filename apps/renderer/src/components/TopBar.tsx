@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconSearch, IconSidebar } from './Icons'
+import { IconFilter, IconSearch, IconSidebar } from './Icons'
 
 interface TopBarProps {
   collapsed: boolean
@@ -8,10 +8,15 @@ interface TopBarProps {
   onToggleTheme: () => void
   onFocusSearch: () => void
   onClearInput: () => void
-  onToggleMemory: () => void
+  onOpenSettings: () => void
   onOpenWorkspace: () => void
 }
 
+/**
+ * 顶部菜单栏复刻真实产品的"细标题栏":
+ * 左侧是窗口级操作(侧栏/搜索/筛选),中间是原生风格菜单,右侧留给系统按钮。
+ * 这里不自绘最小化/最大化:窗口未启用无边框,系统标题按钮由 Electron 绘制。
+ */
 export function TopBar({
   collapsed,
   theme,
@@ -19,11 +24,11 @@ export function TopBar({
   onToggleTheme,
   onFocusSearch,
   onClearInput,
-  onToggleMemory,
+  onOpenSettings,
   onOpenWorkspace
 }: TopBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     if (!openMenu) return
@@ -80,52 +85,66 @@ export function TopBar({
     <header className="owb-topbar" ref={rootRef}>
       <div className="owb-topbar__left">
         <button
-          className="owb-icon-btn"
+          className="owb-icon-btn owb-topbar__btn"
           onClick={onToggleCollapse}
           title={collapsed ? '展开侧边栏' : '收起侧边栏'}
           aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
         >
-          <IconSidebar />
+          <IconSidebar size={17} />
         </button>
-        <button className="owb-icon-btn" onClick={onFocusSearch} title="搜索会话" aria-label="搜索会话">
+        <button className="owb-icon-btn owb-topbar__btn" onClick={onFocusSearch} title="搜索任务" aria-label="搜索任务">
           <IconSearch size={17} />
         </button>
+        <button
+          className="owb-icon-btn owb-topbar__btn"
+          onClick={() => setOpenMenu(openMenu === 'filter' ? null : 'filter')}
+          title="筛选"
+          aria-label="筛选"
+        >
+          <IconFilter size={17} />
+        </button>
+        {openMenu === 'filter' ? (
+          <div className="owb-menu owb-menu--anchor" role="menu">
+            {[
+              { text: '全部任务', onPick: onFocusSearch },
+              { text: '只看执行中', onPick: onFocusSearch },
+              { text: '只看有交付物的任务', onPick: onOpenWorkspace }
+            ].map((item) => (
+              <button
+                key={item.text}
+                role="menuitem"
+                className="owb-menu__item"
+                onClick={() => { setOpenMenu(null); item.onPick() }}
+              >
+                {item.text}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <nav className="owb-menubar" aria-label="主菜单">
-        {menu('edit', '编辑', [
+        {menu('edit', '编辑(E)', [
           { text: '清空输入框', hint: 'Ctrl+Shift+X', onPick: onClearInput },
-          { text: '打开记忆面板', onPick: onToggleMemory },
-          { text: '搜索会话', hint: 'Ctrl+K', onPick: onFocusSearch }
+          { text: '搜索任务', hint: 'Ctrl+K', onPick: onFocusSearch }
         ])}
-        {menu('view', '窗口', [
-          {
-            text: theme === 'dark' ? '切换到浅色主题' : '切换到深色主题',
-            onPick: onToggleTheme
-          },
-          {
-            text: collapsed ? '展开侧边栏' : '收起侧边栏',
-            hint: 'Ctrl+B',
-            onPick: onToggleCollapse
-          },
+        {menu('view', '窗口(W)', [
+          { text: theme === 'dark' ? '切换到浅色主题' : '切换到深色主题', onPick: onToggleTheme },
+          { text: collapsed ? '展开侧边栏' : '收起侧边栏', hint: 'Ctrl+B', onPick: onToggleCollapse },
           { text: '打开工作区目录', onPick: onOpenWorkspace }
         ])}
-        {menu('help', '帮助', [
-          { text: '发送：Enter', onPick: onToggleMemory },
-          { text: '换行：Shift + Enter', onPick: onFocusSearch }
+        {menu('help', '帮助(H)', [
+          { text: '发送：Enter', onPick: () => undefined },
+          { text: '换行：Shift + Enter', onPick: () => undefined },
+          { text: '设置与权限', onPick: onOpenSettings }
         ])}
-        {menu('about', '关于', [
+        {menu('about', '关于(A)', [
           { text: 'OpenWorkBuddy 0.0.1', onPick: () => undefined },
           { text: '本地优先的 AI 工作台', onPick: () => undefined }
         ])}
       </nav>
 
-      <div className="owb-topbar__right">
-        <span className="owb-topbar__badge" title="本地执行，不上传工作区文件">
-          <span className="owb-topbar__badge-dot" />
-          本地运行
-        </span>
-      </div>
+      <div className="owb-topbar__right" />
     </header>
   )
 }

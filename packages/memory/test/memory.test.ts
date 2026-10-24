@@ -222,6 +222,33 @@ describe('injection', () => {
     raw.close()
   })
 
+  it('falls back to recent workspace memory when keywords do not match', async () => {
+    const { db, ws, raw } = open()
+    addMemory(db, { scope: 'workspace', workspaceId: ws.id, kind: 'log', content: '请求: 整理季度汇报 | 模式: craft' })
+    addMemory(db, { scope: 'workspace', workspaceId: ws.id, kind: 'log', content: '请求: 修复登录问题 | 模式: craft' })
+
+    // 长句任务几乎不可能整句命中 FTS,不能因此一条都不注入。
+    const result = await buildInjection({
+      db, dataDir, workspaceId: ws.id, query: '把字符串 p2-craft 写入 out/craft.txt,然后只回复完成'
+    })
+    const block = result.blocks.find((b) => b.scope === 'workspace')
+    expect(block).toBeDefined()
+    expect(block!.ids.length).toBe(2)
+    expect(result.text).toContain('整理季度汇报')
+    raw.close()
+  })
+
+  it('keeps keyword hits ahead of the recency fallback', async () => {
+    const { db, ws, raw } = open()
+    addMemory(db, { scope: 'workspace', workspaceId: ws.id, kind: 'log', content: '请求: 迁移数据库 | 模式: craft' })
+    addMemory(db, { scope: 'workspace', workspaceId: ws.id, kind: 'log', content: '请求: 调整配色 | 模式: craft' })
+    const result = await buildInjection({ db, dataDir, workspaceId: ws.id, query: '迁移' })
+    const block = result.blocks.find((b) => b.scope === 'workspace')
+    expect(block!.ids.length).toBe(1)
+    expect(result.text).toContain('迁移数据库')
+    raw.close()
+  })
+
   it('does not re-inject a deleted memory on the next conversation', async () => {
     const { db, ws, raw } = open()
     const a = addMemory(db, { scope: 'workspace', workspaceId: ws.id, kind: 'fact', content: '应被删除的记忆' })
