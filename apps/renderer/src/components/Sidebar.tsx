@@ -47,6 +47,7 @@ interface SidebarProps {
   onOpenAutomation: () => void
   onOpenLibrary: () => void
   onOpenMessages: () => void
+  unreadMessages: number
   onOpenActivity: () => void
   onOpenSupport: () => void
   onOpenMore: (entry: MoreEntry) => void
@@ -90,6 +91,7 @@ export function Sidebar({
   onOpenAutomation,
   onOpenLibrary,
   onOpenMessages,
+  unreadMessages,
   onOpenActivity,
   onOpenSupport,
   onOpenMore,
@@ -239,8 +241,14 @@ export function Sidebar({
           <span className="owb-account__name">坐房顶吹风的蜗牛先生</span>
         </button>
         <div className="owb-account__actions">
-          <button className="owb-icon-btn" title="通知" aria-label="通知" onClick={onOpenMessages}>
+          <button
+            className="owb-icon-btn owb-notifications-btn"
+            title="通知"
+            aria-label={unreadMessages > 0 ? `通知，${unreadMessages} 条未读` : '通知'}
+            onClick={onOpenMessages}
+          >
             <IconBell size={17} />
+            {unreadMessages > 0 ? <span className="owb-notifications-btn__dot" data-testid="notifications-badge" /> : null}
           </button>
           <button className="owb-icon-btn" title="客服" aria-label="客服" onClick={onOpenSupport}>
             <IconChat size={17} />

@@ -55,6 +55,19 @@ interface ApprovalGrantInfo {
   expiresAt: string | null
 }
 
+interface NotificationInfo {
+  id: string
+  workspaceId: string
+  biz: 'task' | 'automation' | 'approval' | 'system'
+  title: string
+  summary: string
+  conversationId: string | null
+  actionKind: 'open-conversation' | 'none'
+  isRead: boolean
+  isPending: boolean
+  createdAt: string
+}
+
 interface PluginToolInfo {
   name: string
   description: string
@@ -263,6 +276,15 @@ interface Window {
       list: () => Promise<{ requests: unknown[] }>
       grants: () => Promise<{ grants: ApprovalGrantInfo[] }>
       revoke: (groupKey: string) => Promise<{ groupKey: string; removed: boolean }>
+    }
+    notifications: {
+      list: (input?: { pendingOnly?: boolean; limit?: number }) => Promise<{
+        notifications: NotificationInfo[]
+        unread: number
+      }>
+      read: (id: string) => Promise<{ notification: NotificationInfo; unread: number }>
+      readAll: () => Promise<{ changed: number; unread: number }>
+      remove: (id: string) => Promise<{ id: string; removed: boolean; unread: number }>
     }
     artifact: {
       preview: (input: {

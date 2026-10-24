@@ -63,6 +63,12 @@ import {
   createColleague,
   updateColleague,
   deleteColleague,
+  createNotification,
+  listNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  deleteNotification,
+  unreadNotificationCount,
   type WorkspaceSettings,
   type SettingKey,
   type ColleagueInput,
@@ -209,6 +215,22 @@ const approvalBridge = new ApprovalBridge({
   emit: (event) => emit(event),
   newId: () => `apr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
   timeoutMs: APPROVAL_TIMEOUT_MS,
+  onRequest: (request) => {
+    if (!dbHandle) return
+    try {
+      createNotification(dbHandle.db, {
+        workspaceId,
+        biz: 'approval',
+        title: `需要你确认:${request.toolName}`,
+        summary: request.detail || '有一个操作正在等待授权',
+        ...(typeof request.conversationId === 'string' ? { conversationId: request.conversationId } : {}),
+        isPending: true,
+        dedupeKey: `approval-${request.id}`
+      })
+    } catch (err) {
+      process.stderr.write(`[notification] 审批提醒写入失败: ${(err as Error).message}\n`)
+    }
+  },
   log: (message) => process.stderr.write(`${message}\n`)
 })
 const sessionGrants = new InMemorySessionGrants()
@@ -802,6 +824,19 @@ const workflowService: WorkflowService | null = dbHandle
       registry,
       emit: (event) => emit(event),
       log: (message) => process.stderr.write(`${message}\n`),
+      onAutomationFinished: ({ id, name, status, conversationId }) => {
+        createNotification(requireDb(), {
+          workspaceId,
+          biz: 'automation',
+          title: `${status === 'done' ? '定时任务已完成' : '定时任务执行失败'}:${name}`,
+          summary:
+            status === 'done'
+              ? '自动执行已结束,点开查看本次结果。'
+              : '自动执行未能完成,点开后可以检查会话并重试。',
+          conversationId,
+          dedupeKey: `automation-${id}-${status}-${conversationId}`
+        })
+      },
       gateToolExecution: async ({ name, args, conversationId, signal }) => {
         const mode = modes.get('craft')
         if (!mode) throw new Error('默认模式不可用')
@@ -986,6 +1021,36 @@ async function appendRunLog(
   }
 }
 
+/**
+ * 任务结束通知。
+ *
+ * 用 taskId + 终态去重:补跑/重试不应在消息中心堆出多张“任务已完成”卡片。
+ */
+function notifyTaskFinished(input: {
+  conversationId: string
+  taskId: string
+  status: 'done' | 'failed'
+  title: string
+  message?: string
+}): void {
+  const db = requireDb()
+  try {
+    createNotification(db, {
+      workspaceId,
+      biz: 'task',
+      title: input.status === 'done' ? `任务已完成:${input.title}` : `任务执行失败:${input.title}`,
+      summary:
+        input.status === 'done'
+          ? '点开即可查看本轮结果与交付物。'
+          : (input.message ?? '任务执行中断,可回到会话重试。').slice(0, 300),
+      conversationId: input.conversationId,
+      dedupeKey: `task-${input.taskId}-${input.status}`
+    })
+  } catch (err) {
+    process.stderr.write(`[notification] 任务提醒写入失败: ${(err as Error).message}\n`)
+  }
+}
+
 async function runMock(
   input: RunInput,
   prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt }
@@ -1042,6 +1107,7 @@ async function runMock(
     const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
     appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
     await appendRunLog(db, {
       conversationId: input.conversationId,
@@ -1088,6 +1154,7 @@ async function runMock(
     const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
     appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
     await appendRunLog(db, {
       conversationId: input.conversationId,
@@ -1132,6 +1199,7 @@ async function runMock(
     const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
     appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
     await appendRunLog(db, {
       conversationId: input.conversationId,
@@ -1169,6 +1237,7 @@ async function runMock(
       resultRef: mockTrace.outputSha256.slice(0, 16),
       ...(missing ? { errorCode: 'DELIVERY_MISSING' } : {})
     })
+    notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
     appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
     await appendRunLog(db, {
       conversationId: input.conversationId,
@@ -1211,6 +1280,7 @@ async function runMock(
     const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
+    notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
     appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: 1 })
     await appendRunLog(db, {
       conversationId: input.conversationId,
@@ -1258,6 +1328,7 @@ async function runMock(
   )
 
   transitionTask(db, taskId, 'done', { resultRef: trace.outputSha256.slice(0, 16) })
+  notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
   appendEvent(db, input.conversationId, 'run.finished', { taskId, steps: canRead ? 1 : 0 })
   await appendRunLog(db, { conversationId: input.conversationId, text: input.text, modeId: input.mode.id, toolCalls: canRead ? 1 : 0 })
   emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
@@ -1469,6 +1540,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
       resultRef: trace.outputSha256.slice(0, 16),
       ...(missing ? { errorCode: 'DELIVERY_MISSING' } : {})
     })
+    notifyTaskFinished({ conversationId, taskId, status: 'done', title: text.slice(0, 80) || '未命名任务' })
     appendEvent(db, conversationId, 'run.finished', { taskId, steps: toolCalls })
 
     await appendRunLog(db, { conversationId, text, modeId: mode.id, toolCalls })
@@ -1496,6 +1568,13 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
     } catch {
       // 若已处于终态则忽略
     }
+    notifyTaskFinished({
+      conversationId,
+      taskId,
+      status: 'failed',
+      title: text.slice(0, 80) || '未命名任务',
+      message
+    })
     appendEvent(db, conversationId, 'run.failed', { taskId, message: message.slice(0, 300) })
     emit({ type: 'error', code: 'AGENT_FAILED', message, retryable: true })
     return 'failed'
@@ -1681,6 +1760,41 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
 
   if (msg.cmd === 'approval.list') {
     emit({ ...base, type: 'approval.list', requests: approvalBridge.list() })
+    return true
+  }
+
+  if (msg.cmd === 'notifications.list') {
+    const pendingOnly = msg.pendingOnly === true
+    emit({
+      ...base,
+      type: 'notifications.list',
+      notifications: listNotifications(db, workspaceId, {
+        pendingOnly,
+        ...(typeof msg.limit === 'number' ? { limit: msg.limit } : {})
+      }),
+      unread: unreadNotificationCount(db, workspaceId)
+    })
+    return true
+  }
+
+  if (msg.cmd === 'notifications.read') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少通知 ID')
+    const notification = markNotificationRead(db, msg.id)
+    if (!notification) throw new Error('通知不存在')
+    emit({ ...base, type: 'notifications.read', notification, unread: unreadNotificationCount(db, workspaceId) })
+    return true
+  }
+
+  if (msg.cmd === 'notifications.readAll') {
+    const changed = markAllNotificationsRead(db, workspaceId)
+    emit({ ...base, type: 'notifications.readAll', changed, unread: unreadNotificationCount(db, workspaceId) })
+    return true
+  }
+
+  if (msg.cmd === 'notifications.delete') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少通知 ID')
+    const removed = deleteNotification(db, msg.id)
+    emit({ ...base, type: 'notifications.deleted', id: msg.id, removed, unread: unreadNotificationCount(db, workspaceId) })
     return true
   }
 

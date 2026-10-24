@@ -321,6 +321,32 @@ ipcMain.handle('approval.list', async () => {
   return request<{ requests: unknown[] }>({ cmd: 'approval.list' })
 })
 
+ipcMain.handle('notifications.list', async (_e, input?: { pendingOnly?: boolean; limit?: number }) => {
+  await daemonReady
+  return request<{ notifications: unknown[]; unread: number }>({
+    cmd: 'notifications.list',
+    ...(input?.pendingOnly === true ? { pendingOnly: true } : {}),
+    ...(typeof input?.limit === 'number' ? { limit: input.limit } : {})
+  })
+})
+
+ipcMain.handle('notifications.read', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法通知 ID')
+  return request<{ notification: unknown; unread: number }>({ cmd: 'notifications.read', id })
+})
+
+ipcMain.handle('notifications.readAll', async () => {
+  await daemonReady
+  return request<{ changed: number; unread: number }>({ cmd: 'notifications.readAll' })
+})
+
+ipcMain.handle('notifications.delete', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法通知 ID')
+  return request<{ id: string; removed: boolean; unread: number }>({ cmd: 'notifications.delete', id })
+})
+
 ipcMain.handle('approval.grants', async () => {
   await daemonReady
   return request<{ grants: unknown[] }>({ cmd: 'approval.grants' })

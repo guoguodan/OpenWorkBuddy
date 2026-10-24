@@ -293,6 +293,27 @@ CREATE TABLE colleague (
 );
 CREATE INDEX idx_colleague_ws ON colleague(workspace_id, created_at);
 `
+  },
+  {
+    version: 5,
+    name: 'notifications',
+    sql: `-- 消息中心:跨会话的业务提醒。与 event_log 分开,后者是会话内事件流水。
+CREATE TABLE notification (
+  id              TEXT PRIMARY KEY,
+  workspace_id    TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  biz             TEXT NOT NULL CHECK (biz IN ('task','automation','approval','system')),
+  title           TEXT NOT NULL,
+  summary         TEXT NOT NULL DEFAULT '',
+  conversation_id TEXT REFERENCES conversation(id) ON DELETE SET NULL,
+  action_kind     TEXT NOT NULL DEFAULT 'none'
+                  CHECK (action_kind IN ('open-conversation','none')),
+  is_read         INTEGER NOT NULL DEFAULT 0,
+  is_pending      INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX idx_notification_ws ON notification(workspace_id, created_at DESC);
+CREATE INDEX idx_notification_pending ON notification(workspace_id, is_pending, is_read);
+`
   }
 ]
 

@@ -23,6 +23,8 @@ export interface ApprovalBridgeOptions {
   newId: () => string
   timeoutMs?: number
   maxPending?: number
+  /** 通知中心落库钩子:必须在 emit 之外单独失败,不能影响审批本身 */
+  onRequest?: (request: ApprovalRequest) => void
   log?: (message: string) => void
 }
 
@@ -85,6 +87,11 @@ export class ApprovalBridge {
       }, this.timeoutMs)
       timer.unref?.()
       this.pending.set(request.id, { request, resolve, reject, timer })
+      try {
+        this.options.onRequest?.(request)
+      } catch (err) {
+        this.options.log?.(`通知写入失败: ${(err as Error).message}`)
+      }
       this.options.emit({ type: 'approval.request', request })
     })
   }

@@ -51,6 +51,13 @@ export interface WorkflowServiceDeps {
     signal?: AbortSignal
   }) => Promise<unknown>
   log: (message: string) => void
+  /** 定时任务结果进入消息中心;失败不能影响调度状态落库 */
+  onAutomationFinished?: (input: {
+    id: string
+    name: string
+    status: string
+    conversationId: string
+  }) => void
   /** 测试注入:模拟时钟 */
   now?: () => Date
 }
@@ -544,6 +551,16 @@ export class WorkflowService {
       ...(record.scheduleType === 'once' ? { disable: true } : {}),
       now: startedAt.toISOString()
     })
+    try {
+      this.deps.onAutomationFinished?.({
+        id,
+        name: record.name,
+        status,
+        conversationId: conversation.id
+      })
+    } catch (err) {
+      this.deps.log(`[automation] 消息通知写入失败: ${(err as Error).message}`)
+    }
     this.emit({ type: 'automation.finished', id, status, nextRunAt })
   }
 }

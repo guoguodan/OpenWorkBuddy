@@ -22,6 +22,7 @@ import { SettingsPanel, type WorkspaceSettingsInfo } from './components/Settings
 import { AutomationPanel } from './components/AutomationPanel'
 import { LibraryPanel } from './components/LibraryPanel'
 import { ColleaguesPanel } from './components/ColleaguesPanel'
+import { MessageCenter } from './components/MessageCenter'
 import { IconCheck, IconSparkle, IconTool } from './components/Icons'
 import './styles/tokens.css'
 import './styles/app.css'
@@ -123,6 +124,8 @@ export default function App() {
   const [approvalQueue, setApprovalQueue] = useState<ApprovalRequestInfo[]>([])
   const [approvalGrants, setApprovalGrants] = useState<ApprovalGrantInfo[]>([])
   const [showGrants, setShowGrants] = useState(false)
+  const [showMessages, setShowMessages] = useState(false)
+  const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
   const [theme, setTheme] = useState<'light' | 'dark'>(readTheme)
   const [settings, setSettings] = useState<WorkspaceSettingsInfo>({
@@ -206,6 +209,15 @@ export default function App() {
     return r
   }, [])
 
+  const loadUnreadNotifications = useCallback(async () => {
+    try {
+      const r = await window.openwb.notifications.list({ limit: 100 })
+      setUnreadNotifications(r.unread)
+    } catch {
+      // 通知计数失败不能阻塞主流程
+    }
+  }, [])
+
   useEffect(() => {
     // ready 帧在本监听注册前就已发出,工作区路径必须主动拉一次。
     void window.openwb.workspace
@@ -231,6 +243,7 @@ export default function App() {
         await loadChannels()
         await loadSyncStatus()
         await loadSettings()
+        await loadUnreadNotifications()
       } catch (err) {
         note('system', `[错误] 历史加载失败: ${(err as Error).message}`)
       }
@@ -328,13 +341,16 @@ export default function App() {
         }
         void loadConversations(activeConversation.current || undefined).catch(() => undefined)
         void loadMemories().catch(() => undefined)
+        void loadUnreadNotifications()
+      } else if (e.type === 'automation.finished') {
+        void loadUnreadNotifications()
       } else if (e.type === 'error') {
         streaming.current = false
         setBusy(false)
         note('system', `[错误] ${e.code}: ${e.message}`)
       }
     })
-  }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, loadSettings, note])
+  }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, loadSettings, loadUnreadNotifications, note])
 
   const send = async () => {
     const text = input.trim()
@@ -632,7 +648,8 @@ export default function App() {
           onOpenSkills={() => setPanel('skills')}
           onOpenAutomation={() => setSheet('automation')}
           onOpenLibrary={() => setSheet('library')}
-          onOpenMessages={() => note('info', '消息中心正在加载')}
+          onOpenMessages={() => setShowMessages(true)}
+          unreadMessages={unreadNotifications}
           onOpenActivity={() => note('info', '积分活动需要登录账号后参与')}
           onOpenSupport={() => note('info', '客服入口需要登录账号后使用')}
           onOpenMore={handleMore}
@@ -825,6 +842,20 @@ export default function App() {
         onClose={() => setSearchOpen(false)}
         onQuery={runSearch}
         onJump={(hit) => void jumpToHit(hit)}
+      />
+
+      <MessageCenter
+        open={showMessages}
+        onClose={() => setShowMessages(false)}
+        onNotify={note}
+        onUnreadChange={setUnreadNotifications}
+        onOpenConversation={(id) => {
+          if (busy) {
+            note('system', '任务运行中,结束后再跳转到其他会话。')
+            return
+          }
+          void switchConversation(id)
+        }}
       />
 
       {approvalQueue[0] ? (

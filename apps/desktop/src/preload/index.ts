@@ -79,5 +79,11 @@ contextBridge.exposeInMainWorld('openwb', {
     list: () => ipcRenderer.invoke('approval.list'),
     grants: () => ipcRenderer.invoke('approval.grants'),
     revoke: (groupKey: string) => ipcRenderer.invoke('approval.revoke', groupKey)
+  },
+  notifications: {
+    list: (input?: unknown) => ipcRenderer.invoke('notifications.list', input),
+    read: (id: string) => ipcRenderer.invoke('notifications.read', id),
+    readAll: () => ipcRenderer.invoke('notifications.readAll'),
+    remove: (id: string) => ipcRenderer.invoke('notifications.delete', id)
   }
 })

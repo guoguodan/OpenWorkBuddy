@@ -232,6 +232,35 @@ export const channel = sqliteTable(
   ]
 )
 
+/**
+ * 消息中心的业务通知。
+ *
+ * 与 event_log 分开:event_log 是会话内可重放的事件流水,这里只保存
+ * 用户需要看到/处理的跨会话提醒。biz 用来区分来源(任务、定时任务、审批),
+ * conversationId 允许为空,因为定时任务结果可能在会话被删后仍然需要展示。
+ */
+export const notification = sqliteTable(
+  'notification',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    biz: text('biz', { enum: ['task', 'automation', 'approval', 'system'] }).notNull(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull().default(''),
+    conversationId: text('conversation_id').references(() => conversation.id, { onDelete: 'set null' }),
+    actionKind: text('action_kind', { enum: ['open-conversation', 'none'] }).notNull().default('none'),
+    isRead: integer('is_read').notNull().default(0),
+    isPending: integer('is_pending').notNull().default(0),
+    createdAt: text('created_at').notNull()
+  },
+  (t) => [
+    index('idx_notification_ws').on(t.workspaceId, t.createdAt),
+    index('idx_notification_pending').on(t.workspaceId, t.isPending, t.isRead)
+  ]
+)
+
 /** 待发队列:eventId 由客户端生成,重发沿用同一个 id,服务端据此幂等 */
 export const pendingEvent = sqliteTable(
   'pending_event',
