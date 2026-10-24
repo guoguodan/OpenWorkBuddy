@@ -176,6 +176,28 @@ try {
     placeholder
   )
 
+  // 模型名必须完整展示,不能因胶囊宽度被截断成 deepseek-v4-fla。
+  const modelPill = await evaluate(`(() => {
+    const el = document.querySelector('.owb-composer__model')
+    const textEl = el?.querySelector('.owb-composer__model-text')
+    if (!el || !textEl) return null
+    return JSON.stringify({
+      text: textEl.textContent.trim(),
+      clipped: textEl.scrollWidth > textEl.clientWidth + 1,
+      overflow: getComputedStyle(textEl).textOverflow,
+      order: Array.from(el.children).map((x) => x.className)
+    })
+  })()`)
+  check(modelPill !== null && !modelPill.includes('"clipped":true'), 'model-name-not-clipped', String(modelPill))
+
+  // 页面内菜单必须存在;原生 Electron 菜单已移除,不应出现英文 File/Edit。
+  const menubar = await evaluate(`document.querySelector('.owb-menubar')?.innerText ?? ''`)
+  check(
+    menubar.includes('编辑(E)') && menubar.includes('窗口(W)') && !menubar.includes('File'),
+    'in-page-menubar-only',
+    menubar.replace(/\n/g, ' | ')
+  )
+
   // @ 直接打开工作区文件选择器,选中后成为可移除的附件;不应偷偷发送。
   const typeIntoComposer = (text) =>
     evaluate(`(() => {

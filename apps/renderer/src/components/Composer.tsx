@@ -446,8 +446,8 @@ export function Composer({
           <div className="owb-composer__right">
             <span className="owb-composer__model" title="当前模型">
               <IconModel size={15} className="owb-composer__model-icon" />
-              <IconChevron size={12} />
-              {modelLabel}
+              <span className="owb-composer__model-text">{modelLabel}</span>
+              <IconChevron size={12} className="owb-composer__model-chevron" />
             </span>
             <button type="button" className="owb-icon-btn owb-composer__icon" title="语音输入" aria-label="语音输入">
               <IconMic size={17} />

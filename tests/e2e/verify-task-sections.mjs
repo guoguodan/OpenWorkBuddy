@@ -220,6 +220,12 @@ try {
   const menuText = await evaluate(`document.querySelector('[data-testid="conversation-menu"]').innerText`)
   check(menuText.includes('置顶') && menuText.includes('重命名') && menuText.includes('删除任务'), 'context-menu-items', menuText)
 
+  // 真实产品不在任务行内放删除按钮,删除只能从右键菜单进入。
+  const inlineDelete = await evaluate(
+    `document.querySelectorAll('[data-testid="conversation-item"] .owb-conv-item__del').length`
+  )
+  check(inlineDelete === 0, 'no-inline-delete-button', String(inlineDelete))
+
   await evaluate(
     `Array.from(document.querySelectorAll('[data-testid="conversation-menu"] button')).find((b) => b.textContent.includes('置顶')).click()`
   )

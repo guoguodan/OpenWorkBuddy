@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -580,6 +580,9 @@ function createWindow() {
       sandbox: true
     }
   })
+  // 页面内已经有完整的中文菜单栏;移除 Electron 默认菜单,避免出现两套按钮。
+  Menu.setApplicationMenu(null)
+  win.setMenuBarVisibility(false)
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) win.loadURL(devUrl)
   else win.loadFile(path.join(__dirname, '../renderer/index.html'))

@@ -260,18 +260,8 @@ input, textarea { font-family: inherit; }
 }
 :root[data-theme='dark'] .owb-conv-item__channel { color: var(--owb-brand-5); }
 .owb-conv-item__meta { font-size: 11px; color: var(--owb-text-tertiary); flex-shrink: 0; }
-.owb-conv-item__del {
-  opacity: 0; width: 22px; height: 22px; flex-shrink: 0;
-  border: none; background: transparent; color: var(--owb-text-tertiary);
-  border-radius: var(--owb-radius-md); cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-  transition: opacity var(--owb-motion-fast), background-color var(--owb-motion-fast), color var(--owb-motion-fast);
-}
-.owb-conv-item:hover .owb-conv-item__del { opacity: 1; }
-.owb-conv-item__del:hover { background: var(--owb-bg-hover); color: var(--owb-red-7); }
-.owb-conv-item__del svg { width: 14px; height: 14px; }
 .owb-sidebar--collapsed .owb-conv-item { justify-content: center; padding: 10px; }
-.owb-sidebar--collapsed .owb-conv-item__title, .owb-sidebar--collapsed .owb-conv-item__meta, .owb-sidebar--collapsed .owb-conv-item__del { display: none; }
+.owb-sidebar--collapsed .owb-conv-item__title, .owb-sidebar--collapsed .owb-conv-item__meta { display: none; }
 
 .owb-conv-menu {
   position: fixed; z-index: 400; min-width: 160px;
@@ -1210,10 +1200,11 @@ input, textarea { font-family: inherit; }
   display: inline-flex; align-items: center; gap: 4px;
   height: 28px; padding: 0 10px; font-size: 12px; color: var(--owb-text-tertiary);
   border: 1px solid var(--owb-border-subtle); border-radius: var(--owb-radius-full);
-  background: var(--owb-bg-secondary); white-space: nowrap; max-width: 140px;
-  overflow: hidden; text-overflow: ellipsis;
+  background: var(--owb-bg-secondary); white-space: nowrap; max-width: 240px;
 }
 .owb-composer__model-icon { flex-shrink: 0; color: var(--owb-text-secondary); }
+.owb-composer__model-text { flex-shrink: 0; }
+.owb-composer__model-chevron { flex-shrink: 0; color: var(--owb-text-tertiary); }
 .owb-composer__icon { width: 30px; height: 30px; }
 .owb-composer__send {
   width: 34px; height: 34px; border: none; cursor: pointer;

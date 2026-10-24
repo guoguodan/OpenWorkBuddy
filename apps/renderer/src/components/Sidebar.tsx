@@ -281,18 +281,6 @@ export function Sidebar({
             {c.channelName ? <span className="owb-conv-item__channel">#{c.channelName}</span> : null}
           </span>
           <span className="owb-conv-item__meta">{dayLabel(c.updatedAt)}</span>
-          <button
-            className="owb-conv-item__del"
-            title="删除任务"
-            aria-label={`删除任务 ${c.title}`}
-            disabled={busy}
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete(c.id)
-            }}
-          >
-            ×
-          </button>
         </>
       )}
     </div>
