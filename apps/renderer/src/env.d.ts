@@ -474,6 +474,15 @@ interface Window {
         title?: string
         confirmedUrl?: boolean
       }) => Promise<{ mode: string; size?: number; sha256?: string }>
+      read: (input: { path: string }) => Promise<{
+        preview: {
+          path: string
+          text: string
+          size: number
+          truncated: boolean
+          format: 'markdown' | 'code' | 'text' | 'html'
+        } | null
+      }>
       share: (input: { channelId: string; artifactId: string }) => Promise<{
         channelId: string
         shared: boolean

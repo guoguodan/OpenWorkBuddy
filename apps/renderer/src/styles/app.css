@@ -1142,6 +1142,90 @@ input, textarea { font-family: inherit; }
   .owb-content-header__tool span:not(.owb-content-header__badge) { display: none; }
 }
 
+/* ============ 应用内产物预览 ============ */
+.owb-artifact-preview {
+  position: fixed; inset: 0; z-index: 150;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.owb-artifact-preview__scrim {
+  position: absolute; inset: 0;
+  border: none; padding: 0; cursor: default;
+  background: color-mix(in srgb, #000 36%, transparent);
+}
+.owb-artifact-preview__panel {
+  position: relative;
+  width: min(960px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
+  display: flex; flex-direction: column;
+  background: var(--owb-bg-elevated);
+  border: 1px solid var(--owb-border-default);
+  border-radius: var(--owb-radius-2xl);
+  box-shadow: var(--owb-shadow-elevated);
+  overflow: hidden;
+  animation: owb-preview-in var(--owb-motion-medium) var(--owb-ease-emphasized);
+}
+@keyframes owb-preview-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.owb-artifact-preview__header {
+  flex-shrink: 0; height: 56px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 12px 0 18px;
+  border-bottom: 1px solid var(--owb-border-subtle);
+}
+.owb-artifact-preview__icon {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--owb-radius-md);
+  background: var(--owb-bg-active); color: var(--owb-text-secondary);
+}
+.owb-artifact-preview__heading { flex: 1; min-width: 0; }
+.owb-artifact-preview__heading h2 {
+  margin: 0; font-size: 14px; font-weight: 600; color: var(--owb-text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.owb-artifact-preview__heading p {
+  margin: 2px 0 0; font-size: 11px; color: var(--owb-text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.owb-artifact-preview__external {
+  flex-shrink: 0; height: 28px; padding: 0 10px;
+  border: 1px solid var(--owb-border-default); border-radius: var(--owb-radius-md);
+  background: var(--owb-bg-primary); color: var(--owb-text-secondary);
+  font-size: 11.5px; cursor: pointer;
+}
+.owb-artifact-preview__external:hover { color: var(--owb-text-primary); border-color: var(--owb-border-strong); }
+.owb-artifact-preview__body {
+  flex: 1; min-height: 0; overflow: auto;
+  background: var(--owb-bg-primary);
+}
+.owb-artifact-preview__markdown { padding: 24px 32px; }
+.owb-artifact-preview__text {
+  margin: 0; padding: 20px 24px;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 12.5px; line-height: 1.65;
+  color: var(--owb-text-primary);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.owb-artifact-preview__frame {
+  width: 100%; height: 100%; border: none; background: #fff;
+}
+.owb-artifact-preview__fallback {
+  height: 100%; min-height: 220px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 32px; text-align: center;
+  color: var(--owb-text-tertiary);
+}
+.owb-artifact-preview__fallback strong { font-size: 14px; font-weight: 600; color: var(--owb-text-secondary); }
+.owb-artifact-preview__fallback span { font-size: 12px; }
+.owb-artifact-preview__notice {
+  flex-shrink: 0; padding: 9px 18px;
+  border-top: 1px solid var(--owb-border-subtle);
+  background: var(--owb-bg-secondary);
+  color: var(--owb-text-secondary); font-size: 11.5px;
+}
 /* ============ 技能/连接器面板 ============ */
 .owb-infopanel {
   position: absolute; top: calc(var(--owb-titlebar-height) + 52px); right: 16px; z-index: 50;

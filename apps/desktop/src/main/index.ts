@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
 import { openExternal, openHtmlPreview, openImagePreview, openWithSystem, resolvePreview, type PreviewTarget } from './preview.js'
+import { readTextPreview } from './preview-policy.js'
 import { listWorkspaceFiles } from './workspace-files.js'
 
 app.setName('OpenWorkBuddy')
@@ -167,6 +168,21 @@ ipcMain.handle('artifact.preview', async (_e, input: PreviewTarget & { confirmed
       break
   }
   return resolved
+})
+
+/**
+ * 应用内只读预览。
+ *
+ * 与系统打开分开:这里只返回文本,不启动任何外部程序。
+ * 路径边界、文件类型白名单和 2MB 读取上限都由主进程执行,
+ * 渲染进程无法通过伪造路径读取工作区之外的内容。
+ */
+ipcMain.handle('artifact.read', async (_e, input: { path?: unknown }) => {
+  await daemonReady
+  if (!input || typeof input.path !== 'string' || !input.path) throw new Error('缺少文件路径')
+  const workspace = resolvedWorkspace ?? resolveWorkspace()
+  const preview = await readTextPreview(workspace, { path: input.path })
+  return { preview }
 })
 
 ipcMain.handle('artifact.rename', async (_e, input: { artifactId?: unknown; title?: unknown }) => {

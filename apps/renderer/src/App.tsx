@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView'
 import { type ArtifactInfo } from './components/ArtifactCards'
 import { ArtifactPanel } from './components/ArtifactPanel'
+import { ArtifactPreview, type TextPreviewInfo } from './components/ArtifactPreview'
 import { Composer, type ComposerAttachment, type PermissionMode } from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
 import { SkillsHubPanel, type HubSkill } from './components/SkillsHubPanel'
@@ -171,6 +172,11 @@ export default function App() {
   const [tools, setTools] = useState<ToolCall[]>([])
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([])
   const [showArtifacts, setShowArtifacts] = useState(false)
+  /** 应用内预览:null 表示关闭;preview=null 表示该格式不支持内嵌预览。 */
+  const [previewArtifact, setPreviewArtifact] = useState<{
+    artifact: ArtifactInfo
+    preview: TextPreviewInfo | null
+  } | null>(null)
   const [notices, setNotices] = useState<SystemLine[]>([])
   const [modes, setModes] = useState<ModeInfo[]>([])
   const [mode, setMode] = useState('craft')
@@ -962,23 +968,53 @@ export default function App() {
     try {
       if (artifact.kind === 'url' && !artifact.url) return
       if (artifact.kind !== 'url' && !artifact.path) return
-      const confirmedUrl =
-        artifact.kind === 'url'
-          ? window.confirm(`即将用系统浏览器打开外部链接:\n${artifact.url}\n\n只在你信任该地址时继续。`)
-          : false
-      if (artifact.kind === 'url' && !confirmedUrl) return
-      await window.openwb.artifact.preview({
-        kind: artifact.kind,
-        ...(artifact.path ? { path: artifact.path } : {}),
-        ...(artifact.url ? { url: artifact.url } : {}),
-        title: artifact.title,
-        ...(confirmedUrl ? { confirmedUrl: true } : {})
-      })
+      if (artifact.kind === 'url') {
+        const targetUrl = artifact.url
+        if (!targetUrl) return
+        const confirmedUrl = window.confirm(
+          `即将用系统浏览器打开外部链接:\n${targetUrl}\n\n只在你信任该地址时继续。`
+        )
+        if (!confirmedUrl) return
+        await window.openwb.artifact.preview({
+          kind: 'url',
+          url: targetUrl,
+          title: artifact.title,
+          confirmedUrl: true
+        })
+        return
+      }
+      if (!artifact.path) return
+      const r = await window.openwb.artifact.read({ path: artifact.path })
+      setPreviewArtifact({ artifact, preview: (r.preview ?? null) as TextPreviewInfo | null })
     } catch (err) {
       note('system', `打开交付物失败: ${(err as Error).message}`)
     }
   }
 
+  /** 预览里点"用系统程序打开"才允许启动外部程序;网页类仍保留工作区与大小校验。 */
+  const openArtifactExternally = async (artifact: ArtifactInfo) => {
+    try {
+      if (artifact.kind === 'url') {
+        const targetUrl = artifact.url
+        if (!targetUrl) return
+        await window.openwb.artifact.preview({
+          kind: 'url',
+          url: targetUrl,
+          title: artifact.title,
+          confirmedUrl: true
+        })
+        return
+      }
+      if (!artifact.path) return
+      await window.openwb.artifact.preview({
+        kind: artifact.kind,
+        path: artifact.path,
+        title: artifact.title
+      })
+    } catch (err) {
+      note('system', `用系统程序打开失败: ${(err as Error).message}`)
+    }
+  }
   /**
    * 交付物记录操作。
    *
@@ -1359,6 +1395,14 @@ export default function App() {
         </main>
       </div>
 
+      {previewArtifact ? (
+        <ArtifactPreview
+          artifact={previewArtifact.artifact}
+          preview={previewArtifact.preview}
+          onClose={() => setPreviewArtifact(null)}
+          onOpenExternal={() => void openArtifactExternally(previewArtifact.artifact)}
+        />
+      ) : null}
       {panel === 'skills' || panel === 'connectors' ? (
         <SkillsHubPanel
           initialTab={panel === 'connectors' ? 'connectors' : 'skills'}
