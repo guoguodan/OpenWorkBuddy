@@ -308,6 +308,13 @@ ipcMain.handle('settings.get', async () => {
   return request<Record<string, unknown>>({ cmd: 'settings.get' })
 })
 
+ipcMain.handle('models.list', async () => {
+  await daemonReady
+  // 拉取网关模型清单可能慢于普通设置读取,单独放宽超时;
+  // daemon 内部还有 8s 上限,两层超时保证界面不会一直停在加载态。
+  return request<Record<string, unknown>>({ cmd: 'models.list' }, 15_000)
+})
+
 ipcMain.handle('settings.set', async (_e, input: { key?: string; value?: string | null }) => {
   await daemonReady
   if (!input || typeof input.key !== 'string') throw new Error('缺少设置项')

@@ -28,6 +28,67 @@ const provider = createOpenAI({
 
 export const DEFAULT_MODEL_NAME = process.env.OPENWB_MODEL ?? 'gpt-4o-mini'
 
+/** 网关 /v1/models 返回的最小形状;其余字段与本功能无关,不做假设。 */
+interface ModelListResponse {
+  data?: Array<{ id?: unknown }>
+}
+
+export interface RemoteModelList {
+  models: string[]
+  /** true 表示清单来自网关;false 表示网络不可用或网关不支持,界面需如实标注。 */
+  remote: boolean
+  error?: string
+}
+
+const MODELS_TIMEOUT_MS = 8000
+
+/**
+ * 读取当前网关真实提供的模型。
+ *
+ * 模型候选必须是"这个网关能用的",而不是写死的几个名字:
+ * 用户换一个兼容网关后,硬编码候选只会让请求必然失败。
+ * 网络失败不能阻断聊天,因此这里只返回空清单 + 原因,由界面回退到自定义输入。
+ */
+export async function listRemoteModels(signal?: AbortSignal): Promise<RemoteModelList> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), MODELS_TIMEOUT_MS)
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort)
+  try {
+    const base = (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
+    const key = process.env.OPENAI_API_KEY
+    const response = await fetch(`${base}/models`, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        ...(key ? { authorization: `Bearer ${key}` } : {})
+      },
+      signal: controller.signal
+    })
+    if (!response.ok) {
+      return { models: [], remote: false, error: `网关返回 ${response.status}` }
+    }
+    const body = (await response.json()) as ModelListResponse
+    const models = Array.from(
+      new Set(
+        (body.data ?? [])
+          .map((item) => (typeof item?.id === 'string' ? item.id.trim() : ''))
+          .filter((id) => id.length > 0)
+      )
+    ).sort((a, b) => a.localeCompare(b))
+    if (models.length === 0) {
+      return { models: [], remote: false, error: '网关未返回可用模型' }
+    }
+    return { models, remote: true }
+  } catch (err) {
+    const message = (err as Error).name === 'AbortError' ? '读取模型清单超时' : (err as Error).message
+    return { models: [], remote: false, error: message }
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
 /**
  * 解析本轮实际使用的模型。
  *

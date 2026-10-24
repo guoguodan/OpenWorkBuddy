@@ -201,6 +201,9 @@ export default function App() {
     model: null
   })
   const [modelLabel, setModelLabel] = useState('')
+  const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [modelsError, setModelsError] = useState<string | null>(null)
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [activeColleague, setActiveColleague] = useState<{ id: string; name: string } | null>(null)
   const [activeExpert, setActiveExpert] = useState<{ id: string; name: string } | null>(null)
@@ -985,6 +988,25 @@ export default function App() {
     }
   }
 
+  /**
+   * 模型候选来自网关 /v1/models,不再写死常见模型名。
+   * 失败时保留当前模型与自定义输入,并把原因交给菜单显示。
+   */
+  const loadModelOptions = useCallback(async () => {
+    setModelsLoading(true)
+    try {
+      const r = await window.openwb.models.list()
+      setModelOptions(r.models)
+      setModelsError(r.remote ? null : (r.error ?? '网关未返回模型清单'))
+      if (r.current && !modelLabel) setModelLabel(r.current)
+    } catch (err) {
+      setModelOptions([])
+      setModelsError((err as Error).message)
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [modelLabel])
+
   const handleMore = (entry: MoreEntry) => {
     if (entry === 'projects') {
       setSheet('projects')
@@ -1029,7 +1051,12 @@ export default function App() {
       permission={settings.permissionMode}
       modelLabel={modelLabel}
       modelLoading={!settingsLoaded}
-      modelOptions={[...new Set([modelLabel, 'gpt-4o-mini', 'gpt-4.1-mini', 'bai/deepseek-v4-flash'].filter(Boolean))]}
+      modelOptions={modelOptions}
+      modelsLoading={modelsLoading}
+      modelsError={modelsError}
+      onOpenModelMenu={() => {
+        if (!modelsLoading) void loadModelOptions()
+      }}
       attachments={attachments}
       onChange={setInput}
       onSend={() => void send()}

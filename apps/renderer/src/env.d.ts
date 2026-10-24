@@ -371,6 +371,14 @@ interface Window {
         }
       }>
     }
+    models: {
+      list: () => Promise<{
+        models: string[]
+        remote: boolean
+        current: string
+        error?: string
+      }>
+    }
     library: {
       list: (input?: { limit?: number }) => Promise<{ items: LibraryArtifactInfo[] }>
     }

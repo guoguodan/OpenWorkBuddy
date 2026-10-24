@@ -80,6 +80,9 @@ contextBridge.exposeInMainWorld('openwb', {
     get: () => ipcRenderer.invoke('settings.get'),
     set: (input: unknown) => ipcRenderer.invoke('settings.set', input)
   },
+  models: {
+    list: () => ipcRenderer.invoke('models.list')
+  },
   library: {
     list: (input?: unknown) => ipcRenderer.invoke('library.list', input)
   },

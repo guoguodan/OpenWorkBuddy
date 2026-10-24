@@ -39,12 +39,15 @@ interface ComposerProps {
   modelLabel: string
   modelLoading?: boolean
   modelOptions?: string[]
+  modelsLoading?: boolean
+  modelsError?: string | null
   onChange: (v: string) => void
   onSend: () => void
   onStop: () => void
   onPickSkill: (name: string | null) => void
   onPickPermission: (mode: PermissionMode) => void
   onPickModel: (name: string) => void
+  onOpenModelMenu?: () => void
   onOpenWorkspace: () => void
   onListFiles: () => Promise<ComposerAttachment[]>
   onAddAttachment: (file: ComposerAttachment) => void
@@ -111,12 +114,15 @@ export function Composer({
   modelLabel,
   modelLoading = false,
   modelOptions = [],
+  modelsLoading = false,
+  modelsError = null,
   onChange,
   onSend,
   onStop,
   onPickSkill,
   onPickPermission,
   onPickModel,
+  onOpenModelMenu,
   onOpenWorkspace,
   onListFiles,
   onAddAttachment,
@@ -160,9 +166,16 @@ export function Composer({
   // 设置是通过 IPC 异步读取的。首帧直接显示“未配置模型”会让用户误以为
   // 模型丢了,所以加载阶段单独显示占位状态。
   const currentModel = modelLoading ? '加载中…' : modelLabel.trim() || '未配置模型'
+  /**
+   * 菜单只列网关真实返回的候选。
+   *
+   * 不能把“当前值”混进候选:拉取失败时那样会显示一条看似来自网关的模型,
+   * 用户无法判断这个模型到底存不存在。当前值单独用勾选态标记。
+   */
   const models = useMemo(() => {
-    return [...new Set([modelLabel, ...modelOptions].map((item) => item.trim()).filter(Boolean))]
-  }, [modelLabel, modelOptions])
+    return [...new Set(modelOptions.map((item) => item.trim()).filter(Boolean))]
+  }, [modelOptions])
+  const currentSelected = modelLabel.trim()
   const pickModel = (name: string) => {
     const next = name.trim()
     if (!next) return
@@ -478,7 +491,9 @@ export function Composer({
               onClick={() => {
                 if (modelLoading) return
                 setModelDraft('')
-                setMenu(menu === 'model' ? null : 'model')
+                const next = menu === 'model' ? null : 'model'
+                setMenu(next)
+                if (next === 'model') onOpenModelMenu?.()
               }}
             >
               <IconModel size={15} className="owb-composer__model-icon" />
@@ -488,12 +503,20 @@ export function Composer({
             {menu === 'model' ? (
               <div className="owb-composer__menu owb-composer__menu--model" role="menu" aria-label="选择模型" data-testid="model-picker">
                 <div className="owb-composer__menu-title">选择模型</div>
-                {models.map((name) => (
+                {modelsLoading ? (
+                  <div className="owb-composer__menu-empty" data-testid="model-loading">正在读取网关模型清单…</div>
+                ) : models.length === 0 ? (
+                  <div className="owb-composer__menu-empty" data-testid="model-empty">
+                    {modelsError
+                      ? `未能读取模型清单:${modelsError}。仍可在下方手动输入模型名。`
+                      : '网关没有可列出的模型,可在下方手动输入模型名。'}
+                  </div>
+                ) : models.map((name) => (
                   <button
                     key={name}
                     type="button"
                     role="menuitemradio"
-                    aria-checked={name === modelLabel.trim()}
+                    aria-checked={name === currentSelected}
                     className="owb-composer__menu-item"
                     onClick={() => pickModel(name)}
                     data-testid={`model-option-${name}`}
@@ -502,9 +525,17 @@ export function Composer({
                       <IconModel size={14} />
                       {name}
                     </span>
-                    {name === modelLabel.trim() ? <span className="owb-composer__tick">✓</span> : null}
+                    {name === currentSelected ? <span className="owb-composer__tick">✓</span> : null}
                   </button>
                 ))}
+                {!modelsLoading && models.length > 0 ? (
+                  <div className="owb-composer__menu-hint" data-testid="model-source">
+                    来自当前网关,共 {models.length} 个模型
+                    {currentSelected && !models.includes(currentSelected)
+                      ? `(当前 ${currentSelected} 不在清单中)`
+                      : ''}
+                  </div>
+                ) : null}
                 <div className="owb-composer__menu-divider" />
                 <form
                   className="owb-composer__model-form"

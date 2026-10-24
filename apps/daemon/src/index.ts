@@ -12,7 +12,7 @@ import {
   type ToolExecutionOptions
 } from 'ai'
 import { z } from 'zod'
-import { modelFor, resolveModelName } from './model.js'
+import { listRemoteModels, modelFor, resolveModelName } from './model.js'
 import {
   loadModes,
   assertRequiredModes,
@@ -2523,6 +2523,20 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       workspace: WORKSPACE,
       model: resolveModelName(current.model),
       openSkillsDir: userSkillsRoot()
+    })
+    return true
+  }
+
+  if (msg.cmd === 'models.list') {
+    // 候选来自网关本身;失败时界面仍需能打开自定义输入,所以不抛错。
+    const result = await listRemoteModels()
+    emit({
+      ...base,
+      type: 'models.list',
+      models: result.models,
+      remote: result.remote,
+      current: resolveModelName(getWorkspaceSettings(db, workspaceId).model),
+      ...(result.error ? { error: result.error } : {})
     })
     return true
   }
