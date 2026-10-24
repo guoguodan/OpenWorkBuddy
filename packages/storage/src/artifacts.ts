@@ -1,7 +1,7 @@
 import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import type { AppDatabase } from './client.js'
 import { nowIso, ulid } from './ids.js'
-import { artifact } from './schema.js'
+import { artifact, conversation, task } from './schema.js'
 
 export type ArtifactKind = 'file' | 'html' | 'url' | 'image'
 
@@ -135,5 +135,39 @@ export function countArtifactsByTask(db: AppDatabase, taskId: string): number {
     .where(eq(artifact.taskId, taskId))
     .all()
   return rows[0]?.n ?? 0
+}
+
+/**
+ * 资料库:跨会话的交付物清单。
+ *
+ * 交付物必须能追溯到"哪个任务、哪个会话产出的",否则用户在资料库里看到
+ * 一堆同名文件却不知道从哪来。会话/任务被删除后仍然保留 artifact 记录会
+ * 变成孤儿,所以这里用 left join 并把标题降级为 null。
+ */
+export interface LibraryArtifact extends ArtifactRecord {
+  conversationTitle: string | null
+  taskTitle: string | null
+  conversationId: string | null
+}
+
+export function listLibraryArtifacts(db: AppDatabase, options: { limit?: number } = {}): LibraryArtifact[] {
+  const limit = Math.min(Math.max(options.limit ?? 200, 1), 1000)
+  const rows = db
+    .select({
+      artifact,
+      conversationTitle: conversation.title,
+      taskTitle: task.title
+    })
+    .from(artifact)
+    .leftJoin(conversation, eq(artifact.conversationId, conversation.id))
+    .leftJoin(task, eq(artifact.taskId, task.id))
+    .orderBy(sql`${artifact.createdAt} DESC`)
+    .limit(limit)
+    .all()
+  return rows.map((row) => ({
+    ...toArtifactRecord(row.artifact),
+    conversationTitle: row.conversationTitle ?? null,
+    taskTitle: row.taskTitle ?? null
+  }))
 }
 

@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld('openwb', {
       return () => ipcRenderer.removeListener('agent.event', handler)
     }
   },
+  automation: {
+    list: () => ipcRenderer.invoke('automation.list'),
+    create: (input: unknown) => ipcRenderer.invoke('automation.create', input),
+    toggle: (input: unknown) => ipcRenderer.invoke('automation.toggle', input),
+    remove: (id: string) => ipcRenderer.invoke('automation.delete', id),
+    scan: (input?: unknown) => ipcRenderer.invoke('automation.scan', input)
+  },
   artifact: {
     preview: (input: unknown) => ipcRenderer.invoke('artifact.preview', input),
     share: (input: unknown) => ipcRenderer.invoke('channel.shareArtifact', input)
@@ -52,6 +59,19 @@ contextBridge.exposeInMainWorld('openwb', {
   memory: {
     list: (scope?: string) => ipcRenderer.invoke('memory.list', scope),
     remove: (id: string) => ipcRenderer.invoke('memory.delete', id)
+  },
+  settings: {
+    get: () => ipcRenderer.invoke('settings.get'),
+    set: (input: unknown) => ipcRenderer.invoke('settings.set', input)
+  },
+  library: {
+    list: (input?: unknown) => ipcRenderer.invoke('library.list', input)
+  },
+  colleagues: {
+    list: () => ipcRenderer.invoke('colleagues.list'),
+    create: (input: unknown) => ipcRenderer.invoke('colleagues.create', input),
+    update: (input: unknown) => ipcRenderer.invoke('colleagues.update', input),
+    remove: (id: string) => ipcRenderer.invoke('colleagues.delete', id)
   },
   approval: {
     respond: (input: unknown) => ipcRenderer.invoke('approval.respond', input),

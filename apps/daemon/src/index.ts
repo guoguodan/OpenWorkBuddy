@@ -1,6 +1,6 @@
 import { dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { access } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { streamText, tool, jsonSchema, type CoreMessage, type Tool, type ToolExecutionOptions } from 'ai'
 import { z } from 'zod'
@@ -55,6 +55,18 @@ import {
   pruneExpiredApprovalGrants,
   upsertApprovalGrant,
   deleteApprovalGrant,
+  getWorkspaceSettings,
+  setWorkspaceSetting,
+  listLibraryArtifacts,
+  listColleagues,
+  getColleague,
+  createColleague,
+  updateColleague,
+  deleteColleague,
+  type WorkspaceSettings,
+  type SettingKey,
+  type ColleagueInput,
+  type PermissionMode,
   eq
 } from '@openwb/storage'
 import {
@@ -65,7 +77,7 @@ import {
   ensureWorkspaceGitignore,
   listMemory
 } from '@openwb/memory'
-import { builtinTools, configureDestructiveTools } from './tools/builtin.js'
+import { builtinTools, configureDestructiveTools, resolveInsideWorkspace } from './tools/builtin.js'
 import {
   PluginRuntime,
   discoverPlugins,
@@ -293,6 +305,56 @@ function syncPluginTools() {
 function modeAllowsTool(mode: ModePolicy, name: string): boolean {
   if (isToolAllowed(mode, name)) return true
   return mode.id === PLUGIN_TOOL_MODE && isPluginToolName(name)
+}
+
+/**
+ * 当前工作区的权限档位。每次判定都现读,避免界面切了档位而工具闸门还拿着旧值。
+ *
+ * - readOnly:只读。写文件、命令、删除/移动一律拒绝(模式允许也不行)。
+ * - fullAccess:已知风险(个人文件、计费、破坏性文件操作)自动放行;
+ *   未知风险仍然询问,因为"完全访问"不等于"替用户决定看不懂的操作"。
+ * - default:维持原有逐项审批。
+ */
+function currentPermissionMode(): PermissionMode {
+  const db = requireDb()
+  return getWorkspaceSettings(db, workspaceId).permissionMode
+}
+
+/** 只读档位下必须拒绝的工具:任何写盘、命令执行、删除/移动都在此列。 */
+const READ_ONLY_FORBIDDEN_TOOLS = new Set([
+  'write_file',
+  'shell',
+  'delete_files',
+  'move_files',
+  'present_files'
+])
+
+/**
+ * 完全访问档位的判定:跳过"已知风险"的人工确认,但保留两条硬边界:
+ *  - 模式本身不允许的工具仍然拒绝(档位不扩大模式边界);
+ *  - 计费类工具仍然询问(替用户花钱不是"文件权限")。
+ * 未知风险仍然走完整 decide(),避免把解析不了的调用当安全。
+ */
+async function decideFullAccess(
+  call: { name: string; arguments: Record<string, unknown> },
+  mode: ModePolicy,
+  conversationId: string
+): Promise<Awaited<ReturnType<typeof decide>>> {
+  if (!modeAllowsTool(mode, call.name)) {
+    return { action: 'deny', code: 'MODE_DENIED', message: `当前模式不允许使用 ${call.name}`, retryable: false }
+  }
+  const ctx = gateContextFor(mode, conversationId)
+  const risk = await ctx.classifyRisk(call.name, call.arguments)
+  if (!risk) return { action: 'allow' }
+  if (risk.kind === 'unknown') return await decide(call, ctx)
+  if (risk.kind === 'blocked-command') {
+    return { action: 'deny', code: risk.code ?? 'BLOCKED_COMMAND', message: risk.detail, retryable: false }
+  }
+  if (risk.kind === 'system-path') {
+    return { action: 'deny', code: 'PATH_SYSTEM_DENIED', message: risk.detail, retryable: false }
+  }
+  if (risk.kind === 'billing') return await decide(call, ctx)
+  return { action: 'allow' }
 }
 
 function skillRoots(): SkillRoot[] {
@@ -531,6 +593,20 @@ async function executeGated(
   const args =
     input && typeof input === 'object' ? (input as Record<string, unknown>) : { value: input }
 
+  // 只读档位必须在任何副作用发生之前生效:包括破坏性工具的清单扫描。
+  const permission = currentPermissionMode()
+  if (permission === 'readOnly' && READ_ONLY_FORBIDDEN_TOOLS.has(descriptorName)) {
+    emit({
+      type: 'approval.denied',
+      ...(ctx.callId ? { callId: ctx.callId } : {}),
+      toolName: descriptorName,
+      code: 'READ_ONLY_MODE',
+      message: `当前是只读权限,${descriptorName} 需要写入或执行能力,已被拒绝。`,
+      retryable: false
+    })
+    throw new ToolError('READ_ONLY_MODE', `当前是只读权限,${descriptorName} 已被拒绝`)
+  }
+
   // 破坏性文件操作必须先形成完整清单:审批卡展示的是这份清单,执行器也会重新核对它。
   let destructivePlan: DestructivePlan | undefined
   let approvalPlan: ApprovalPlan | undefined
@@ -581,10 +657,13 @@ async function executeGated(
     )
   }
 
-  const decision = await decide(
-    { name: descriptorName, arguments: args },
-    gateContextFor(mode, conversationId, ctx.callId, approvalPlan)
-  )
+  const decision =
+    permission === 'fullAccess' && !descriptor.effects.mayIncurCost
+      ? await decideFullAccess({ name: descriptorName, arguments: args }, mode, conversationId)
+      : await decide(
+          { name: descriptorName, arguments: args },
+          gateContextFor(mode, conversationId, ctx.callId, approvalPlan)
+        )
   if (
     (descriptorName === 'delete_files' || descriptorName === 'move_files') &&
     decision.action === 'allow' &&
@@ -756,6 +835,92 @@ interface RunInput {
   mode: ModePolicy
   clientRequestId?: string
   conversationId: string
+  /** 用户显式选中的技能:本轮开始时直接加载,不依赖模型自己调用 load_skill。 */
+  skill?: string
+  /** @ 引用的工作区相对路径,发送前注入正文。 */
+  contextPaths?: string[]
+  /** 助理身份:人设指令与本轮默认技能。 */
+  colleagueId?: string
+  /** 首页场景:办公 / 开发 / 设计。 */
+  scene?: 'working' | 'coding' | 'design'
+}
+
+const SCENE_PROMPTS: Record<NonNullable<RunInput['scene']>, string> = {
+  working:
+    '当前是「办公」场景。优先产出可直接使用的中文办公成果(文档、表格、汇报、邮件、会议纪要);除非用户明确要求,不要写代码。',
+  coding:
+    '当前是「开发」场景。优先使用工程化做法:先读代码与配置,再修改;改动要可运行、可验证,并说明如何验证。',
+  design:
+    '当前是「设计」场景。优先关注信息层级、视觉一致性、可访问性与可落地的设计说明;需要产出页面时给出具体结构与样式方案。'
+}
+
+const MAX_CONTEXT_FILES = 20
+const MAX_CONTEXT_FILE_BYTES = 64 * 1024
+const MAX_CONTEXT_TOTAL_BYTES = 256 * 1024
+
+/**
+ * 把首页/输入框里的隐式意图变成运行时可见的上下文。
+ *
+ * 这些内容必须进入 system 而不是拼进用户文本:用户消息要保持原样,
+ * 重放历史与幂等去重才不会因为宿主拼接而变化。
+ */
+async function applyHarnessContext(
+  input: RunInput,
+  prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt }
+): Promise<string> {
+  let system = prepared.system
+
+  if (input.scene) {
+    system += `\n\n# 场景\n${SCENE_PROMPTS[input.scene]}`
+  }
+
+  if (input.colleagueId) {
+    const colleague = getColleague(requireDb(), input.colleagueId)
+    if (!colleague || colleague.workspaceId !== workspaceId) {
+      throw new Error(`助理不存在或不属于当前工作区: ${input.colleagueId}`)
+    }
+    const lines = [
+      '',
+      '# 助理身份',
+      `你正在以「${colleague.name}」的身份工作${colleague.title ? `(${colleague.title})` : ''}。`,
+      colleague.description ? `职责简介: ${colleague.description}` : '',
+      colleague.instructions ? `必须遵守的工作准则:\n${colleague.instructions}` : '',
+      '保持该身份的语气与职责边界;不要声称自己拥有未提供的权限。'
+    ].filter(Boolean)
+    system += `\n${lines.join('\n')}`
+  }
+
+  const contextPaths = (input.contextPaths ?? []).slice(0, MAX_CONTEXT_FILES)
+  if (contextPaths.length > 0) {
+    const chunks: string[] = []
+    let total = 0
+    let injected = 0
+    for (const raw of contextPaths) {
+      const rel = raw.replace(/^@/, '').trim()
+      if (!rel) continue
+      try {
+        const abs = await resolveInsideWorkspace(WORKSPACE, rel)
+        const buf = await readFile(abs)
+        const budget = Math.max(0, MAX_CONTEXT_TOTAL_BYTES - total)
+        const limit = Math.min(MAX_CONTEXT_FILE_BYTES, budget)
+        const body = buf.subarray(0, limit).toString('utf8')
+        total += Buffer.byteLength(body, 'utf8')
+        injected++
+        chunks.push(
+          `## ${rel}${buf.length > limit ? `(已截断,原文件 ${buf.length} 字节)` : ''}\n\`\`\`\n${body}\n\`\`\``
+        )
+      } catch (err) {
+        chunks.push(`## ${rel}\n[无法读取: ${(err as Error).message}]`)
+      }
+      if (total >= MAX_CONTEXT_TOTAL_BYTES) break
+    }
+    if (chunks.length > 0) {
+      system += `\n\n# 用户附加的上下文\n这些是用户通过 @ 显式附带的文件,回答时优先参考。\n\n${chunks.join('\n\n')}`
+    }
+    emit({ type: 'context.attached', paths: contextPaths, injected, bytes: total })
+  }
+
+  return system
 }
 
 /**
@@ -1105,6 +1270,9 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
 
   markScanTurn(conversationId, text)
 
+  // 每一轮都从干净状态开始:上一轮模型自加载的技能不能悄悄影响新任务。
+  skills.reset()
+
   emit({ type: 'mode.selected', modeId: mode.id, displayName: mode.displayName })
 
   const injected = await buildInjection({
@@ -1132,11 +1300,32 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
     return 'failed'
   }
 
+  let explicitSkill: string | undefined
+  try {
+    const requested = input.skill?.trim()
+    if (requested) {
+      const loaded = await skills.load(requested)
+      explicitSkill = loaded.name
+      prepared.system += `\n\n# 用户指定技能\n${loaded.body}`
+    }
+    prepared.system = await applyHarnessContext(input, prepared)
+  } catch (err) {
+    emit({ type: 'error', code: 'CONTEXT_FAILED', message: (err as Error).message, retryable: false })
+    return 'failed'
+  }
+
+  if (explicitSkill) {
+    const active = skills.activeSkill()
+    emit({
+      type: 'skill.activated',
+      name: explicitSkill,
+      allowedTools: active?.allowedTools ?? null
+    })
+  }
+
   if (MOCK) {
     return await runMock(input, prepared)
   }
-
-  skills.reset()
 
   const taskId = createTask(db, { conversationId, title: text.slice(0, 80) || '未命名任务' })
   transitionTask(db, taskId, 'running')
@@ -1145,7 +1334,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
   let reply = ''
   let totalInput = 0
   let totalOutput = 0
-  let activeSkill: string | undefined
+  let activeSkill: string | undefined = explicitSkill
   let toolCalls = 0
   const wroteFiles = { value: false }
   let delivered = 0
@@ -1394,6 +1583,92 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
 
   if (msg.cmd === 'plugins.list') {
     emit({ ...base, type: 'plugins.list', plugins: pluginStatusList() })
+    return true
+  }
+
+  if (msg.cmd === 'settings.get') {
+    emit({
+      ...base,
+      type: 'settings.get',
+      settings: getWorkspaceSettings(db, workspaceId),
+      workspace: WORKSPACE,
+      model: process.env.OPENWB_MODEL ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini'
+    })
+    return true
+  }
+
+  if (msg.cmd === 'settings.set') {
+    const key = msg.key
+    if (key !== 'permissionMode' && key !== 'taskTarget' && key !== 'model') {
+      throw new Error('未知设置项')
+    }
+    if (key === 'permissionMode' && msg.value !== 'default' && msg.value !== 'fullAccess' && msg.value !== 'readOnly') {
+      throw new Error('permissionMode 必须是 default / fullAccess / readOnly')
+    }
+    const value = msg.value === null ? null : typeof msg.value === 'string' ? msg.value : String(msg.value)
+    const settings = setWorkspaceSetting(db, workspaceId, key as SettingKey, value)
+    emit({ ...base, type: 'settings.updated', settings })
+    return true
+  }
+
+  if (msg.cmd === 'library.list') {
+    emit({
+      ...base,
+      type: 'library.list',
+      items: listLibraryArtifacts(db, {
+        ...(typeof msg.limit === 'number' ? { limit: msg.limit } : {})
+      })
+    })
+    return true
+  }
+
+  if (msg.cmd === 'colleagues.list') {
+    emit({ ...base, type: 'colleagues.list', colleagues: listColleagues(db, workspaceId) })
+    return true
+  }
+
+  if (msg.cmd === 'colleagues.create') {
+    if (typeof msg.name !== 'string' || !msg.name.trim()) throw new Error('缺少助理名称')
+    const colleague = createColleague(db, {
+      workspaceId,
+      name: msg.name,
+      ...(typeof msg.title === 'string' ? { title: msg.title } : {}),
+      ...(typeof msg.description === 'string' ? { description: msg.description } : {}),
+      ...(typeof msg.instructions === 'string' ? { instructions: msg.instructions } : {}),
+      ...(typeof msg.avatar === 'string' ? { avatar: msg.avatar } : {}),
+      ...(Array.isArray(msg.skillNames) ? { skillNames: msg.skillNames.filter((x): x is string => typeof x === 'string') } : {}),
+      ...(Array.isArray(msg.connectorNames)
+        ? { connectorNames: msg.connectorNames.filter((x): x is string => typeof x === 'string') }
+        : {}),
+      ...(typeof msg.modeId === 'string' ? { modeId: msg.modeId } : {})
+    } satisfies ColleagueInput)
+    emit({ ...base, type: 'colleagues.created', colleague })
+    return true
+  }
+
+  if (msg.cmd === 'colleagues.update') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少助理 ID')
+    const colleague = updateColleague(db, msg.id, {
+      ...(typeof msg.name === 'string' ? { name: msg.name } : {}),
+      ...(typeof msg.title === 'string' ? { title: msg.title } : {}),
+      ...(typeof msg.description === 'string' ? { description: msg.description } : {}),
+      ...(typeof msg.instructions === 'string' ? { instructions: msg.instructions } : {}),
+      ...(typeof msg.avatar === 'string' ? { avatar: msg.avatar } : {}),
+      ...(Array.isArray(msg.skillNames) ? { skillNames: msg.skillNames.filter((x): x is string => typeof x === 'string') } : {}),
+      ...(Array.isArray(msg.connectorNames)
+        ? { connectorNames: msg.connectorNames.filter((x): x is string => typeof x === 'string') }
+        : {}),
+      ...(typeof msg.modeId === 'string' ? { modeId: msg.modeId } : {})
+    })
+    if (!colleague) throw new Error('助理不存在')
+    emit({ ...base, type: 'colleagues.updated', colleague })
+    return true
+  }
+
+  if (msg.cmd === 'colleagues.delete') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少助理 ID')
+    const removed = deleteColleague(db, msg.id)
+    emit({ ...base, type: 'colleagues.deleted', id: msg.id, removed })
     return true
   }
 
@@ -1900,6 +2175,23 @@ async function handleFrame(value: unknown) {
       ? msg.clientRequestId
       : undefined
 
+  const skill =
+    typeof msg.skill === 'string' && msg.skill.trim().length > 0 ? msg.skill.trim() : undefined
+  const colleagueId =
+    typeof msg.colleagueId === 'string' && msg.colleagueId.trim().length > 0
+      ? msg.colleagueId.trim()
+      : undefined
+  const scene =
+    msg.scene === 'working' || msg.scene === 'coding' || msg.scene === 'design'
+      ? msg.scene
+      : undefined
+  const contextPaths = Array.isArray(msg.contextPaths)
+    ? msg.contextPaths
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    : undefined
+
   const db = requireDb()
   const saved = appendMessage(db, {
     conversationId,
@@ -1920,7 +2212,16 @@ async function handleFrame(value: unknown) {
   }
 
   emit({ type: 'conversation.ready', conversationId, seq: saved.record.seq })
-  await runAgent({ text: msg.text, mode, conversationId, ...(clientRequestId ? { clientRequestId } : {}) })
+  await runAgent({
+    text: msg.text,
+    mode,
+    conversationId,
+    ...(clientRequestId ? { clientRequestId } : {}),
+    ...(skill ? { skill } : {}),
+    ...(colleagueId ? { colleagueId } : {}),
+    ...(scene ? { scene } : {}),
+    ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
+  })
 }
 
 process.stdin.on('data', (chunk: Buffer) => {

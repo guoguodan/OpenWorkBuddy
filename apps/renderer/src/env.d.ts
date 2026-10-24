@@ -107,6 +107,62 @@ interface SearchGroupInfo {
   items: SearchHitInfo[]
 }
 
+interface LibraryArtifactInfo {
+  id: string
+  kind: 'file' | 'html' | 'url' | 'image'
+  title: string
+  description: string | null
+  path: string | null
+  url: string | null
+  size: number
+  createdAt: string
+  conversationId: string | null
+  conversationTitle: string | null
+  taskTitle: string | null
+}
+
+interface ColleagueInfo {
+  id: string
+  name: string
+  title: string
+  description: string
+  instructions: string
+  avatar: string
+  skillNames: string[]
+  connectorNames: string[]
+  modeId: string
+  createdAt: string
+  updatedAt: string
+}
+
+interface ColleagueInputInfo {
+  name: string
+  title?: string
+  description?: string
+  instructions?: string
+  avatar?: string
+  skillNames?: string[]
+  connectorNames?: string[]
+  modeId?: string
+}
+
+interface AutomationInfo {
+  id: string
+  name: string
+  scheduleType: 'once' | 'rrule'
+  rrule: string | null
+  scheduledAt: string | null
+  timezone: string
+  prompt: string
+  modeId: string
+  enabled: boolean
+  nextRunAt: string | null
+  lastRunAt: string | null
+  lastStatus: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 interface Window {
   openwb: {
     modes: {
@@ -126,7 +182,15 @@ interface Window {
       query: (q: string) => Promise<{ query: string; groups: SearchGroupInfo[] }>
     }
     conversation: {
-      send: (input: { text: string; mode?: string; conversationId?: string }) => Promise<void>
+      send: (input: {
+        text: string
+        mode?: string
+        conversationId?: string
+        skill?: string
+        colleagueId?: string
+        scene?: 'working' | 'coding' | 'design'
+        contextPaths?: string[]
+      }) => Promise<void>
       list: () => Promise<{ conversations: ConversationInfo[]; conversationId: string }>
       history: (conversationId?: string) => Promise<{
         messages: HistoryMessage[]
@@ -140,6 +204,41 @@ interface Window {
     memory: {
       list: (scope?: string) => Promise<{ items: MemoryItemInfo[] }>
       remove: (id: string) => Promise<{ id: string }>
+    }
+    settings: {
+      get: () => Promise<{
+        settings: { permissionMode: 'default' | 'fullAccess' | 'readOnly'; taskTarget: 'local'; model: string | null }
+        workspace: string
+        model: string
+      }>
+      set: (input: { key: 'permissionMode' | 'taskTarget' | 'model'; value: string | null }) => Promise<{
+        settings: { permissionMode: 'default' | 'fullAccess' | 'readOnly'; taskTarget: 'local'; model: string | null }
+      }>
+    }
+    library: {
+      list: (input?: { limit?: number }) => Promise<{ items: LibraryArtifactInfo[] }>
+    }
+    colleagues: {
+      list: () => Promise<{ colleagues: ColleagueInfo[] }>
+      create: (input: ColleagueInputInfo) => Promise<{ colleague: ColleagueInfo }>
+      update: (input: Partial<ColleagueInputInfo> & { id: string }) => Promise<{ colleague: ColleagueInfo }>
+      remove: (id: string) => Promise<{ id: string; removed: boolean }>
+    }
+    automation: {
+      list: () => Promise<{ automations: AutomationInfo[] }>
+      create: (input: {
+        name: string
+        prompt: string
+        scheduleType: 'once' | 'rrule'
+        rrule?: string
+        scheduledAt?: string
+        timezone?: string
+        modeId?: string
+        enabled?: boolean
+      }) => Promise<{ automation: AutomationInfo }>
+      toggle: (input: { id: string; enabled: boolean }) => Promise<{ id: string; enabled: boolean }>
+      remove: (id: string) => Promise<{ id: string }>
+      scan: (input?: { now?: string; startup?: boolean }) => Promise<{ claimed: unknown[] }>
     }
     approval: {
       respond: (input: {

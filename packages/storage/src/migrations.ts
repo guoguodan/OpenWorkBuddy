@@ -261,6 +261,38 @@ CREATE TABLE pending_event (
   UNIQUE (workspace_id, seq)
 );
 CREATE INDEX idx_pending_due ON pending_event(workspace_id, sent_at, next_attempt_at, seq);`
+  },
+  {
+    version: 4,
+    name: 'workspace-settings-and-colleagues',
+    sql: `-- 工作区级偏好:权限档位、默认任务运行位置、模型选择。
+-- 单行表(key/value)避免每加一个开关就要改 DDL。
+CREATE TABLE workspace_setting (
+  workspace_id TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  key          TEXT NOT NULL,
+  value        TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, key)
+);
+
+-- 助理档案。真实产品里助理是"可复用的角色 + 技能/连接器绑定 + 指令",
+-- 这里保存定义;每个助理的会话仍走普通 conversation,不做影子表。
+CREATE TABLE colleague (
+  id            TEXT PRIMARY KEY,
+  workspace_id  TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  title         TEXT NOT NULL DEFAULT '',
+  description   TEXT NOT NULL DEFAULT '',
+  instructions  TEXT NOT NULL DEFAULT '',
+  avatar        TEXT NOT NULL DEFAULT 'assistant',
+  skill_names   TEXT NOT NULL DEFAULT '[]',
+  connector_names TEXT NOT NULL DEFAULT '[]',
+  mode_id       TEXT NOT NULL DEFAULT 'craft',
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX idx_colleague_ws ON colleague(workspace_id, created_at);
+`
   }
 ]
 

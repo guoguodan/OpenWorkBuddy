@@ -196,6 +196,93 @@ ipcMain.handle('memory.delete', async (_e, id: string) => {
   return request<{ id: string }>({ cmd: 'memory.delete', id })
 })
 
+ipcMain.handle('settings.get', async () => {
+  await daemonReady
+  return request<Record<string, unknown>>({ cmd: 'settings.get' })
+})
+
+ipcMain.handle('settings.set', async (_e, input: { key?: string; value?: string | null }) => {
+  await daemonReady
+  if (!input || typeof input.key !== 'string') throw new Error('缺少设置项')
+  if (input.value !== null && typeof input.value !== 'string') throw new Error('非法设置值')
+  return request<Record<string, unknown>>({ cmd: 'settings.set', key: input.key, value: input.value ?? null })
+})
+
+ipcMain.handle('library.list', async (_e, input?: { limit?: number }) => {
+  await daemonReady
+  return request<{ items: unknown[] }>({
+    cmd: 'library.list',
+    ...(typeof input?.limit === 'number' ? { limit: input.limit } : {})
+  })
+})
+
+ipcMain.handle('colleagues.list', async () => {
+  await daemonReady
+  return request<{ colleagues: unknown[] }>({ cmd: 'colleagues.list' })
+})
+
+ipcMain.handle('colleagues.create', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.name !== 'string' || !input.name.trim()) throw new Error('缺少助理名称')
+  return request<{ colleague: unknown }>({ cmd: 'colleagues.create', ...input })
+})
+
+ipcMain.handle('colleagues.update', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.id !== 'string') throw new Error('缺少助理 ID')
+  return request<{ colleague: unknown }>({ cmd: 'colleagues.update', ...input })
+})
+
+ipcMain.handle('colleagues.delete', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法助理 ID')
+  return request<{ id: string; removed: boolean }>({ cmd: 'colleagues.delete', id })
+})
+
+ipcMain.handle(
+  'automation.list',
+  async () => {
+    await daemonReady
+    return request<{ automations: unknown[] }>({ cmd: 'automation.list' })
+  }
+)
+
+ipcMain.handle('automation.create', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.name !== 'string' || !input.name.trim()) throw new Error('缺少任务名称')
+  if (typeof input.prompt !== 'string' || !input.prompt.trim()) throw new Error('缺少任务指令')
+  return request<{ automation: unknown }>({ cmd: 'automation.create', ...input })
+})
+
+ipcMain.handle(
+  'automation.toggle',
+  async (_e, input: { id?: string; enabled?: boolean }) => {
+    await daemonReady
+    if (!input || typeof input.id !== 'string' || !input.id) throw new Error('缺少定时任务 ID')
+    if (typeof input.enabled !== 'boolean') throw new Error('缺少启用状态')
+    return request<{ id: string; enabled: boolean }>({
+      cmd: 'automation.toggle',
+      id: input.id,
+      enabled: input.enabled
+    })
+  }
+)
+
+ipcMain.handle('automation.delete', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法定时任务 ID')
+  return request<{ id: string }>({ cmd: 'automation.delete', id })
+})
+
+ipcMain.handle('automation.scan', async (_e, input?: { now?: string; startup?: boolean }) => {
+  await daemonReady
+  return request<{ claimed: unknown[] }>({
+    cmd: 'automation.scan',
+    ...(typeof input?.now === 'string' ? { now: input.now } : {}),
+    ...(input?.startup === true ? { startup: true } : {})
+  })
+})
+
 ipcMain.handle('approval.respond', async (_e, input: { approvalId?: string; approved?: boolean; scope?: string }) => {
   await daemonReady
   if (!daemon?.stdin?.writable) throw new Error('daemon 未就绪')
@@ -291,7 +378,20 @@ ipcMain.handle('plugins.pickDir', async () => {
   return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
 })
 
-ipcMain.handle('conversation.send', async (_e, input: { text?: string; mode?: string; conversationId?: string }) => {
+ipcMain.handle(
+  'conversation.send',
+  async (
+    _e,
+    input: {
+      text?: string
+      mode?: string
+      conversationId?: string
+      skill?: string
+      colleagueId?: string
+      scene?: string
+      contextPaths?: string[]
+    }
+  ) => {
   await daemonReady
   if (!daemon?.stdin?.writable) throw new Error('daemon 未就绪')
   if (typeof input?.text !== 'string') throw new Error('非法输入')
@@ -299,16 +399,39 @@ ipcMain.handle('conversation.send', async (_e, input: { text?: string; mode?: st
   if (input.conversationId !== undefined && typeof input.conversationId !== 'string') {
     throw new Error('非法会话 ID')
   }
+  if (input.skill !== undefined && typeof input.skill !== 'string') throw new Error('非法技能')
+  if (input.colleagueId !== undefined && typeof input.colleagueId !== 'string') {
+    throw new Error('非法助理 ID')
+  }
+  if (
+    input.scene !== undefined &&
+    input.scene !== 'working' &&
+    input.scene !== 'coding' &&
+    input.scene !== 'design'
+  ) {
+    throw new Error('非法场景')
+  }
+  if (
+    input.contextPaths !== undefined &&
+    (!Array.isArray(input.contextPaths) || input.contextPaths.some((x) => typeof x !== 'string'))
+  ) {
+    throw new Error('非法上下文路径')
+  }
   // client_request_id 由渲染进程生成,主进程原样透传以支持幂等重发
   daemon.stdin.write(
     encodeFrame({
       text: input.text,
       ...(input.mode ? { mode: input.mode } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.skill ? { skill: input.skill } : {}),
+      ...(input.colleagueId ? { colleagueId: input.colleagueId } : {}),
+      ...(input.scene ? { scene: input.scene } : {}),
+      ...(input.contextPaths && input.contextPaths.length > 0 ? { contextPaths: input.contextPaths } : {}),
       clientRequestId: `main-${Date.now()}-${++seq}`
     })
   )
-})
+  }
+)
 
 function attachDaemonOutput() {
   const decoder = new FrameDecoder()

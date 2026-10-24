@@ -3,6 +3,7 @@ import {
   type AnySQLiteColumn,
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   uniqueIndex
@@ -273,6 +274,45 @@ export const channelArtifact = sqliteTable(
   ]
 )
 
+/**
+ * 工作区级设置。单行 key/value:权限档位、默认运行位置等开关变化频繁,
+ * 不值得每加一个开关就改一次 DDL。
+ */
+export const workspaceSetting = sqliteTable(
+  'workspace_setting',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    value: text('value').notNull(),
+    updatedAt: text('updated_at').notNull()
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.key] })]
+)
+
+/** 助理档案:角色定义 + 指令 + 绑定的技能/连接器。 */
+export const colleague = sqliteTable(
+  'colleague',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    title: text('title').notNull().default(''),
+    description: text('description').notNull().default(''),
+    instructions: text('instructions').notNull().default(''),
+    avatar: text('avatar').notNull().default('assistant'),
+    skillNames: text('skill_names').notNull().default('[]'),
+    connectorNames: text('connector_names').notNull().default('[]'),
+    modeId: text('mode_id').notNull().default('craft'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull()
+  },
+  (t) => [index('idx_colleague_ws').on(t.workspaceId, t.createdAt)]
+)
+
 export const schema = {
   workspace,
   conversation,
@@ -287,5 +327,7 @@ export const schema = {
   eventLog,
   channel,
   pendingEvent,
-  channelArtifact
+  channelArtifact,
+  workspaceSetting,
+  colleague
 }

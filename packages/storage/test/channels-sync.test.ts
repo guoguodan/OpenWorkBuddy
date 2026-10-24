@@ -47,7 +47,8 @@ describe('channel model', () => {
       .map((r) => (r as { name: string }).name)
     for (const n of ['channel', 'channel_artifact', 'pending_event']) expect(names).toContain(n)
     expect(names).toContain('idx_pending_due')
-    expect(handle.raw.pragma('user_version', { simple: true })).toBe(3)
+    // 不写死版本号:后续迁移只增不改,这里断言"至少到 v3"才不会每次加表都误报。
+    expect(handle.raw.pragma('user_version', { simple: true })).toBeGreaterThanOrEqual(3)
   })
 
   it('reuses an existing channel with the same name', () => {
