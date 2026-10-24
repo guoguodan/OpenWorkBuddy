@@ -392,10 +392,13 @@ try {
 
   // 助理面板
   await evaluate(`document.querySelector('[data-testid="open-colleagues"]').click()`)
-  const colleagueOpen = await waitFor(evaluate, `Boolean(document.querySelector('[role="dialog"][aria-label="助理"]'))`)
-  const colleagueText = await evaluate(`document.querySelector('[role="dialog"][aria-label="助理"]')?.innerText ?? ''`)
+  const colleagueOpen = await waitFor(
+    evaluate,
+    `Boolean(document.querySelector('[role="dialog"][aria-label="助理协作空间"]') && document.querySelector('[data-testid="colleague-create"]'))`
+  )
+  const colleagueText = await evaluate(`document.querySelector('[role="dialog"][aria-label="助理协作空间"]')?.innerText ?? ''`)
   check(colleagueOpen && colleagueText.includes('创建助理'), 'colleagues-panel-open', colleagueText.slice(0, 120))
-  await evaluate(`document.querySelector('[aria-label="关闭助理"]').click()`)
+  await evaluate(`document.querySelector('[aria-label="关闭助理协作空间"]').click()`)
   await sleep(300)
 
   // 定时任务面板

@@ -940,9 +940,15 @@ export default function App() {
             <ColleaguesPanel
               onClose={() => setSheet(null)}
               onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
-              onAssign={(colleague) => {
+              onAssign={(colleague, prompt) => {
                 setSheet(null)
-                void newConversation(colleague)
+                void newConversation(colleague).then(() => {
+                  if (prompt) setInput(prompt)
+                })
+              }}
+              onOpenTask={(id) => {
+                setSheet(null)
+                void switchConversation(id)
               }}
             />
           ) : sheet === 'projects' ? (

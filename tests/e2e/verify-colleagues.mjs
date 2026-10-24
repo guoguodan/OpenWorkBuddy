@@ -92,7 +92,7 @@ function connect(wsUrl) {
         }
         return r.result?.result?.value
       }
-      res({ ws, evaluate })
+      res({ ws, evaluate, send })
     })
     ws.addEventListener('error', () => {
       clearTimeout(timer)
@@ -294,7 +294,17 @@ let session
 try {
   const page = await waitForPage()
   session = await connect(page.webSocketDebuggerUrl)
-  const { evaluate } = session
+  const { evaluate, send: cdp } = session
+  const shot = async (name) => {
+    if (process.env.OPENWB_SHOTS !== '1') return
+    const r = await cdp('Page.captureScreenshot', { format: 'png' }, 20000)
+    if (!r.result?.data) return
+    const dir = resolve(root, 'artifacts/screenshots')
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, `${name}.png`)
+    await writeFile(path, Buffer.from(r.result.data, 'base64'))
+    console.log(`SHOT ${path}`)
+  }
   await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="welcome"]'))`)
 
   const fillField = async (label, value) => {
@@ -321,15 +331,27 @@ try {
 
   // ---------- UI 1. 创建完整档案 ----------
   await evaluate(`document.querySelector('[data-testid="open-colleagues"]').click()`)
-  await waitFor(evaluate, `Boolean(document.querySelector('[role="dialog"][aria-label="助理"]'))`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[role="dialog"][aria-label="助理协作空间"]'))`)
+  const heroText = await evaluate(`document.querySelector('[data-testid="colleague-hero"]')?.innerText ?? ''`)
+  check(heroText.includes('Hi，欢迎使用云助理'), 'dashboard-hero-copy', heroText)
+  check(heroText.includes('安排工作'), 'dashboard-quick-assign', heroText)
+  const createReady = await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-create"]'))`)
+  check(createReady, 'dashboard-create-entry-ready')
+  await shot('colleagues-dashboard')
   await evaluate(`document.querySelector('[data-testid="colleague-create"]').click()`)
   await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-form"]'))`)
-  await fillField('助理名称', '档案助理')
-  await fillField('职责标签', '行业研究')
-  await fillField('简介', '把复杂资料拆成可执行结论')
+  await fillField('职能', '行业研究')
+  await fillField('名称', '档案助理')
+  await fillField('助理简介', '把复杂资料拆成可执行结论')
   await fillField('工作准则', '回答先给结论')
+  await evaluate(`document.querySelector('[data-testid="colleague-next"]').click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-wizard-config"]'))`)
+  const advancedText = await evaluate(`document.querySelector('[data-testid="colleague-wizard-config"]')?.innerText ?? ''`)
+  check(advancedText.includes('能力配置（高级）'), 'wizard-advanced-step', advancedText.slice(0, 160))
+  check(advancedText.includes('助理可以连接哪些数据？'), 'wizard-connection-copy')
+  await shot('colleagues-wizard')
   await evaluate(`(() => {
-    const b = Array.from(document.querySelectorAll('[data-testid="colleague-form"] .owb-visibility')).find((x) => x.textContent.includes('发布到项目'))
+    const b = Array.from(document.querySelectorAll('[data-testid="colleague-form"] .owb-collab-visibility__item')).find((x) => x.textContent.includes('发布到项目'))
     b.click()
   })()`)
   await evaluate(`(() => {
@@ -337,35 +359,36 @@ try {
     if (!b) throw new Error('技能未列出')
     b.click()
   })()`)
-  await evaluate(`(() => {
-    const b = Array.from(document.querySelectorAll('[data-testid="colleague-form"] .owb-form__actions button')).find((x) => x.textContent.trim() === '创建')
-    b.click()
-  })()`)
+  await evaluate(`document.querySelector('[data-testid="colleague-save"]').click()`)
   const created = await waitFor(
     evaluate,
     `Boolean(Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理')))`
   )
   const createdText = await cardText('档案助理')
   check(created, 'colleague-created-from-form', createdText.slice(0, 200))
-  check(createdText.includes('发布到项目'), 'visibility-persisted', createdText)
   check(createdText.includes('research'), 'skill-binding-shown', createdText)
   check(createdText.includes('记忆开启'), 'memory-default-on', createdText)
+  await shot('colleagues-cards')
 
   // ---------- UI 2. 编辑档案 ----------
-  await clickCardButton('档案助理', '编辑')
+  await clickCardButton('档案助理', '更多操作')
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-menu"]'))`)
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[data-testid="colleague-menu"] button')).find((x) => x.textContent.trim() === '编辑档案')
+    b.click()
+  })()`)
   await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-form"]'))`)
   const editTitle = await evaluate(`document.querySelector('[data-testid="colleague-form"] h3')?.textContent?.trim() ?? ''`)
   check(editTitle === '编辑档案', 'edit-form-opened', editTitle)
-  await fillField('职责标签', '深度研究')
+  await fillField('职能', '深度研究')
+  await evaluate(`document.querySelector('[data-testid="colleague-next"]').click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-wizard-config"]'))`)
   await evaluate(`(() => {
-    const label = Array.from(document.querySelectorAll('[data-testid="colleague-form"] label')).find((l) => l.textContent.includes('记忆注入'))
+    const label = Array.from(document.querySelectorAll('[data-testid="colleague-form"] label')).find((l) => l.textContent.includes('长期记忆'))
     const box = label.querySelector('input[type=checkbox]')
     if (box.checked) box.click()
   })()`)
-  await evaluate(`(() => {
-    const b = Array.from(document.querySelectorAll('[data-testid="colleague-form"] .owb-form__actions button')).find((x) => x.textContent.trim() === '保存')
-    b.click()
-  })()`)
+  await evaluate(`document.querySelector('[data-testid="colleague-save"]').click()`)
   await waitFor(
     evaluate,
     `Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).some((c) => c.textContent.includes('深度研究'))`
@@ -375,7 +398,12 @@ try {
   check(editedText.includes('记忆关闭'), 'memory-disabled-shown', editedText)
 
   // ---------- UI 3. 置顶 ----------
-  await clickCardButton('档案助理', '置顶')
+  await clickCardButton('档案助理', '更多操作')
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-menu"]'))`)
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[data-testid="colleague-menu"] button')).find((x) => x.textContent.trim() === '置顶')
+    b.click()
+  })()`)
   const pinned = await waitFor(
     evaluate,
     `Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))?.innerText.includes('置顶')`
@@ -383,10 +411,15 @@ try {
   check(pinned, 'pin-applied')
 
   // ---------- UI 4. 暂停 → 指派禁用 → 恢复 ----------
-  await clickCardButton('档案助理', '暂停助理')
+  await clickCardButton('档案助理', '更多操作')
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-menu"]'))`)
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[data-testid="colleague-menu"] button')).find((x) => x.textContent.trim() === '暂停助理')
+    b.click()
+  })()`)
   const paused = await waitFor(
     evaluate,
-    `Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))?.innerText.includes('已暂停')`
+    `Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))?.innerText.includes('已停用')`
   )
   check(paused, 'pause-applied')
   const assignState = await evaluate(`(() => {
@@ -396,12 +429,28 @@ try {
   })()`)
   check(assignState.includes('"disabled":true'), 'assign-disabled-when-paused', assignState)
 
-  await clickCardButton('档案助理', '恢复助理')
+  await clickCardButton('档案助理', '更多操作')
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-menu"]'))`)
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[data-testid="colleague-menu"] button')).find((x) => x.textContent.trim() === '恢复助理')
+    b.click()
+  })()`)
   const resumed = await waitFor(
     evaluate,
-    `Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))?.innerText.includes('可用')`
+    `Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))?.innerText.includes('空闲')`
   )
   check(resumed, 'resume-applied')
+
+  // 创建一条真实的助理会话,详情页的对话任务表才有可核对的运行数据。
+  await evaluate(`(() => {
+    const card = Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))
+    card.querySelector('[data-testid="colleague-assign"]').click()
+  })()`)
+  const assigned = await waitFor(
+    evaluate,
+    `Boolean(document.querySelector('[data-testid="composer-input"]')) && document.body.innerText.includes('正在与助理「档案助理」协作')`
+  )
+  check(assigned, 'card-chat-creates-colleague-conversation')
 
   // ---------- UI 5. 刷新后持久化 ----------
   await evaluate(`location.reload()`)
@@ -411,9 +460,119 @@ try {
   const reloadedText = await cardText('档案助理')
   check(reloadedText.includes('深度研究'), 'profile-survives-reload', reloadedText)
   check(reloadedText.includes('置顶'), 'pin-survives-reload', reloadedText)
-  check(reloadedText.includes('可用'), 'status-survives-reload', reloadedText)
-  check(reloadedText.includes('发布到项目'), 'visibility-survives-reload', reloadedText)
+  check(reloadedText.includes('空闲'), 'status-survives-reload', reloadedText)
   check(reloadedText.includes('记忆关闭'), 'memory-flag-survives-reload', reloadedText)
+
+  // ---------- UI 6. 筛选与档案详情 ----------
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('.owb-collab-filters button')).find((x) => x.textContent.trim() === '工作中')
+    b.click()
+  })()`)
+  const emptyFilter = await waitFor(
+    evaluate,
+    `document.querySelector('.owb-collab-scroll')?.innerText.includes('当前筛选下没有助理') ?? false`
+  )
+  check(emptyFilter, 'colleague-filter-working-empty')
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('.owb-collab-filters button')).find((x) => x.textContent.trim() === '全部')
+    b.click()
+  })()`)
+  await evaluate(`(() => {
+    const card = Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))
+    card.querySelector('[data-testid="colleague-open-detail"]').click()
+  })()`)
+  const detailOpen = await waitFor(evaluate, `Boolean(document.querySelector('[aria-label="档案助理 助理档案"]'))`)
+  check(detailOpen, 'colleague-detail-open')
+  const detailHome = await evaluate(`document.querySelector('[aria-label="档案助理 助理档案"]')?.innerText ?? ''`)
+  check(detailHome.includes('任务概览'), 'detail-task-overview', detailHome.slice(0, 240))
+  check(detailHome.includes('能力配置'), 'detail-capabilities')
+  check(detailHome.includes('发布到项目'), 'detail-visibility-persisted')
+  check(detailHome.includes('已关闭'), 'detail-memory-off')
+  await shot('colleagues-detail')
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[aria-label="档案助理 助理档案"] nav button')).find((x) => x.textContent.includes('对话任务'))
+    b.click()
+  })()`)
+  const tableOpen = await waitFor(evaluate, `Boolean(document.querySelector('.owb-collab-table'))`)
+  check(tableOpen, 'detail-task-table-open')
+  const tableHead = await evaluate(`document.querySelector('.owb-collab-table')?.innerText ?? ''`)
+  check(tableHead.includes('创建时间') && tableHead.includes('来源'), 'detail-task-columns', tableHead.slice(0, 200))
+  check(tableHead.includes('个人委派') && tableHead.includes('空闲'), 'detail-task-real-source-status', tableHead.slice(0, 300))
+  await shot('colleagues-tasks')
+
+  // 详情页进入对话任务后,删除确认必须浮在详情蒙层之上。
+  const taskIdButton = await evaluate(`(() => {
+    const row = document.querySelector('.owb-collab-table tbody tr')
+    const b = row?.querySelector('[aria-label^="删除会话"]')
+    if (!b) return false
+    b.click()
+    return true
+  })()`)
+  check(taskIdButton, 'detail-task-delete-entry')
+  const taskConfirmVisible = await waitFor(evaluate, `(() => {
+    const modal = document.querySelector('[aria-label="删除会话"]')
+    const overlay = document.querySelector('.owb-collab-detail-overlay')
+    if (!modal || !overlay) return false
+    const style = getComputedStyle(modal.parentElement)
+    return Number(style.zIndex) > Number(getComputedStyle(overlay).zIndex)
+  })()`)
+  check(taskConfirmVisible, 'detail-task-confirm-above-overlay')
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[aria-label="删除会话"] button')).find((x) => x.textContent.trim() === '取消')
+    b?.click()
+  })()`)
+  await waitFor(evaluate, `!document.querySelector('[aria-label="删除会话"]')`)
+  await evaluate(`document.querySelector('[aria-label="关闭助理档案"]').click()`)
+  await waitFor(evaluate, `!document.querySelector('[aria-label="档案助理 助理档案"]')`)
+
+  // ---------- UI 7. 快捷安排工作实际创建助理会话 ----------
+  await evaluate(`(() => {
+    const input = document.querySelector('[data-testid="colleague-quick-input"]')
+    const proto = window.HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(input, '整理一份行业趋势摘要')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('[data-testid="colleague-quick-assign"]').click()
+  })()`)
+  const quickAssigned = await waitFor(
+    evaluate,
+    `document.querySelector('[data-testid="composer-input"]')?.value === '整理一份行业趋势摘要'`,
+    15000
+  )
+  const quickState = await evaluate(`JSON.stringify({
+    value: document.querySelector('[data-testid="composer-input"]')?.value ?? '',
+    panel: Boolean(document.querySelector('[aria-label="助理协作空间"]')),
+    colleague: document.body.innerText.includes('正在与助理')
+  })`)
+  check(quickAssigned, 'quick-assign-prefills-composer', quickState)
+  check(!quickState.includes('"panel":true'), 'quick-assign-closes-panel', quickState)
+  check(quickState.includes('"colleague":true'), 'quick-assign-binds-colleague', quickState)
+
+  // 回到助理看板,验证详情页删除确认层级并取消,不破坏运行链夹具。
+  await evaluate(`document.querySelector('[data-testid="open-colleagues"]').click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-card"]'))`)
+  await evaluate(`(() => {
+    const card = Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('档案助理'))
+    card.querySelector('[data-testid="colleague-open-detail"]').click()
+  })()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[aria-label="档案助理 助理档案"]'))`)
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[aria-label="档案助理 助理档案"] button')).find((x) => x.textContent.trim() === '删除助理')
+    b.click()
+  })()`)
+  const detailDeleteVisible = await waitFor(evaluate, `(() => {
+    const modal = document.querySelector('[aria-label="删除助理"]')
+    const overlay = document.querySelector('.owb-collab-detail-overlay')
+    if (!modal || !overlay) return false
+    return Number(getComputedStyle(modal.parentElement).zIndex) > Number(getComputedStyle(overlay).zIndex)
+  })()`)
+  check(detailDeleteVisible, 'detail-delete-confirm-above-overlay')
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[aria-label="删除助理"] button')).find((x) => x.textContent.trim() === '取消')
+    b?.click()
+  })()`)
+  await evaluate(`document.querySelector('[aria-label="关闭助理档案"]').click()`)
+  await evaluate(`document.querySelector('[aria-label="关闭助理协作空间"]').click()`)
+  await waitFor(evaluate, `!document.querySelector('[aria-label="助理协作空间"]')`)
 
   // ---------- 运行链 1. 暂停拒绝新建与发送 ----------
   const s = openSession(chainWorkspace, chainData, { OPENWB_SKILLS_DIR: skillsDir })

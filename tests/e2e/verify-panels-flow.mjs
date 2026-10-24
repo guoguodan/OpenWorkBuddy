@@ -177,36 +177,36 @@ try {
 
   // ---------- 3. 助理创建 → 指派 → 人设入会话 ----------
   await evaluate(`document.querySelector('[data-testid="open-colleagues"]').click()`)
-  await waitFor(evaluate, `Boolean(document.querySelector('[role="dialog"][aria-label="助理"]'))`)
+  await waitFor(
+    evaluate,
+    `Boolean(document.querySelector('[role="dialog"][aria-label="助理协作空间"]') && document.querySelector('[data-testid="colleague-create"]'))`
+  )
   await evaluate(`(() => {
-    const b = Array.from(document.querySelectorAll('[role="dialog"][aria-label="助理"] button')).find((x) => x.textContent.includes('创建助理'))
-    b.click()
+    document.querySelector('[data-testid="colleague-create"]').click()
   })()`)
-  await waitFor(evaluate, `Boolean(document.querySelector('[role="dialog"][aria-label="助理"] input'))`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-form"] input'))`)
   const fillLabel = (label, value) =>
     evaluate(`(() => {
-      const field = Array.from(document.querySelectorAll('[role="dialog"][aria-label="助理"] label')).find((l) => l.textContent.trim().startsWith(${JSON.stringify(label)}))
+      const field = Array.from(document.querySelectorAll('[data-testid="colleague-form"] label')).find((l) => l.textContent.trim().startsWith(${JSON.stringify(label)}))
       const el = field.querySelector('input,textarea')
       const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype
       Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
       el.dispatchEvent(new Event('input', { bubbles: true }))
     })()`)
-  await fillLabel('助理名称', '验收助理')
-  await fillLabel('职责标签', '验收')
+  await fillLabel('名称', '验收助理')
+  await fillLabel('职能', '验收')
   await fillLabel('工作准则', '回答必须以 VERIFY-RULE 开头')
-  await evaluate(`(() => {
-    const b = Array.from(document.querySelectorAll('[role="dialog"][aria-label="助理"] button')).find((x) => x.textContent.trim() === '创建')
-    b.click()
-  })()`)
+  await evaluate(`document.querySelector('[data-testid="colleague-next"]').click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="colleague-wizard-config"]'))`)
+  await evaluate(`document.querySelector('[data-testid="colleague-save"]').click()`)
   const created = await waitFor(
     evaluate,
-    `Array.from(document.querySelectorAll('[role="dialog"][aria-label="助理"] .owb-card')).some((c) => c.textContent.includes('验收助理'))`
+    `Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).some((c) => c.textContent.includes('验收助理'))`
   )
   check(created, 'colleague-created')
   await evaluate(`(() => {
-    const card = Array.from(document.querySelectorAll('[role="dialog"][aria-label="助理"] .owb-card')).find((c) => c.textContent.includes('验收助理'))
-    const b = Array.from(card.querySelectorAll('button')).find((x) => x.textContent.includes('指派任务'))
-    b.click()
+    const card = Array.from(document.querySelectorAll('[data-testid="colleague-card"]')).find((c) => c.textContent.includes('验收助理'))
+    card.querySelector('[data-testid="colleague-assign"]').click()
   })()`)
   await sleep(800)
   const assignedText = await evaluate(`document.body.innerText`)
