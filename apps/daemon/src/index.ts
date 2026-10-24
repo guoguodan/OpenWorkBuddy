@@ -1093,18 +1093,35 @@ const workflowService: WorkflowService | null = dbHandle
       registry,
       emit: (event) => emit(event),
       log: (message) => process.stderr.write(`${message}\n`),
-      onAutomationFinished: ({ id, name, status, conversationId }) => {
-        createNotification(requireDb(), {
-          workspaceId,
-          biz: 'automation',
-          title: `${status === 'done' ? '定时任务已完成' : '定时任务执行失败'}:${name}`,
-          summary:
-            status === 'done'
-              ? '自动执行已结束,点开查看本次结果。'
-              : '自动执行未能完成,点开后可以检查会话并重试。',
-          conversationId,
-          dedupeKey: `automation-${id}-${status}-${conversationId}`
-        })
+      artifactSinkFor: (taskId, conversationId) => artifactSinkFor(taskId, conversationId),
+      onAutomationFinished: (result) => {
+        const { id, name, status, conversationId } = result
+        // WM-AUTO-06:失败按"连续失败阈值"提醒。每次执行都新建会话,
+        // 若按会话去重失败通知会变成"每次都提醒",所以只在刚跨过阈值时发一条。
+        if (status === 'done') {
+          createNotification(requireDb(), {
+            workspaceId,
+            biz: 'automation',
+            title: `定时任务已完成:${name}`,
+            summary: result.outputBindings?.length
+              ? `本次产出 ${result.outputBindings.length} 个文件,点开查看结果。`
+              : '自动执行已结束,点开查看本次结果。',
+            conversationId,
+            dedupeKey: `automation-${id}-done-${conversationId}`
+          })
+          return
+        }
+        if (status === 'failed' && result.shouldAlert) {
+          createNotification(requireDb(), {
+            workspaceId,
+            biz: 'automation',
+            title: `定时任务连续失败 ${result.consecutiveFailures} 次:${name}`,
+            summary: `已自动重试,单次最多尝试 ${result.attempts} 次,仍未成功。点开后可以检查会话并手动处理。`,
+            conversationId,
+            isPending: true,
+            dedupeKey: `automation-${id}-failed-${result.consecutiveFailures}`
+          })
+        }
       },
       gateToolExecution: async ({ name, args, conversationId, signal }) => {
         const mode = modes.get('craft')
@@ -1113,14 +1130,16 @@ const workflowService: WorkflowService | null = dbHandle
           ...(signal ? { signal } : {})
         })
       },
-      runAutomationPrompt: async ({ conversationId, prompt, modeId }) => {
+      runAutomationPrompt: async ({ conversationId, prompt, modeId, attempt }) => {
         // WM-AUTO-03:新会话、空上下文;不读取任何历史消息。
-        // 但审计链必须完整:先把 prompt 写成 user 消息,再执行。
-        appendMessage(requireDb(), {
-          conversationId,
-          role: 'user',
-          content: { text: prompt }
-        })
+        // 审计链要完整:prompt 只写一次,重试不能重复堆同样的用户消息。
+        if (attempt === 1) {
+          appendMessage(requireDb(), {
+            conversationId,
+            role: 'user',
+            content: { text: prompt }
+          })
+        }
         const mode = resolveMode(modeId)
         const status = await runAgent({ text: prompt, mode, conversationId })
         return { status }
@@ -3859,14 +3878,22 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
   if (msg.cmd === 'automation.create') {
     if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
     if (typeof msg.name !== 'string' || msg.name.length === 0) throw new Error('缺少 name')
-    if (typeof msg.prompt !== 'string' || msg.prompt.length === 0) throw new Error('缺少 prompt')
+    const workflowId = typeof msg.workflowId === 'string' && msg.workflowId.length > 0 ? msg.workflowId : null
+    // 产物型自动化没有可读的提示词文本,用名称兜底;提示词型自动化仍必须自带指令。
+    if (!workflowId && (typeof msg.prompt !== 'string' || msg.prompt.length === 0)) throw new Error('缺少 prompt')
     if (msg.scheduleType !== 'once' && msg.scheduleType !== 'rrule') throw new Error('scheduleType 必须是 once 或 rrule')
     const created = workflowService.createAutomation({
       workspaceId,
       name: msg.name,
       scheduleType: msg.scheduleType,
-      prompt: msg.prompt,
+      prompt: typeof msg.prompt === 'string' && msg.prompt.length > 0 ? msg.prompt : msg.name,
       modeId: typeof msg.modeId === 'string' ? msg.modeId : 'craft',
+      ...(workflowId ? { workflowId } : {}),
+      ...(msg.workflowInputs !== null && typeof msg.workflowInputs === 'object' && !Array.isArray(msg.workflowInputs)
+        ? { workflowInputs: msg.workflowInputs as Record<string, unknown> }
+        : {}),
+      ...(typeof msg.maxAttempts === 'number' ? { maxAttempts: msg.maxAttempts } : {}),
+      ...(typeof msg.failureThreshold === 'number' ? { failureThreshold: msg.failureThreshold } : {}),
       ...(typeof msg.rrule === 'string' ? { rrule: msg.rrule } : {}),
       ...(typeof msg.scheduledAt === 'string' ? { scheduledAt: msg.scheduledAt } : {}),
       ...(typeof msg.timezone === 'string' ? { timezone: msg.timezone } : {}),

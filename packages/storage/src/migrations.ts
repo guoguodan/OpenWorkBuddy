@@ -484,6 +484,25 @@ CREATE TABLE conversation_summary (
 );
 CREATE INDEX idx_conversation_summary_seq ON conversation_summary(conversation_id, covered_seq);
 `
+  },
+  {
+    version: 16,
+    name: 'automation_retry_and_workflow_target',
+    sql: `-- WM-AUTO-06:失败重试与阈值通知。
+-- consecutive_failures 按整次执行计数(多 attempt 最终失败只 +1);
+-- failure_alerted 保证同一段连续失败只提醒一次,成功执行后与计数一起清零。
+-- workflow_id 让产物型定时任务直接运行工作流,输出由服务写入 artifact 表。
+ALTER TABLE automation ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0
+  CHECK (consecutive_failures >= 0);
+ALTER TABLE automation ADD COLUMN failure_alerted INTEGER NOT NULL DEFAULT 0
+  CHECK (failure_alerted IN (0, 1));
+ALTER TABLE automation ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 2
+  CHECK (max_attempts BETWEEN 1 AND 5);
+ALTER TABLE automation ADD COLUMN failure_threshold INTEGER NOT NULL DEFAULT 3
+  CHECK (failure_threshold BETWEEN 1 AND 20);
+ALTER TABLE automation ADD COLUMN workflow_id TEXT;
+ALTER TABLE automation ADD COLUMN workflow_inputs_json TEXT;
+`
   }
 ]
 

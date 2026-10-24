@@ -1,4 +1,6 @@
-import { readdir } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { basename, resolve, sep } from 'node:path'
 import type { AppDatabase } from '@openwb/storage'
 import {
   appendEvent,
@@ -11,13 +13,14 @@ import {
   getAutomation,
   listAutomations,
   markAutomationResult,
+  recordAutomationOutcome,
   skipAutomation,
   transitionTask,
   updateAutomation,
   getWorkspaceSettings,
   type AutomationRecord
 } from '@openwb/storage'
-import type { ToolRegistry } from '@openwb/tools'
+import type { ArtifactDraft, ArtifactSink, ToolRegistry } from '@openwb/tools'
 import {
   AutomationScheduler,
   FileRunStore,
@@ -44,6 +47,8 @@ export interface WorkflowServiceDeps {
     prompt: string
     modeId: string
     automationId: string
+    /** 第几次尝试,从 1 开始;重试不应重复写入同一条用户消息 */
+    attempt: number
   }) => Promise<{ status: 'done' | 'failed' | 'interrupted'; message?: string }>
   /** 工作流里的工具步骤同样要过审批闸门:否则自动化会绕过计费/路径确认 */
   gateToolExecution: (input: {
@@ -53,13 +58,26 @@ export interface WorkflowServiceDeps {
     signal?: AbortSignal
   }) => Promise<unknown>
   log: (message: string) => void
+  /** 交付物写入器:工作流输出要进 artifact 表,不能只留在 run.json 里 */
+  artifactSinkFor?: (taskId: string, conversationId: string) => ArtifactSink
   /** 定时任务结果进入消息中心;失败不能影响调度状态落库 */
   onAutomationFinished?: (input: {
     id: string
     name: string
     status: string
     conversationId: string
+    consecutiveFailures: number
+    failureAlerted: boolean
+    /** 本次刚好跨过阈值;同一段连续失败只会为 true 一次 */
+    shouldAlert: boolean
+    threshold: number
+    attempts: number
+    workflowId?: string
+    runId?: string
+    outputBindings?: Array<{ name: string; path: string }>
   }) => void
+  /** 测试注入:重试退避 */
+  sleep?: (ms: number) => Promise<void>
   /** 测试注入:模拟时钟 */
   now?: () => Date
 }
@@ -76,6 +94,12 @@ interface ActiveRun {
   controller: AbortController
   taskId: string
   execution: Promise<void>
+}
+
+interface SettledRun {
+  status: 'done' | 'failed' | 'interrupted'
+  outputBindings: Array<{ name: string; path: string }>
+  error?: { code?: string; message: string }
 }
 
 function toSchedulerRow(row: AutomationRecord): AutomationRow {
@@ -108,7 +132,10 @@ export class WorkflowService {
   private readonly dirs
   private readonly runs = new Map<string, ActiveRun>()
   private readonly automationRuns = new Set<Promise<void>>()
+  private readonly settled = new Map<string, SettledRun>()
+  private readonly settleWaiters = new Map<string, Array<(value: SettledRun) => void>>()
   private readonly now: () => Date
+  private readonly sleep: (ms: number) => Promise<void>
   private scheduler: AutomationScheduler | null = null
   private timer: NodeJS.Timeout | null = null
   private ticking = false
@@ -116,6 +143,7 @@ export class WorkflowService {
   constructor(private readonly deps: WorkflowServiceDeps) {
     this.dirs = workflowDirs(deps.workspaceRoot, deps.dataDir, deps.builtinDir)
     this.now = deps.now ?? (() => new Date())
+    this.sleep = deps.sleep ?? ((ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)))
   }
 
   async list(): Promise<{ workflows: Array<Record<string, unknown>>; issues: Array<{ path: string; reason: string }> }> {
@@ -239,6 +267,37 @@ export class WorkflowService {
 
   isRunning(runId: string): boolean {
     return this.runs.has(runId)
+  }
+
+  /**
+   * 等待某次运行收尾。
+   *
+   * 自动化需要知道运行结果才能计数/重试,而 run 接口必须立刻返回给界面;
+   * 结果先落内存表,极短运行在调用方开始等待前也能立刻拿到,不会卡死。
+   */
+  waitForRun(runId: string): Promise<SettledRun> {
+    const done = this.settled.get(runId)
+    if (done) return Promise.resolve(done)
+    return new Promise<SettledRun>((resolveWait) => {
+      const list = this.settleWaiters.get(runId) ?? []
+      list.push(resolveWait)
+      this.settleWaiters.set(runId, list)
+    })
+  }
+
+  private settleRun(runId: string, value: SettledRun): void {
+    this.settled.set(runId, value)
+    const waiters = this.settleWaiters.get(runId)
+    if (waiters) {
+      this.settleWaiters.delete(runId)
+      for (const waiter of waiters) waiter(value)
+    }
+    // 自动化历史很长时不能让结果表无限增长;只保留最近 100 次查询窗口。
+    while (this.settled.size > 100) {
+      const oldest = this.settled.keys().next().value
+      if (oldest === undefined) break
+      this.settled.delete(oldest)
+    }
   }
 
   activeRuns(): string[] {
@@ -367,6 +426,19 @@ export class WorkflowService {
         modelCalls: outcome.modelCalls,
         outputs: outcome.outputBindings
       })
+      if (outcome.status === 'done' && outcome.outputBindings.length > 0) {
+        await this.deliverOutputs({
+          taskId,
+          conversationId,
+          workflowName: manifest.name,
+          bindings: outcome.outputBindings
+        })
+      }
+      this.settleRun(runId, {
+        status: finalStatus,
+        outputBindings: outcome.outputBindings,
+        ...(outcome.error ? { error: outcome.error } : {})
+      })
       this.emit({
         type: 'workflow.settled',
         runId,
@@ -385,15 +457,72 @@ export class WorkflowService {
       } catch {
         // 已经是终态则忽略
       }
+      const failedStatus = input.controller.signal.aborted ? 'interrupted' : 'failed'
+      this.settleRun(runId, {
+        status: failedStatus,
+        outputBindings: [],
+        error: { message: (err as Error).message }
+      })
       this.emit({
         type: 'workflow.settled',
         runId,
         taskId,
-        status: input.controller.signal.aborted ? 'interrupted' : 'failed',
+        status: failedStatus,
         error: { message: (err as Error).message }
       })
     } finally {
       this.runs.delete(runId)
+    }
+  }
+
+  /**
+   * 把工作流声明的文件输出写进 artifact 表。
+   *
+   * 文件已由引擎写入工作区,这里只做校验/哈希与交付留痕;任何单个文件
+   * 读不到都不能把已完成的运行改判失败,否则用户会看到"跑完了但没有结果"。
+   */
+  private async deliverOutputs(input: {
+    taskId: string
+    conversationId: string
+    workflowName: string
+    bindings: Array<{ name: string; path: string }>
+  }): Promise<void> {
+    const sink = this.deps.artifactSinkFor?.(input.taskId, input.conversationId)
+    if (!sink) return
+    const drafts: ArtifactDraft[] = []
+    for (const binding of input.bindings) {
+      try {
+        const abs = resolve(this.deps.workspaceRoot, binding.path)
+        if (abs !== this.deps.workspaceRoot && !abs.startsWith(`${this.deps.workspaceRoot}${sep}`)) {
+          this.deps.log(`[workflow] 产物路径越界,已跳过: ${binding.path}`)
+          continue
+        }
+        const info = await stat(abs)
+        if (!info.isFile()) continue
+        const sha256 = createHash('sha256').update(await readFile(abs)).digest('hex')
+        const lower = binding.path.toLowerCase()
+        const kind: ArtifactDraft['kind'] = /\.html?$/.test(lower)
+          ? 'html'
+          : /\.(png|jpe?g|gif|webp|svg)$/.test(lower)
+            ? 'image'
+            : 'file'
+        drafts.push({
+          kind,
+          title: `${input.workflowName} · ${basename(binding.path) || binding.name}`,
+          description: `工作流产物 ${binding.name}`,
+          path: binding.path,
+          size: info.size,
+          sha256
+        })
+      } catch (err) {
+        this.deps.log(`[workflow] 产物读取失败 ${binding.path}: ${(err as Error).message}`)
+      }
+    }
+    if (drafts.length === 0) return
+    try {
+      await sink.insert(drafts)
+    } catch (err) {
+      this.deps.log(`[workflow] 产物写入失败: ${(err as Error).message}`)
     }
   }
 
@@ -560,19 +689,15 @@ export class WorkflowService {
       title: `自动化: ${record.name}`,
       modeId: record.modeId
     })
-    this.emit({ type: 'automation.started', id, name: record.name, conversationId: conversation.id })
-    let status = 'failed'
-    try {
-      const result = await this.deps.runAutomationPrompt({
-        conversationId: conversation.id,
-        prompt: record.prompt,
-        modeId: record.modeId,
-        automationId: id
-      })
-      status = result.status
-    } catch (err) {
-      this.deps.log(`[automation] ${record.name} 执行异常: ${(err as Error).message}`)
-    }
+    this.emit({
+      type: 'automation.started',
+      id,
+      name: record.name,
+      conversationId: conversation.id,
+      ...(record.workflowId ? { workflowId: record.workflowId } : {})
+    })
+    const execution = await this.executeAutomation(record, conversation.id)
+    const status = execution.status
 
     const nextRunAt =
       record.scheduleType === 'once'
@@ -584,8 +709,9 @@ export class WorkflowService {
             validUntil: record.validUntil,
             after: startedAt
           })
-    markAutomationResult(this.deps.db, id, {
+    const outcome = recordAutomationOutcome(this.deps.db, id, {
       status,
+      outcome: status === 'done' ? 'done' : status === 'interrupted' ? 'interrupted' : 'failed',
       nextRunAt,
       ...(record.scheduleType === 'once' ? { disable: true } : {}),
       now: startedAt.toISOString()
@@ -595,11 +721,95 @@ export class WorkflowService {
         id,
         name: record.name,
         status,
-        conversationId: conversation.id
+        conversationId: conversation.id,
+        consecutiveFailures: outcome.consecutiveFailures,
+        failureAlerted: outcome.failureAlerted,
+        shouldAlert: outcome.shouldAlert,
+        threshold: record.failureThreshold,
+        attempts: execution.attempts,
+        ...(record.workflowId ? { workflowId: record.workflowId } : {}),
+        ...(execution.runId ? { runId: execution.runId } : {}),
+        ...(execution.outputBindings ? { outputBindings: execution.outputBindings } : {})
       })
     } catch (err) {
       this.deps.log(`[automation] 消息通知写入失败: ${(err as Error).message}`)
     }
-    this.emit({ type: 'automation.finished', id, status, nextRunAt })
+    this.emit({
+      type: 'automation.finished',
+      id,
+      status,
+      nextRunAt,
+      attempts: execution.attempts,
+      consecutiveFailures: outcome.consecutiveFailures,
+      failureAlerted: outcome.failureAlerted,
+      shouldAlert: outcome.shouldAlert,
+      ...(execution.runId ? { runId: execution.runId } : {}),
+      ...(execution.outputBindings ? { outputBindings: execution.outputBindings } : {})
+    })
+  }
+
+  /**
+   * 一次自动化执行 = 至多 maxAttempts 次尝试。
+   *
+   * interrupted 是用户/进程主动停止,不重试也不计失败;只有 exhausted 才计一次
+   * "连续失败",否则内部重试会让阈值计数虚高。
+   */
+  private async executeAutomation(
+    record: AutomationRecord,
+    conversationId: string
+  ): Promise<{
+    status: 'done' | 'failed' | 'interrupted'
+    attempts: number
+    runId?: string
+    outputBindings?: Array<{ name: string; path: string }>
+  }> {
+    const maxAttempts = Math.min(5, Math.max(1, record.maxAttempts))
+    const baseDelayRaw = Number(process.env.OPENWB_AUTOMATION_RETRY_BASE_MS ?? 500)
+    const baseDelay = Number.isFinite(baseDelayRaw) && baseDelayRaw >= 0 ? baseDelayRaw : 500
+    let runId: string | undefined
+    let outputBindings: Array<{ name: string; path: string }> | undefined
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let status: 'done' | 'failed' | 'interrupted' = 'failed'
+      let message: string | undefined
+      try {
+        if (record.workflowId) {
+          const started = await this.start({
+            workflowId: record.workflowId,
+            inputs: record.workflowInputs ?? {},
+            conversationId,
+            ...(runId ? { runId, resume: true } : {})
+          })
+          runId = started.runId
+          const settled = await this.waitForRun(started.runId)
+          status = settled.status
+          outputBindings = settled.outputBindings
+          message = settled.error?.message
+        } else {
+          const result = await this.deps.runAutomationPrompt({
+            conversationId,
+            prompt: record.prompt,
+            modeId: record.modeId,
+            automationId: record.id,
+            attempt
+          })
+          status = result.status
+          message = result.message
+        }
+      } catch (err) {
+        message = (err as Error).message
+        status = 'failed'
+      }
+      if (status === 'done' || status === 'interrupted') {
+        return { status, attempts: attempt, ...(runId ? { runId } : {}), ...(outputBindings ? { outputBindings } : {}) }
+      }
+      this.deps.log(
+        `[automation] ${record.name} 第 ${attempt}/${maxAttempts} 次失败${message ? `: ${message}` : ''}`
+      )
+      if (attempt < maxAttempts && baseDelay > 0) {
+        await this.sleep(Math.min(30_000, baseDelay * 2 ** (attempt - 1)))
+      }
+    }
+    return { status: 'failed', attempts: maxAttempts, ...(runId ? { runId } : {}), ...(outputBindings ? { outputBindings } : {}) }
   }
 }

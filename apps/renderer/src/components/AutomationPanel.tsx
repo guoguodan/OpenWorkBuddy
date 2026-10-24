@@ -43,6 +43,18 @@ function toRrule(freq: 'DAILY' | 'WEEKLY', days: string[], hour: number, minute:
   return parts.join(';')
 }
 
+/** 工作流输入在表单里统一按字符串编辑,提交时再按默认值类型还原 */
+function inputKind(input: WorkflowInfo['inputs'][number]): 'text' | 'number' | 'boolean' {
+  if (typeof input.default === 'boolean') return 'boolean'
+  if (typeof input.default === 'number') return 'number'
+  return 'text'
+}
+
+function initialInputValue(input: WorkflowInfo['inputs'][number]): string {
+  if (input.default === undefined || input.default === null) return ''
+  return String(input.default)
+}
+
 /**
  * 定时任务面板。
  *
@@ -51,11 +63,17 @@ function toRrule(freq: 'DAILY' | 'WEEKLY', days: string[], hour: number, minute:
  */
 export function AutomationPanel({ onClose, onNotify }: AutomationPanelProps) {
   const [items, setItems] = useState<AutomationInfo[]>([])
+  const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [prompt, setPrompt] = useState('')
+  const [target, setTarget] = useState<'prompt' | 'workflow'>('prompt')
+  const [workflowId, setWorkflowId] = useState('')
+  const [workflowValues, setWorkflowValues] = useState<Record<string, string>>({})
+  const [maxAttempts, setMaxAttempts] = useState(2)
+  const [failureThreshold, setFailureThreshold] = useState(3)
   const [freq, setFreq] = useState<'ONCE' | 'DAILY' | 'WEEKLY'>('DAILY')
   const [days, setDays] = useState<string[]>(['MO', 'TU', 'WE', 'TH', 'FR'])
   const [hour, setHour] = useState(9)
@@ -77,20 +95,86 @@ export function AutomationPanel({ onClose, onNotify }: AutomationPanelProps) {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    void window.openwb.workflow
+      .list()
+      .then((result) => setWorkflows(result.workflows))
+      .catch(() => setWorkflows([]))
+  }, [])
+
+  const selectedWorkflow = workflows.find((workflow) => workflow.id === workflowId) ?? null
+
+  useEffect(() => {
+    if (!selectedWorkflow) {
+      setWorkflowValues({})
+      return
+    }
+    setWorkflowValues(
+      Object.fromEntries(selectedWorkflow.inputs.map((input) => [input.name, initialInputValue(input)]))
+    )
+  }, [selectedWorkflow])
+
+  const missingWorkflowInputs = selectedWorkflow
+    ? selectedWorkflow.inputs
+        .filter((input) => input.required && String(workflowValues[input.name] ?? '').trim() === '')
+        .map((input) => input.name)
+    : []
+
+  const buildWorkflowInputs = (): Record<string, unknown> | null => {
+    if (!selectedWorkflow) return {}
+    const inputs: Record<string, unknown> = {}
+    for (const input of selectedWorkflow.inputs) {
+      const raw = workflowValues[input.name] ?? ''
+      const kind = inputKind(input)
+      if (kind === 'boolean') {
+        inputs[input.name] = raw === 'true'
+        continue
+      }
+      if (raw.trim() === '') continue
+      if (kind === 'number') {
+        const value = Number(raw)
+        if (!Number.isFinite(value)) {
+          onNotify('system', `输入 ${input.name} 需要是数字`)
+          return null
+        }
+        inputs[input.name] = value
+        continue
+      }
+      inputs[input.name] = raw
+    }
+    return inputs
+  }
+
   const create = async () => {
-    if (!name.trim() || !prompt.trim()) {
-      onNotify('system', '请填写任务名称与执行指令')
+    if (!name.trim()) {
+      onNotify('system', '请填写任务名称')
+      return
+    }
+    if (target === 'prompt' && !prompt.trim()) {
+      onNotify('system', '请填写执行指令')
+      return
+    }
+    if (target === 'workflow' && !workflowId) {
+      onNotify('system', '请选择要运行的工作流')
+      return
+    }
+    if (missingWorkflowInputs.length > 0) {
+      onNotify('system', `请填写工作流必填输入: ${missingWorkflowInputs.join(', ')}`)
       return
     }
     if (freq === 'ONCE' && !scheduledAt) {
       onNotify('system', '单次任务需要选择执行时间')
       return
     }
+    const workflowInputs = target === 'workflow' ? buildWorkflowInputs() : null
+    if (workflowInputs === null) return
     setWorking('create')
     try {
       await window.openwb.automation.create({
         name: name.trim(),
-        prompt: prompt.trim(),
+        ...(target === 'workflow'
+          ? { workflowId, workflowInputs }
+          : { prompt: prompt.trim() }),
         scheduleType: freq === 'ONCE' ? 'once' : 'rrule',
         ...(freq === 'ONCE'
           ? { scheduledAt: new Date(scheduledAt).toISOString() }
@@ -98,10 +182,14 @@ export function AutomationPanel({ onClose, onNotify }: AutomationPanelProps) {
               rrule: toRrule(freq, days, hour, minute),
               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
             }),
-        modeId: 'craft'
+        modeId: 'craft',
+        maxAttempts,
+        failureThreshold
       })
       setName('')
       setPrompt('')
+      setWorkflowId('')
+      setTarget('prompt')
       setCreating(false)
       await refresh()
       onNotify('info', '定时任务已创建')
@@ -167,16 +255,122 @@ export function AutomationPanel({ onClose, onNotify }: AutomationPanelProps) {
                 maxLength={80}
               />
             </label>
-            <label className="owb-field">
-              <span>执行指令</span>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="告诉 Buddy 每次要做什么，例如：汇总今天 AI 行业的重要变化并输出简报"
-                rows={3}
-                maxLength={4000}
-              />
-            </label>
+            <div className="owb-field">
+              <span>执行内容</span>
+              <div className="owb-segmented" role="radiogroup" aria-label="执行内容">
+                {[
+                  { id: 'prompt' as const, label: '执行指令' },
+                  { id: 'workflow' as const, label: '运行工作流' }
+                ].map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={target === option.id}
+                    className={`owb-segmented__item${target === option.id ? ' owb-segmented__item--on' : ''}`}
+                    onClick={() => setTarget(option.id)}
+                    data-testid={`automation-target-${option.id}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {target === 'prompt' ? (
+              <label className="owb-field">
+                <span>执行指令</span>
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="告诉 Buddy 每次要做什么，例如：汇总今天 AI 行业的重要变化并输出简报"
+                  rows={3}
+                  maxLength={4000}
+                />
+              </label>
+            ) : (
+              <>
+                <label className="owb-field">
+                  <span>工作流</span>
+                  <select
+                    value={workflowId}
+                    onChange={(e) => setWorkflowId(e.target.value)}
+                    data-testid="automation-workflow"
+                  >
+                    <option value="">请选择工作流</option>
+                    {workflows.map((workflow) => (
+                      <option key={workflow.id} value={workflow.id}>
+                        {workflow.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selectedWorkflow?.inputs.map((input) => {
+                  const kind = inputKind(input)
+                  const id = `auto-wf-${selectedWorkflow.id}-${input.name}`
+                  return (
+                    <label className="owb-field" key={input.name} htmlFor={id}>
+                      <span>
+                        {input.name}
+                        {input.required ? ' (必填)' : ''}
+                      </span>
+                      {kind === 'boolean' ? (
+                        <input
+                          id={id}
+                          type="checkbox"
+                          checked={(workflowValues[input.name] ?? 'false') === 'true'}
+                          onChange={(event) =>
+                            setWorkflowValues((current) => ({
+                              ...current,
+                              [input.name]: String(event.target.checked)
+                            }))
+                          }
+                          data-testid={`automation-input-${input.name}`}
+                        />
+                      ) : (
+                        <input
+                          id={id}
+                          type={kind === 'number' ? 'number' : 'text'}
+                          value={workflowValues[input.name] ?? ''}
+                          onChange={(event) =>
+                            setWorkflowValues((current) => ({ ...current, [input.name]: event.target.value }))
+                          }
+                          data-testid={`automation-input-${input.name}`}
+                        />
+                      )}
+                    </label>
+                  )
+                })}
+              </>
+            )}
+            <div className="owb-field">
+              <span>失败处理</span>
+              <div className="owb-time">
+                <label>
+                  单次最多尝试
+                  <input
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={maxAttempts}
+                    onChange={(e) => setMaxAttempts(Math.min(5, Math.max(1, Number(e.target.value) || 1)))}
+                    aria-label="单次最多尝试次数"
+                    data-testid="automation-max-attempts"
+                  />
+                </label>
+                <label>
+                  连续失败提醒阈值
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={failureThreshold}
+                    onChange={(e) => setFailureThreshold(Math.min(20, Math.max(1, Number(e.target.value) || 1)))}
+                    aria-label="连续失败提醒阈值"
+                    data-testid="automation-failure-threshold"
+                  />
+                </label>
+              </div>
+            </div>
             <div className="owb-field">
               <span>执行频率</span>
               <div className="owb-segmented" role="radiogroup" aria-label="执行频率">
@@ -284,12 +478,18 @@ export function AutomationPanel({ onClose, onNotify }: AutomationPanelProps) {
                   </span>
                 </div>
                 <div className="owb-card__meta">{scheduleText(item)}</div>
-                <p className="owb-card__text">{item.prompt}</p>
+                <p className="owb-card__text">
+                  {item.workflowId ? `工作流：${item.workflowId}` : item.prompt}
+                </p>
                 <div className="owb-card__sub">
                   {item.nextRunAt
                     ? `下次运行：${new Date(item.nextRunAt).toLocaleString('zh-CN')}`
                     : '暂无下次运行时间'}
                   {item.lastStatus ? ` · 上次：${item.lastStatus}` : ''}
+                </div>
+                <div className="owb-card__sub">
+                  重试：单次最多 {item.maxAttempts} 次 · 连续失败 {item.consecutiveFailures}/{item.failureThreshold}
+                  {item.failureAlerted ? ' · 已提醒' : ''}
                 </div>
                 <div className="owb-card__actions">
                   <button className="owb-sheet__action" onClick={() => void toggle(item)} disabled={working !== null}>

@@ -560,7 +560,8 @@ ipcMain.handle(
 ipcMain.handle('automation.create', async (_e, input: Record<string, unknown>) => {
   await daemonReady
   if (!input || typeof input.name !== 'string' || !input.name.trim()) throw new Error('缺少任务名称')
-  if (typeof input.prompt !== 'string' || !input.prompt.trim()) throw new Error('缺少任务指令')
+  const hasWorkflow = typeof input.workflowId === 'string' && input.workflowId.trim().length > 0
+  if (!hasWorkflow && (typeof input.prompt !== 'string' || !input.prompt.trim())) throw new Error('缺少任务指令')
   return request<{ automation: unknown }>({ cmd: 'automation.create', ...input })
 })
 

@@ -266,6 +266,12 @@ interface AutomationInfo {
   nextRunAt: string | null
   lastRunAt: string | null
   lastStatus: string | null
+  consecutiveFailures: number
+  failureAlerted: boolean
+  maxAttempts: number
+  failureThreshold: number
+  workflowId: string | null
+  workflowInputs: Record<string, unknown> | null
   createdAt: string
   updatedAt: string
 }
@@ -531,13 +537,17 @@ interface Window {
       list: () => Promise<{ automations: AutomationInfo[] }>
       create: (input: {
         name: string
-        prompt: string
+        prompt?: string
         scheduleType: 'once' | 'rrule'
         rrule?: string
         scheduledAt?: string
         timezone?: string
         modeId?: string
         enabled?: boolean
+        workflowId?: string
+        workflowInputs?: Record<string, unknown>
+        maxAttempts?: number
+        failureThreshold?: number
       }) => Promise<{ automation: AutomationInfo }>
       toggle: (input: { id: string; enabled: boolean }) => Promise<{ id: string; enabled: boolean }>
       remove: (id: string) => Promise<{ id: string }>

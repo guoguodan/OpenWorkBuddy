@@ -226,6 +226,15 @@ export const automation = sqliteTable(
     nextRunAt: text('next_run_at'),
     lastRunAt: text('last_run_at'),
     lastStatus: text('last_status'),
+    /** WM-AUTO-06:连续失败按"整次执行"计数,重试次数不重复累加 */
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    /** 达到阈值后只提醒一次,成功执行后清零 */
+    failureAlerted: integer('failure_alerted').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(2),
+    failureThreshold: integer('failure_threshold').notNull().default(3),
+    /** 产物型自动化:直接运行工作流,输出写回服务后再交付 */
+    workflowId: text('workflow_id'),
+    workflowInputsJson: text('workflow_inputs_json'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull()
   },
