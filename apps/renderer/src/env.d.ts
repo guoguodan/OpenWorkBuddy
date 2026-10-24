@@ -90,6 +90,7 @@ interface PluginToolInfo {
 interface PluginSnapshotInfo {
   name: string
   displayName: string
+  description: string
   version: string
   kind: 'connector' | 'expert'
   state: 'unloaded' | 'starting' | 'ready' | 'reconnecting' | 'disabled' | 'crashed'
@@ -277,9 +278,17 @@ interface Window {
     }
     skills: {
       list: () => Promise<{
-        skills: Array<{ name: string; description: string; scope: string }>
+        skills: Array<{ name: string; description: string; scope: string; enabled: boolean }>
         issues: Array<{ path: string; reason: string }>
       }>
+      setEnabled: (input: { name: string; enabled: boolean }) => Promise<{
+        skills: Array<{ name: string; description: string; scope: string; enabled: boolean }>
+        issues: Array<{ path: string; reason: string }>
+      }>
+      pin: (input: { name: string; pinned: boolean }) => Promise<{ settings: { pinnedSkills: string[] } }>
+      uninstall: (name: string) => Promise<{ removed: string; path: string }>
+      importDirectory: (sourceDir: string) => Promise<{ imported: string; path: string }>
+      pickDir: () => Promise<{ path: string | null }>
     }
     search: {
       query: (q: string) => Promise<{ query: string; groups: SearchGroupInfo[] }>
@@ -325,12 +334,25 @@ interface Window {
     }
     settings: {
       get: () => Promise<{
-        settings: { permissionMode: 'default' | 'fullAccess' | 'readOnly'; taskTarget: 'local'; model: string | null }
+        settings: {
+          permissionMode: 'default' | 'fullAccess' | 'readOnly'
+          taskTarget: 'local'
+          model: string | null
+          disabledSkills: string[]
+          pinnedSkills: string[]
+        }
         workspace: string
         model: string
+        openSkillsDir: string
       }>
       set: (input: { key: 'permissionMode' | 'taskTarget' | 'model'; value: string | null }) => Promise<{
-        settings: { permissionMode: 'default' | 'fullAccess' | 'readOnly'; taskTarget: 'local'; model: string | null }
+        settings: {
+          permissionMode: 'default' | 'fullAccess' | 'readOnly'
+          taskTarget: 'local'
+          model: string | null
+          disabledSkills: string[]
+          pinnedSkills: string[]
+        }
       }>
     }
     library: {

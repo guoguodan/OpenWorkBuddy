@@ -5,7 +5,12 @@ contextBridge.exposeInMainWorld('openwb', {
     list: () => ipcRenderer.invoke('modes.list')
   },
   skills: {
-    list: () => ipcRenderer.invoke('skills.list')
+    list: () => ipcRenderer.invoke('skills.list'),
+    setEnabled: (input: unknown) => ipcRenderer.invoke('skills.setEnabled', input),
+    pin: (input: unknown) => ipcRenderer.invoke('skills.pin', input),
+    uninstall: (name: string) => ipcRenderer.invoke('skills.uninstall', name),
+    importDirectory: (sourceDir: string) => ipcRenderer.invoke('skills.import', { sourceDir }),
+    pickDir: () => ipcRenderer.invoke('skills.pickDir')
   },
   search: {
     query: (query: string) => ipcRenderer.invoke('search.query', query)

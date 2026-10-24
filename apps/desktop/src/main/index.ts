@@ -94,6 +94,45 @@ ipcMain.handle('skills.list', async () => {
   return request<{ skills: unknown[]; issues: unknown[] }>({ cmd: 'skills.list' })
 })
 
+ipcMain.handle('skills.setEnabled', async (_e, input: { name?: string; enabled?: boolean }) => {
+  await daemonReady
+  if (!input || typeof input.name !== 'string' || !input.name.trim()) throw new Error('缺少技能名')
+  if (typeof input.enabled !== 'boolean') throw new Error('enabled 必须是布尔值')
+  return request<{ skills: unknown[]; issues: unknown[] }>({
+    cmd: 'skills.setEnabled',
+    name: input.name,
+    enabled: input.enabled
+  })
+})
+
+ipcMain.handle('skills.pin', async (_e, input: { name?: string; pinned?: boolean }) => {
+  await daemonReady
+  if (!input || typeof input.name !== 'string' || !input.name.trim()) throw new Error('缺少技能名')
+  if (typeof input.pinned !== 'boolean') throw new Error('pinned 必须是布尔值')
+  return request<{ settings: unknown }>({ cmd: 'skills.pin', name: input.name, pinned: input.pinned })
+})
+
+ipcMain.handle('skills.uninstall', async (_e, name: string) => {
+  await daemonReady
+  if (typeof name !== 'string' || !name.trim()) throw new Error('缺少技能名')
+  return request<{ removed: string; path: string }>({ cmd: 'skills.uninstall', name })
+})
+
+ipcMain.handle('skills.import', async (_e, input: { sourceDir?: string }) => {
+  await daemonReady
+  const sourceDir = input?.sourceDir
+  if (typeof sourceDir !== 'string' || !sourceDir.trim()) throw new Error('缺少技能目录')
+  return request<{ imported: string; path: string }>({ cmd: 'skills.import', sourceDir }, 30_000)
+})
+
+ipcMain.handle('skills.pickDir', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '选择技能目录(需包含 SKILL.md)',
+    properties: ['openDirectory']
+  })
+  return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
+})
+
 ipcMain.handle('conversation.list', async () => {
   await daemonReady
   return request<{ conversations: unknown[]; conversationId: string }>({ cmd: 'conversation.list' })

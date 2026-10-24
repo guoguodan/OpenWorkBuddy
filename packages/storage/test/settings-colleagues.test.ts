@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase, type OpenDbResult } from '../src/client.js'
 import { migrateOrThrow } from '../src/migrate.js'
 import { ensureWorkspace } from '../src/conversations.js'
-import { DEFAULT_SETTINGS, getWorkspaceSettings, setWorkspaceSetting } from '../src/settings.js'
+import {
+  DEFAULT_SETTINGS,
+  getWorkspaceSettings,
+  setDisabledSkills,
+  setPinnedSkills,
+  setWorkspaceSetting
+} from '../src/settings.js'
 import {
   assertColleagueAssignable,
   createColleague,
@@ -59,6 +65,27 @@ describe('workspace settings', () => {
     setWorkspaceSetting(handle.db, workspaceId, 'model', 'demo-model')
     setWorkspaceSetting(handle.db, workspaceId, 'model', null)
     expect(getWorkspaceSettings(handle.db, workspaceId).model).toBeNull()
+  })
+
+  it('persists disabled skills as a deduplicated sorted set', () => {
+    setDisabledSkills(handle.db, workspaceId, ['beta', ' alpha ', 'beta', ''])
+    expect(getWorkspaceSettings(handle.db, workspaceId).disabledSkills).toEqual(['alpha', 'beta'])
+    setDisabledSkills(handle.db, workspaceId, [])
+    expect(getWorkspaceSettings(handle.db, workspaceId).disabledSkills).toEqual([])
+  })
+
+  it('treats corrupt disabled-skills JSON as enabled-by-default', () => {
+    setWorkspaceSetting(handle.db, workspaceId, 'disabledSkills', '{not-json')
+    expect(getWorkspaceSettings(handle.db, workspaceId).disabledSkills).toEqual([])
+    setWorkspaceSetting(handle.db, workspaceId, 'disabledSkills', '{"alpha":true}')
+    expect(getWorkspaceSettings(handle.db, workspaceId).disabledSkills).toEqual([])
+  })
+
+  it('keeps pinned skill order while deduplicating names', () => {
+    setPinnedSkills(handle.db, workspaceId, ['beta', 'alpha', 'beta'])
+    expect(getWorkspaceSettings(handle.db, workspaceId).pinnedSkills).toEqual(['beta', 'alpha'])
+    setPinnedSkills(handle.db, workspaceId, [])
+    expect(getWorkspaceSettings(handle.db, workspaceId).pinnedSkills).toEqual([])
   })
 })
 

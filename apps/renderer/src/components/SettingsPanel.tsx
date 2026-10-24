@@ -6,6 +6,9 @@ export interface WorkspaceSettingsInfo {
   permissionMode: PermissionMode
   taskTarget: 'local'
   model: string | null
+  disabledSkills?: string[]
+  pinnedSkills?: string[]
+  openSkillsDir?: string
 }
 
 interface SettingsPanelProps {

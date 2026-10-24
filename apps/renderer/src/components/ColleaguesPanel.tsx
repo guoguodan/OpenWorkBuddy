@@ -60,7 +60,10 @@ export function ColleaguesPanel({ onClose, onNotify, onAssign, onOpenTask }: Col
 
   useEffect(() => {
     void refresh()
-    void window.openwb.skills.list().then((result) => setSkills(result.skills)).catch(() => undefined)
+    void window.openwb.skills
+      .list()
+      .then((result) => setSkills(result.skills.filter((skill) => skill.enabled !== false)))
+      .catch(() => undefined)
     void window.openwb.plugins
       .list()
       .then((result) =>

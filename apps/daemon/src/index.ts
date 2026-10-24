@@ -1,6 +1,6 @@
 import { dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { access, readFile } from 'node:fs/promises'
+import { access, cp, mkdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { streamText, tool, jsonSchema, type CoreMessage, type Tool, type ToolExecutionOptions } from 'ai'
 import { z } from 'zod'
@@ -19,6 +19,7 @@ import {
 } from '@openwb/prompt'
 import { ToolError, ToolRegistry, type ToolDescriptor } from '@openwb/tools'
 import type { SkillRoot } from '@openwb/skills'
+import { validateSkillDir } from '@openwb/skills'
 import { FrameDecoder, encodeFrame, helloFrame } from '@openwb/protocol'
 import {
   appendEvent,
@@ -62,6 +63,8 @@ import {
   deleteApprovalGrant,
   getWorkspaceSettings,
   setWorkspaceSetting,
+  setDisabledSkills,
+  setPinnedSkills,
   listLibraryArtifacts,
   listColleagues,
   getColleague,
@@ -401,16 +404,34 @@ async function decideFullAccess(
 }
 
 function skillRoots(): SkillRoot[] {
+  const explicitUserDir = process.env.OPENWB_USER_SKILLS_DIR
   if (SKILLS_DIR) {
-    return SKILLS_DIR.split(';')
+    const roots: SkillRoot[] = SKILLS_DIR.split(';')
       .map((p) => p.trim())
       .filter((p) => p.length > 0)
       .map((path) => ({ path: resolve(path), scope: 'project' as const }))
+    if (explicitUserDir) roots.push({ path: resolve(explicitUserDir), scope: 'user' })
+    // 自定义项目技能根目录时仍需要一个可写用户目录:导入、卸载和状态持久化都依赖它。
+    if (!roots.some((root) => root.scope === 'user')) {
+      roots.push({ path: resolve(DATA_DIR, 'skills'), scope: 'user' })
+    }
+    return roots
   }
-  return defaultSkillRoots(WORKSPACE, BUNDLED_SKILLS_DIR)
+  const roots = defaultSkillRoots(WORKSPACE, BUNDLED_SKILLS_DIR)
+  if (!explicitUserDir) return roots
+  return roots.map((root) =>
+    root.scope === 'user' ? { path: resolve(explicitUserDir), scope: 'user' as const } : root
+  )
 }
 
 const skills = new SkillRuntime(skillRoots())
+
+/** 技能读写必须落在用户级技能根目录;项目级与内置目录只读。 */
+function userSkillsRoot(): string {
+  const root = skillRoots().find((item) => item.scope === 'user')
+  if (!root) throw new Error('未配置用户技能目录')
+  return root.path
+}
 
 const loadSkillTool = {
   name: 'load_skill',
@@ -437,6 +458,9 @@ try {
 }
 
 const discovered = await skills.refresh()
+if (dbHandle) {
+  skills.setDisabled(getWorkspaceSettings(dbHandle.db, workspaceId).disabledSkills)
+}
 process.stderr.write(
   `[skills] ${discovered.entries.length} 个 -> [${discovered.entries.map((e) => e.name).join(',')}]\n`
 )
@@ -1810,7 +1834,8 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       type: 'settings.get',
       settings: getWorkspaceSettings(db, workspaceId),
       workspace: WORKSPACE,
-      model: process.env.OPENWB_MODEL ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini'
+      model: process.env.OPENWB_MODEL ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+      openSkillsDir: userSkillsRoot()
     })
     return true
   }
@@ -2120,8 +2145,106 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     emit({
       ...base,
       type: 'skills.list',
-      skills: skills.list().map((s) => ({ name: s.name, description: s.description, scope: s.scope })),
+      skills: skills.statusList().map((s) => ({
+        name: s.name,
+        description: s.description,
+        scope: s.scope,
+        enabled: s.enabled
+      })),
       issues: skills.issues()
+    })
+    return true
+  }
+
+  if (msg.cmd === 'skills.setEnabled') {
+    if (typeof msg.name !== 'string' || !msg.name.trim()) throw new Error('缺少技能名')
+    const name = msg.name.trim()
+    const known = skills.statusList().some((skill) => skill.name === name)
+    if (!known) throw new Error(`未知技能: ${name}`)
+    if (typeof msg.enabled !== 'boolean') throw new Error('enabled 必须是布尔值')
+    const current = new Set(getWorkspaceSettings(db, workspaceId).disabledSkills)
+    if (msg.enabled) current.delete(name)
+    else current.add(name)
+    const settings = setDisabledSkills(db, workspaceId, [...current])
+    // setDisabled 会丢弃库里已不存在于磁盘的技能名;再落一次以保持库与磁盘一致。
+    skills.setDisabled(settings.disabledSkills)
+    setDisabledSkills(db, workspaceId, skills.disabled())
+    emit({
+      ...base,
+      type: 'skills.list',
+      skills: skills.statusList().map((s) => ({
+        name: s.name,
+        description: s.description,
+        scope: s.scope,
+        enabled: s.enabled
+      })),
+      issues: skills.issues()
+    })
+    return true
+  }
+
+  if (msg.cmd === 'skills.pin') {
+    if (typeof msg.name !== 'string' || !msg.name.trim()) throw new Error('缺少技能名')
+    const name = msg.name.trim()
+    if (!skills.entryOf(name)) throw new Error(`未知技能: ${name}`)
+    if (typeof msg.pinned !== 'boolean') throw new Error('pinned 必须是布尔值')
+    const current = getWorkspaceSettings(db, workspaceId).pinnedSkills.filter((item) => item !== name)
+    const next = msg.pinned ? [name, ...current] : current
+    const settings = setPinnedSkills(db, workspaceId, next)
+    emit({ ...base, type: 'skills.pinned', settings })
+    return true
+  }
+
+  if (msg.cmd === 'skills.uninstall') {
+    if (typeof msg.name !== 'string' || !msg.name.trim()) throw new Error('缺少技能名')
+    const name = msg.name.trim()
+    const entry = await skills.removeUserSkill(name)
+    const settings = getWorkspaceSettings(db, workspaceId)
+    setDisabledSkills(db, workspaceId, settings.disabledSkills.filter((item) => item !== name))
+    setPinnedSkills(db, workspaceId, settings.pinnedSkills.filter((item) => item !== name))
+    skills.setDisabled(getWorkspaceSettings(db, workspaceId).disabledSkills)
+    emit({
+      ...base,
+      type: 'skills.list',
+      skills: skills.statusList().map((s) => ({
+        name: s.name,
+        description: s.description,
+        scope: s.scope,
+        enabled: s.enabled
+      })),
+      issues: skills.issues(),
+      removed: name,
+      path: entry.dir
+    })
+    return true
+  }
+
+  if (msg.cmd === 'skills.import') {
+    if (typeof msg.sourceDir !== 'string' || !msg.sourceDir.trim()) throw new Error('缺少技能目录')
+    const source = resolve(msg.sourceDir)
+    const manifest = await validateSkillDir(source)
+    const root = userSkillsRoot()
+    const target = resolve(root, manifest.name)
+    if (skills.entryOf(manifest.name)) {
+      throw new Error(`同名技能已存在: ${manifest.name},请先卸载后再导入`)
+    }
+    await mkdir(root, { recursive: true })
+    // validate 已扫描过源目录;复制到用户根目录后再 refresh,以磁盘为准。
+    await cp(source, target, { recursive: true, errorOnExist: true, force: false })
+    await skills.refresh()
+    skills.setDisabled(getWorkspaceSettings(db, workspaceId).disabledSkills)
+    emit({
+      ...base,
+      type: 'skills.list',
+      skills: skills.statusList().map((s) => ({
+        name: s.name,
+        description: s.description,
+        scope: s.scope,
+        enabled: s.enabled
+      })),
+      issues: skills.issues(),
+      imported: manifest.name,
+      path: target
     })
     return true
   }

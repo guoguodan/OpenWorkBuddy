@@ -3,8 +3,7 @@ import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView
 import { type ArtifactInfo } from './components/ArtifactCards'
 import { Composer, type ComposerAttachment, type PermissionMode } from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
-import { InfoPanel, type SkillInfo } from './components/InfoPanel'
-import { ConnectorsPanel } from './components/ConnectorsPanel'
+import { SkillsHubPanel, type HubSkill } from './components/SkillsHubPanel'
 import { MemoryPanel, type MemoryItem } from './components/MemoryPanel'
 import { SearchPanel, type SearchGroup, type SearchHit } from './components/SearchPanel'
 import { ChannelPanel, type ChannelInfo, type SyncStatus } from './components/ChannelPanel'
@@ -34,6 +33,8 @@ import { MessageCenter } from './components/MessageCenter'
 import { IconCheck, IconSparkle, IconTool } from './components/Icons'
 import './styles/tokens.css'
 import './styles/app.css'
+
+type SkillInfo = HubSkill
 
 type ModeInfo = { id: string; displayName: string; description: string }
 type MemoryBlock = { scope: string; count: number; truncated: number; ids: string[] }
@@ -295,7 +296,7 @@ export default function App() {
 
     void window.openwb.skills
       .list()
-      .then((r) => setSkills(r.skills))
+      .then((r) => setSkills(r.skills.map((skill) => ({ ...skill, enabled: skill.enabled !== false }))))
       .catch(() => undefined)
 
     void window.openwb.approval
@@ -700,7 +701,7 @@ export default function App() {
       value={input}
       busy={busy}
       autoFocus={autoFocus}
-      skills={skills}
+      skills={skills.filter((skill) => skill.enabled !== false)}
       selectedSkill={selectedSkill}
       workspaceLabel={workspaceLabel}
       workspacePath={workspacePath}
@@ -852,19 +853,12 @@ export default function App() {
         </main>
       </div>
 
-      {panel === 'connectors' ? (
-        <ConnectorsPanel
+      {panel === 'skills' || panel === 'connectors' ? (
+        <SkillsHubPanel
+          initialTab={panel === 'connectors' ? 'connectors' : 'skills'}
           onClose={() => setPanel(null)}
           onNotify={(kind, text) => note(kind === 'info' ? 'tools' : 'system', text)}
-        />
-      ) : panel === 'skills' ? (
-        <InfoPanel
-          kind="skills"
-          skills={skills}
-          model={modelLabel}
-          workspace={workspacePath || workspaceLabel}
-          onOpenWorkspace={() => void openWorkspace()}
-          onClose={() => setPanel(null)}
+          onSkillsChanged={(next) => setSkills(next)}
         />
       ) : null}
 

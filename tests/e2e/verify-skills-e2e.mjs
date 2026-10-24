@@ -49,7 +49,7 @@ function decodeFrames(buf) {
 }
 
 /** 启动 daemon,发一条命令后关闭 */
-function runDaemon({ workspace, skillsDir, text, mode, mock = true, timeoutMs = 60000, dataDir }) {
+function runDaemon({ workspace, skillsDir, text, mode, mock = true, timeoutMs = 60000, dataDir, commands }) {
   return new Promise((res, rej) => {
     const child = spawn(process.execPath, [entry], {
       cwd: root,
@@ -78,8 +78,18 @@ function runDaemon({ workspace, skillsDir, text, mode, mock = true, timeoutMs = 
       const events = decodeFrames(Buffer.concat(chunks))
       res({ code, events, err })
     })
-    child.stdin.end(encodeFrame({ text, mode }))
+    if (commands) {
+      for (const command of commands) child.stdin.write(encodeFrame(command))
+      child.stdin.end()
+    } else {
+      child.stdin.end(encodeFrame({ text, mode }))
+    }
   })
+}
+
+/** 启动 daemon,依次执行命令;用于验证设置持久化后再重启仍生效。 */
+function runCommands(options, commands) {
+  return runDaemon({ ...options, commands })
 }
 
 const base = await mkdtemp(join(tmpdir(), 'owb-skill-e2e-'))
@@ -186,6 +196,79 @@ try {
     'credential-skill-rejected',
     JSON.stringify(ready3?.skills ?? [])
   )
+
+  // 7. 关闭自动触发:仍安装、可显示,但从索引移除且拒绝加载
+  await rm(join(skillsDir, 'leaky'), { recursive: true, force: true })
+  await mkdir(join(skillsDir, 'demo-skill'), { recursive: true })
+  await writeFile(
+    join(skillsDir, 'demo-skill', 'SKILL.md'),
+    [
+      '---',
+      'name: demo-skill',
+      'description: 只读演示技能,用于验收工具收窄',
+      'allowed-tools: read_file, glob',
+      '---',
+      '',
+      '# Demo Skill',
+      '这是技能正文标记 DEMO-BODY-MARKER。'
+    ].join('\n'),
+    'utf8'
+  )
+
+  const wb = join(base, 'ws')
+  const off = await runCommands(
+    { workspace: wb, skillsDir, text: '', mode: 'craft' },
+    [
+      { cmd: 'skills.setEnabled', name: 'demo-skill', enabled: false },
+      { cmd: 'skills.list' },
+      { text: '必须加载这个技能', mode: 'craft', skill: 'demo-skill' }
+    ]
+  )
+  const disabledList = off.events.filter((e) => e.type === 'skills.list').at(-1)
+  const listedSkill = disabledList?.skills?.find((s) => s.name === 'demo-skill')
+  check(listedSkill?.enabled === false, 'disabled-skill-stays-listed', JSON.stringify(disabledList?.skills ?? []))
+  const refused = off.events.find((e) => e.type === 'error' && e.code === 'CONTEXT_FAILED')
+  check(
+    refused && String(refused.message).includes('已关闭自动触发'),
+    'disabled-skill-load-refused',
+    JSON.stringify(off.events.filter((e) => e.type === 'error'))
+  )
+  const activatedAfterOff = off.events.find((e) => e.type === 'skill.activated')
+  check(!activatedAfterOff, 'disabled-skill-not-activated', JSON.stringify(activatedAfterOff ?? null))
+
+  const restarted = await runCommands(
+    { workspace: wb, skillsDir, text: '', mode: 'craft' },
+    [{ cmd: 'skills.list' }, { text: 'x', mode: 'craft' }]
+  )
+  const listAfterRestart = restarted.events.filter((e) => e.type === 'skills.list').at(-1)
+  check(
+    listAfterRestart?.skills?.find((s) => s.name === 'demo-skill')?.enabled === false,
+    'disabled-state-survives-restart',
+    JSON.stringify(listAfterRestart?.skills ?? [])
+  )
+  const readyAfterRestart = restarted.events.find((e) => e.type === 'ready')
+  check(
+    !readyAfterRestart?.skills?.some((s) => s.name === 'demo-skill'),
+    'disabled-skill-excluded-from-ready-index',
+    JSON.stringify(readyAfterRestart?.skills ?? [])
+  )
+
+  const on = await runCommands(
+    { workspace: wb, skillsDir, text: '', mode: 'craft' },
+    [
+      { cmd: 'skills.setEnabled', name: 'demo-skill', enabled: true },
+      { cmd: 'skills.list' },
+      { text: '加载 demo-skill', mode: 'craft', skill: 'demo-skill' }
+    ]
+  )
+  const reenabled = on.events.filter((e) => e.type === 'skills.list').at(-1)
+  check(
+    reenabled?.skills?.find((s) => s.name === 'demo-skill')?.enabled === true,
+    'skill-can-be-reenabled',
+    JSON.stringify(reenabled?.skills ?? [])
+  )
+  const reActivated = on.events.find((e) => e.type === 'skill.activated')
+  check(reActivated?.name === 'demo-skill', 'reenabled-skill-loads-again', JSON.stringify(reActivated ?? null))
 } finally {
   await rm(base, { recursive: true, force: true })
 }

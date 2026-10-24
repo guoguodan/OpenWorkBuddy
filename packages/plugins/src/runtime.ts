@@ -46,6 +46,7 @@ export interface PluginToolDescriptor {
 export interface PluginSnapshot {
   name: string
   displayName: string
+  description: string
   version: string
   kind: 'connector' | 'expert'
   state: PluginRuntimeState
@@ -573,6 +574,7 @@ export class PluginRuntime {
     return {
       name: manifest.name,
       displayName: manifest.displayName,
+      description: manifest.description ?? '',
       version: manifest.version,
       kind: manifest.kind,
       state: instance.state,

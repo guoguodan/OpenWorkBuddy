@@ -9,12 +9,17 @@ import {
   type SkillIssue,
   type SkillRoot
 } from '@openwb/skills'
+import { rm } from 'node:fs/promises'
 
 const MAX_INJECT_BYTES = 12 * 1024
 
 export interface ActiveSkill {
   name: string
   allowedTools?: string[]
+}
+
+export interface SkillStatusEntry extends SkillIndexEntry {
+  enabled: boolean
 }
 
 /**
@@ -47,6 +52,7 @@ export class SkillRuntime {
   private problemList: SkillIssue[] = []
   private active: ActiveSkill | null = null
   private allowedNames: string[] | null = null
+  private disabledNames = new Set<string>()
 
   constructor(private readonly roots: SkillRoot[]) {}
 
@@ -58,8 +64,43 @@ export class SkillRuntime {
   }
 
   list(): SkillIndexEntry[] {
-    if (!this.allowedNames) return [...this.entries]
-    return this.entries.filter((entry) => this.allowedNames!.includes(entry.name))
+    return this.entries.filter(
+      (entry) =>
+        !this.disabledNames.has(entry.name) &&
+        (!this.allowedNames || this.allowedNames.includes(entry.name))
+    )
+  }
+
+  /** 设置页需要看到已安装但已关闭的技能,因此状态列表不受禁用集合过滤。 */
+  statusList(): SkillStatusEntry[] {
+    return this.entries.map((entry) => ({ ...entry, enabled: !this.disabledNames.has(entry.name) }))
+  }
+
+  entryOf(name: string): SkillIndexEntry | undefined {
+    return this.entries.find((entry) => entry.name === name)
+  }
+
+  /** 只接受已发现的技能名;未知名字保留在设置里会导致以后重装同名技能时意外关闭。 */
+  setDisabled(names: string[]): void {
+    const known = new Set(this.entries.map((entry) => entry.name))
+    this.disabledNames = new Set(
+      names.filter((name) => typeof name === 'string' && known.has(name.trim())).map((name) => name.trim())
+    )
+  }
+
+  disabled(): string[] {
+    return [...this.disabledNames].sort()
+  }
+
+  /** 只允许删除用户级技能目录下的技能;内置与项目级技能由仓库/项目维护。 */
+  async removeUserSkill(name: string): Promise<SkillIndexEntry> {
+    const entry = this.entries.find((item) => item.name === name)
+    if (!entry) throw new Error(`未知技能: ${name}`)
+    if (entry.scope !== 'user') throw new Error(`技能 ${name} 属于项目目录或内置技能,不能在这里卸载`)
+    await rm(entry.dir, { recursive: true, force: true })
+    this.entries = this.entries.filter((item) => item.name !== name)
+    this.disabledNames.delete(name)
+    return entry
   }
 
   issues(): SkillIssue[] {
@@ -67,7 +108,7 @@ export class SkillRuntime {
   }
 
   find(name: string): SkillIndexEntry | undefined {
-    return this.entries.find((e) => e.name === name && (!this.allowedNames || this.allowedNames.includes(e.name)))
+    return this.list().find((e) => e.name === name)
   }
 
   /** 只有 name + description,正文按需加载 */
@@ -91,6 +132,9 @@ export class SkillRuntime {
   }
 
   async load(name: string): Promise<{ name: string; body: string; allowedTools?: string[] }> {
+    if (this.disabledNames.has(name)) {
+      throw new Error(`技能 ${name} 已关闭自动触发,请先在「专家·技能·连接器」中开启`)
+    }
     const entry = this.find(name)
     if (!entry) {
       const available = this.entries.map((e) => e.name).join(', ') || '(无)'
