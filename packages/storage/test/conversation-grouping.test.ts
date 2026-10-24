@@ -12,6 +12,7 @@ import {
   listConversationSummaries,
   listConversations,
   renameConversation,
+  reorderPinnedConversations,
   setConversationPinned
 } from '../src/conversations.js'
 import { createTask, transitionTask } from '../src/tasks.js'
@@ -54,6 +55,28 @@ describe('conversation grouping fields', () => {
     const all = listConversations(handle.db, workspaceId)
     expect(all).toHaveLength(2)
     expect(all.filter((c) => c.pinnedAt)).toHaveLength(1)
+  })
+
+  it('persists pinned order and rejects partial reorders', () => {
+    const a = createConversation(handle.db, { workspaceId, title: 'A', modeId: 'craft' })
+    const b = createConversation(handle.db, { workspaceId, title: 'B', modeId: 'craft' })
+    const c = createConversation(handle.db, { workspaceId, title: 'C', modeId: 'craft' })
+    setConversationPinned(handle.db, a.id, true)
+    setConversationPinned(handle.db, b.id, true)
+    setConversationPinned(handle.db, c.id, true)
+
+    const reordered = reorderPinnedConversations(handle.db, workspaceId, [c.id, a.id, b.id])
+    expect(reordered.map((item) => item.title)).toEqual(['C', 'A', 'B'])
+    expect(reordered.map((item) => item.pinOrder)).toEqual([1, 2, 3])
+    expect(() => reorderPinnedConversations(handle.db, workspaceId, [c.id, a.id])).toThrow(
+      '置顶排序必须覆盖当前全部置顶任务'
+    )
+
+    setConversationPinned(handle.db, a.id, false)
+    expect(getConversation(handle.db, a.id)?.pinOrder).toBeNull()
+    expect(() => reorderPinnedConversations(handle.db, workspaceId, [c.id, a.id, b.id])).toThrow(
+      '置顶排序必须覆盖当前全部置顶任务'
+    )
   })
 
   it('renames a task and keeps it in place', () => {

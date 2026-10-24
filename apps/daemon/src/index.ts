@@ -44,6 +44,7 @@ import {
   listConversationSummaries,
   listConversations,
   renameConversation,
+  reorderPinnedConversations,
   setConversationColleague,
   setConversationPinned,
   listMessages,
@@ -2107,6 +2108,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
           ? (colleagues.find((x) => x.id === c.colleagueId)?.name ?? null)
           : null,
         pinnedAt: c.pinnedAt,
+        pinOrder: c.pinOrder,
         projectId: c.projectId,
         projectName: c.projectId
           ? (listProjects(db, workspaceId).find((x) => x.id === c.projectId)?.name ?? null)
@@ -2204,6 +2206,19 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       ...base,
       type: 'conversation.updated',
       conversation: { id: updated.id, title: updated.title }
+    })
+    return true
+  }
+
+  if (msg.cmd === 'conversation.reorderPinned') {
+    if (!Array.isArray(msg.orderedIds) || msg.orderedIds.some((id) => typeof id !== 'string')) {
+      throw new Error('缺少 orderedIds')
+    }
+    const ordered = reorderPinnedConversations(db, workspaceId, msg.orderedIds as string[])
+    emit({
+      ...base,
+      type: 'conversation.reordered',
+      orderedIds: ordered.map((item) => item.id)
     })
     return true
   }

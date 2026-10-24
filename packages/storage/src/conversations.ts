@@ -38,6 +38,7 @@ export interface ConversationRecord {
   colleagueId: string | null
   projectId: string | null
   pinnedAt: string | null
+  pinOrder: number | null
   status: 'active' | 'archived'
   lastSeq: number
   createdAt: string
@@ -82,6 +83,7 @@ export function createConversation(
     colleagueId: input.colleagueId ?? null,
     projectId: input.projectId ?? null,
     pinnedAt: null,
+    pinOrder: null,
     status: 'active',
     lastSeq: 0,
     createdAt: at,
@@ -113,7 +115,12 @@ export function listConversations(db: AppDatabase, workspaceId: string): Convers
     .select()
     .from(conversation)
     .where(eq(conversation.workspaceId, workspaceId))
-    .orderBy(desc(conversation.updatedAt))
+    // 置顶组按用户在侧栏拖出的顺序;未置顶仍按最近活动倒序。
+    .orderBy(
+      sql`${conversation.pinnedAt} is null`,
+      asc(conversation.pinOrder),
+      desc(conversation.updatedAt)
+    )
     .all() as ConversationRecord[]
 }
 
@@ -181,11 +188,68 @@ export function setConversationPinned(
 ): ConversationRecord | undefined {
   const existing = getConversation(db, conversationId)
   if (!existing) return undefined
+  // 新置顶排到末尾;取消置顶清空排序,避免之后重新置顶沿用旧位置。
+  const maxRow = pinned
+    ? db
+        .select({ maxOrder: sql<number>`coalesce(max(${conversation.pinOrder}), 0)` })
+        .from(conversation)
+        .where(and(eq(conversation.workspaceId, existing.workspaceId), eq(conversation.status, 'active')))
+        .all()[0]
+    : undefined
   db.update(conversation)
-    .set({ pinnedAt: pinned ? nowIso() : null })
+    .set({
+      pinnedAt: pinned ? nowIso() : null,
+      pinOrder: pinned ? Number(maxRow?.maxOrder ?? 0) + 1 : null
+    })
     .where(eq(conversation.id, conversationId))
     .run()
   return getConversation(db, conversationId)
+}
+
+/**
+ * 重排置顶任务。
+ *
+ * 必须传入当前全部置顶任务且顺序完整,否则拒绝执行:
+ * 部分更新会让未提交的项落在旧序号上,刷新后顺序看似"随机跳变"。
+ */
+export function reorderPinnedConversations(
+  db: AppDatabase,
+  workspaceId: string,
+  orderedIds: string[]
+): ConversationRecord[] {
+  const pinned = db
+    .select()
+    .from(conversation)
+    .where(
+      and(
+        eq(conversation.workspaceId, workspaceId),
+        eq(conversation.status, 'active'),
+        sql`${conversation.pinnedAt} is not null`
+      )
+    )
+    .all() as ConversationRecord[]
+  const pinnedIds = new Set(pinned.map((item) => item.id))
+  const givenIds = new Set(orderedIds)
+  if (givenIds.size !== orderedIds.length) throw new Error('置顶排序包含重复任务')
+  if (
+    givenIds.size !== pinnedIds.size ||
+    orderedIds.some((id) => !pinnedIds.has(id))
+  ) {
+    throw new Error('置顶排序必须覆盖当前全部置顶任务')
+  }
+
+  db.transaction((tx) => {
+    orderedIds.forEach((id, index) => {
+      tx.update(conversation)
+        .set({ pinOrder: index + 1 })
+        .where(eq(conversation.id, id))
+        .run()
+    })
+  })
+
+  return orderedIds
+    .map((id) => getConversation(db, id))
+    .filter((item): item is ConversationRecord => Boolean(item))
 }
 
 /** 重命名只改标题;不推进 updatedAt,否则任务会因为改名跳到列表最前面。 */

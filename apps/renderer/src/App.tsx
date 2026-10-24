@@ -583,6 +583,15 @@ export default function App() {
     }
   }
 
+  const reorderPinned = async (orderedIds: string[]) => {
+    try {
+      await window.openwb.conversation.reorderPinned(orderedIds)
+      await loadConversations(activeConversation.current || undefined)
+    } catch (err) {
+      note('system', `置顶排序失败: ${(err as Error).message}`)
+    }
+  }
+
   const renameConversation = async (id: string, title: string) => {
     try {
       await window.openwb.conversation.rename({ conversationId: id, title })
@@ -740,6 +749,7 @@ export default function App() {
           onSelect={(id) => void switchConversation(id)}
           onDelete={(id) => void removeConversation(id)}
           onPin={(id, pinned) => void pinConversation(id, pinned)}
+          onReorderPinned={(orderedIds) => void reorderPinned(orderedIds)}
           onRename={(id, title) => void renameConversation(id, title)}
           onOpenColleagues={() => setSheet('colleagues')}
           onOpenSkills={() => setPanel('skills')}

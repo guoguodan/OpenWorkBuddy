@@ -153,6 +153,14 @@ ipcMain.handle('conversation.pin', async (_e, input: { conversationId: string; p
   })
 })
 
+ipcMain.handle('conversation.reorderPinned', async (_e, orderedIds: string[]) => {
+  await daemonReady
+  if (!Array.isArray(orderedIds) || orderedIds.some((id) => typeof id !== 'string' || !id)) {
+    throw new Error('非法置顶排序')
+  }
+  return request<{ orderedIds: string[] }>({ cmd: 'conversation.reorderPinned', orderedIds })
+})
+
 ipcMain.handle('conversation.rename', async (_e, input: { conversationId: string; title: string }) => {
   await daemonReady
   if (!input || typeof input.conversationId !== 'string' || !input.conversationId) throw new Error('非法会话 ID')
@@ -623,7 +631,14 @@ function attachDaemonOutput() {
       const entry = event.requestId ? pending.get(event.requestId) : undefined
       if (entry && event.requestId) {
         pending.delete(event.requestId)
-        entry.resolve(event)
+        // daemon 的业务失败也带 requestId:必须沿 IPC 语义 reject,
+        // 否则调用方会把"排序被拒绝"当成成功。
+        if (event.type === 'error') {
+          const message = (event as { message?: unknown }).message
+          entry.reject(new Error(typeof message === 'string' ? message : 'daemon 请求失败'))
+        } else {
+          entry.resolve(event)
+        }
         continue
       }
       win?.webContents.send('agent.event', event)

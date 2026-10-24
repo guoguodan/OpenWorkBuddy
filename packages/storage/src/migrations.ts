@@ -396,6 +396,16 @@ CREATE TABLE inspiration_post (
 );
 CREATE INDEX idx_inspiration_ws ON inspiration_post(workspace_id, created_at DESC);
 `
+  },
+  {
+    version: 9,
+    name: 'conversation_pin_order',
+    sql: `-- 置顶任务可拖拽排序。pin_order 只对置顶组生效,取消置顶时清空;
+-- 新置顶的任务排到末尾,不会因为 pin_order 默认值挤到最前面。
+ALTER TABLE conversation ADD COLUMN pin_order INTEGER;
+DROP INDEX IF EXISTS idx_conversation_pinned;
+CREATE INDEX idx_conversation_pinned ON conversation(workspace_id, pinned_at, pin_order);
+`
   }
 ]
 

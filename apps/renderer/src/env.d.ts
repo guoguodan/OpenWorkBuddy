@@ -15,6 +15,7 @@ interface ConversationInfo {
   colleagueId?: string | null
   colleagueName?: string | null
   pinnedAt?: string | null
+  pinOrder?: number | null
   channelId?: string | null
   channelName?: string | null
   projectId?: string | null
@@ -307,6 +308,7 @@ interface Window {
         conversationId: string
         pinnedAt: string | null
       }>
+      reorderPinned: (orderedIds: string[]) => Promise<{ orderedIds: string[] }>
       rename: (input: { conversationId: string; title: string }) => Promise<{
         conversationId: string
         title: string

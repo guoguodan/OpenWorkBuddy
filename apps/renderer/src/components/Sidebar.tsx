@@ -24,6 +24,7 @@ export interface ConversationSummary {
   colleagueId?: string | null
   colleagueName?: string | null
   pinnedAt?: string | null
+  pinOrder?: number | null
   channelId?: string | null
   channelName?: string | null
   projectId?: string | null
@@ -90,6 +91,7 @@ interface SidebarProps {
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onPin: (id: string, pinned: boolean) => void
+  onReorderPinned: (orderedIds: string[]) => void
   onRename: (id: string, title: string) => void
   onOpenColleagues: () => void
   onOpenSkills: () => void
@@ -177,6 +179,7 @@ export function Sidebar({
   onSelect,
   onDelete,
   onPin,
+  onReorderPinned,
   onRename,
   onOpenColleagues,
   onOpenSkills,
@@ -199,6 +202,13 @@ export function Sidebar({
   const renameRef = useRef<HTMLInputElement>(null)
   const [taskListOpen, setTaskListOpen] = useState(false)
   const taskListTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  // dragstart 与 dragover/drop 可能在同一轮事件里连续派发,state 尚未提交,
+  // 因此真实来源以 ref 为准;state 只负责视觉反馈。
+  const dragIdRef = useRef<string | null>(null)
+  // 拖拽结束后浏览器仍会派发一次 click:用时间窗抑制,避免排序顺手切换任务。
+  const lastDragEnd = useRef(0)
 
   // 真实产品在折叠侧栏中始终保留"任务列表"入口;悬停打开,离开稍延迟关闭。
   const openTaskList = () => {
@@ -290,6 +300,14 @@ export function Sidebar({
       tasks.push(c)
     }
 
+    // 置顶组按写入的 pinOrder 排;历史数据没有序号时退回置顶时间,保证稳定。
+    pinned.sort((a, b) => {
+      const ao = a.pinOrder ?? Number.MAX_SAFE_INTEGER
+      const bo = b.pinOrder ?? Number.MAX_SAFE_INTEGER
+      if (ao !== bo) return ao - bo
+      return (a.pinnedAt ?? '').localeCompare(b.pinnedAt ?? '')
+    })
+
     return {
       pinned,
       tasks,
@@ -313,13 +331,67 @@ export function Sidebar({
     setRenaming(null)
   }
 
+  const dropPinned = (targetId: string) => {
+    const source = dragIdRef.current
+    dragIdRef.current = null
+    setDragId(null)
+    setDragOverId(null)
+    lastDragEnd.current = Date.now()
+    if (!source || source === targetId) return
+    // 排序提交必须覆盖全部置顶任务;当前筛选可能只显示一部分。
+    const ids = conversations
+      .filter((item) => item.pinnedAt)
+      .sort((a, b) => {
+        const ao = a.pinOrder ?? Number.MAX_SAFE_INTEGER
+        const bo = b.pinOrder ?? Number.MAX_SAFE_INTEGER
+        if (ao !== bo) return ao - bo
+        return (a.pinnedAt ?? '').localeCompare(b.pinnedAt ?? '')
+      })
+      .map((item) => item.id)
+    const from = ids.indexOf(source)
+    const to = ids.indexOf(targetId)
+    if (from < 0 || to < 0) return
+    ids.splice(to, 0, ids.splice(from, 1)[0]!)
+    onReorderPinned(ids)
+  }
+
   const renderItem = (c: ConversationSummary, pinned = false) => (
     <div
       key={c.id}
-      className={`owb-conv-item${c.id === activeId ? ' owb-conv-item--active' : ''}`}
+      className={`owb-conv-item${c.id === activeId ? ' owb-conv-item--active' : ''}${
+        dragId === c.id ? ' owb-conv-item--dragging' : ''
+      }${dragOverId === c.id ? ' owb-conv-item--drop-target' : ''}`}
       data-testid="conversation-item"
       data-conversation-id={c.id}
+      data-pinned={c.pinnedAt ? '1' : '0'}
+      draggable={Boolean(c.pinnedAt) && !renaming}
+      onDragStart={(e) => {
+        if (!c.pinnedAt) return
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', c.id)
+        dragIdRef.current = c.id
+        setDragId(c.id)
+      }}
+      onDragOver={(e) => {
+        if (!c.pinnedAt || !dragIdRef.current || dragIdRef.current === c.id) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        setDragOverId(c.id)
+      }}
+      onDragLeave={() => setDragOverId((current) => (current === c.id ? null : current))}
+      onDrop={(e) => {
+        if (!c.pinnedAt) return
+        e.preventDefault()
+        dropPinned(c.id)
+      }}
+      onDragEnd={() => {
+        dragIdRef.current = null
+        setDragId(null)
+        setDragOverId(null)
+        lastDragEnd.current = Date.now()
+      }}
       onClick={() => {
+        if (Date.now() - lastDragEnd.current < 250) return
         if (!busy && c.id !== activeId) onSelect(c.id)
       }}
       onContextMenu={(e) => {
