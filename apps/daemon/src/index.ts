@@ -113,6 +113,9 @@ import {
   type SettingKey,
   type ColleagueInput,
   type PermissionMode,
+  getConversationSummary,
+  upsertConversationSummary,
+  invalidateConversationSummaryFrom,
   eq
 } from '@openwb/storage'
 import {
@@ -133,7 +136,20 @@ import {
 } from '@openwb/plugins'
 import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
 import { summarizeToolResult, toToolFailure } from './tool-summary.js'
-import { buildHistoryContext, historyNotice } from './history.js'
+import {
+  DEFAULT_HISTORY_LIMITS,
+  historyNotice,
+  trimHistoryMessages,
+  type HistoryLimits,
+  type HistoryMessage
+} from './history.js'
+import {
+  buildSummaryPrompt,
+  fallbackSummary,
+  planCompression,
+  summaryContextText,
+  toHistoryMessages
+} from './context-summary.js'
 import {
   DEFAULT_MAX_STREAM_ATTEMPTS,
   DEFAULT_RETRY_BASE_MS,
@@ -215,6 +231,25 @@ const STREAM_RETRY_BASE_MS =
   Number.isFinite(STREAM_RETRY_BASE_RAW) && STREAM_RETRY_BASE_RAW >= 0
     ? STREAM_RETRY_BASE_RAW
     : DEFAULT_RETRY_BASE_MS
+/** 历史上下文预算;E2E 用较小的值强制触发压缩,生产保持默认。 */
+const HISTORY_MAX_CHARS_RAW = Number(process.env.OPENWB_HISTORY_MAX_CHARS ?? DEFAULT_HISTORY_LIMITS.maxChars)
+const HISTORY_MAX_CHARS =
+  Number.isFinite(HISTORY_MAX_CHARS_RAW) && HISTORY_MAX_CHARS_RAW >= 500
+    ? Math.floor(HISTORY_MAX_CHARS_RAW)
+    : DEFAULT_HISTORY_LIMITS.maxChars
+const HISTORY_MAX_MESSAGES_RAW = Number(
+  process.env.OPENWB_HISTORY_MAX_MESSAGES ?? DEFAULT_HISTORY_LIMITS.maxMessages
+)
+const HISTORY_MAX_MESSAGES =
+  Number.isFinite(HISTORY_MAX_MESSAGES_RAW) && HISTORY_MAX_MESSAGES_RAW >= 2
+    ? Math.floor(HISTORY_MAX_MESSAGES_RAW)
+    : DEFAULT_HISTORY_LIMITS.maxMessages
+const HISTORY_LIMITS: HistoryLimits = {
+  maxChars: HISTORY_MAX_CHARS,
+  maxMessages: HISTORY_MAX_MESSAGES
+}
+/** 压缩后至少保留原文的条数;低于 6 条时模型很难接上"刚才那个"这类指代。 */
+const HISTORY_MIN_KEEP = 6
 const MODEL_NAME = process.env.OPENWB_MODEL ?? 'unknown'
 const SYNC_URL = process.env.OPENWB_SYNC_URL?.trim() ?? ''
 const SYNC_TOKEN = process.env.OPENWB_SYNC_TOKEN?.trim() || undefined
@@ -1884,6 +1919,114 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupt
   }
 }
 
+/**
+ * 构造本轮之前的对话上下文。
+ *
+ * 预算内的历史原样进入;超出预算时,把最早若干"完整问答轮"压成摘要,
+ * 并保留最近原文。摘要持久化后下一轮可以直接复用,不必重复压缩同一段历史。
+ * 摘要失败只降级、不中断主任务:本地兜底至少保留用户更早的提问线索。
+ */
+async function prepareModelHistory(input: {
+  db: AppDatabase
+  conversationId: string
+  currentUserMessageId?: string
+  signal: AbortSignal
+}): Promise<{
+  messages: HistoryMessage[]
+  systemSuffix: string
+  notice: string | null
+  inputTokens: number
+  outputTokens: number
+}> {
+  const records = listMessages(input.db, input.conversationId).filter(
+    (record) => record.id !== input.currentUserMessageId
+  )
+  const history = toHistoryMessages(records)
+  const saved = getConversationSummary(input.db, input.conversationId)
+  let summary = saved?.summary ?? null
+  let coveredSeq = saved?.coveredSeq ?? 0
+  let coveredMessages = saved?.coveredMessages ?? 0
+  let sourceChars = saved?.sourceChars ?? 0
+  let inputTokens = 0
+  let outputTokens = 0
+
+  // 已经被旧摘要覆盖的消息不再重复送给模型,否则压缩等于白做。
+  const candidates = history.filter((item) => (item.seq ?? 0) > coveredSeq)
+  const plan = planCompression(candidates, {
+    budget: HISTORY_LIMITS.maxChars,
+    maxMessages: HISTORY_LIMITS.maxMessages,
+    minKeep: HISTORY_MIN_KEEP
+  })
+
+  if (plan.compress.length > 0) {
+    const prompt = buildSummaryPrompt({
+      messages: plan.compress,
+      previous: summary,
+      previousCoveredSeq: coveredSeq > 0 ? coveredSeq : null
+    })
+    let fallback = false
+    let nextSummary = ''
+    try {
+      const result = await generateText({
+        model,
+        system: prompt.system,
+        prompt: prompt.prompt,
+        maxTokens: 800,
+        temperature: 0.1,
+        abortSignal: input.signal
+      })
+      nextSummary = result.text.trim()
+      const inTokens = Number(result.usage?.promptTokens)
+      const outTokens = Number(result.usage?.completionTokens)
+      if (Number.isFinite(inTokens)) inputTokens += inTokens
+      if (Number.isFinite(outTokens)) outputTokens += outTokens
+      if (!nextSummary) throw new Error('模型返回空摘要')
+    } catch (err) {
+      if (isRunCancelled(err, input.signal)) throw new RunCancelledError()
+      fallback = true
+      nextSummary = fallbackSummary(plan.compress, summary)
+      process.stderr.write(`[summary] 上下文压缩失败,使用本地兜底: ${(err as Error).message}\n`)
+    }
+
+    const lastSeq = plan.compress.at(-1)?.seq ?? coveredSeq
+    const newChars = plan.compress.reduce((sum, item) => sum + item.content.length, 0)
+    const persisted = upsertConversationSummary(input.db, {
+      conversationId: input.conversationId,
+      coveredSeq: lastSeq,
+      coveredMessages: coveredMessages + plan.compress.length,
+      summary: nextSummary,
+      sourceChars: sourceChars + newChars
+    })
+    summary = persisted.summary
+    coveredSeq = persisted.coveredSeq
+    coveredMessages = persisted.coveredMessages
+    sourceChars = persisted.sourceChars
+    emit({
+      type: 'context.summary',
+      coveredMessages,
+      coveredSeq,
+      beforeChars: newChars + plan.keep.reduce((sum, item) => sum + item.content.length, 0),
+      afterChars: nextSummary.length + plan.keep.reduce((sum, item) => sum + item.content.length, 0),
+      fallback
+    })
+  }
+
+  // 摘要之后仍可能超预算(例如单条消息本身过长),继续用尾部裁剪兜底,
+  // 并明确告诉模型有内容被省略,而不是让它把"没看到"当成"没发生"。
+  const kept = trimHistoryMessages(plan.keep, HISTORY_LIMITS)
+  const dropped = plan.keep.length - kept.length
+  const notice = dropped > 0 ? historyNotice(dropped) : null
+  return {
+    messages: kept,
+    systemSuffix: summary
+      ? summaryContextText({ summary, coveredMessages, coveredSeq })
+      : '',
+    notice,
+    inputTokens,
+    outputTokens
+  }
+}
+
 async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'interrupted'> {
   const db = requireDb()
   const { text, mode, conversationId } = input
@@ -2000,19 +2143,25 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
     emit({ type: 'tools.available', names: initialTools })
 
     // 同一个会话要带上之前的问答,否则"继续/再改一下"这类追问完全失效。
-    // 历史只取文本,并在超预算时明确告诉模型有内容被省略。
-    const history = buildHistoryContext(listMessages(db, conversationId), {
-      ...(input.userMessageId ? { currentUserMessageId: input.userMessageId } : {})
+    // 超出预算的更早轮次压成摘要,最近的原文仍完整保留。
+    const historyResult = await prepareModelHistory({
+      db,
+      conversationId,
+      ...(input.userMessageId ? { currentUserMessageId: input.userMessageId } : {}),
+      signal
     })
+    totalInput += historyResult.inputTokens
+    totalOutput += historyResult.outputTokens
     const messages: CoreMessage[] = [
-      ...(history.messages as CoreMessage[]),
+      ...(historyResult.messages as CoreMessage[]),
       { role: 'user', content: text }
     ]
-    const notice = historyNotice(history.dropped)
+    const notice = historyResult.notice
     if (notice) {
       emit({ type: 'context.notice', text: notice })
       prepared.system += `\n\n# 上下文提示\n${notice}`
     }
+    if (historyResult.systemSuffix) prepared.system += `\n\n${historyResult.systemSuffix}`
     let lastNames = initialTools
 
     for (let step = 0; step < MAX_STEPS; step++) {

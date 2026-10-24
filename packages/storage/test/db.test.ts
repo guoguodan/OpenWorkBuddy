@@ -26,7 +26,12 @@ import {
   getFileCheckpointByMessage,
   listFileCheckpoints
 } from '../src/checkpoints.js'
-import { conversation, message, task, eventLog } from '../src/schema.js'
+import {
+  getConversationSummary,
+  invalidateConversationSummaryFrom,
+  upsertConversationSummary
+} from '../src/summaries.js'
+import { conversation, conversationSummary, message, task, eventLog } from '../src/schema.js'
 import { artifact } from '../src/schema.js'
 import { eq } from 'drizzle-orm'
 
@@ -42,7 +47,8 @@ const TABLES = [
   'approval_grant',
   'memory_entry',
   'event_log',
-  'file_checkpoint'
+  'file_checkpoint',
+  'conversation_summary'
 ]
 
 let dir: string
@@ -430,6 +436,100 @@ describe('file checkpoints', () => {
     const left = listFileCheckpoints(db, conv.id)
     expect(left.map((c) => c.id)).toEqual([firstCp])
     expect(getFileCheckpointByMessage(db, secondUser.id)).toBeUndefined()
+    raw.close()
+  })
+})
+
+describe('conversation summary', () => {
+  it('upserts one summary per conversation and bumps coverage', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+
+    expect(getConversationSummary(db, conv.id)).toBeUndefined()
+    const first = upsertConversationSummary(db, {
+      conversationId: conv.id,
+      coveredSeq: 4,
+      coveredMessages: 4,
+      summary: '【目标】第一版',
+      sourceChars: 400
+    })
+    expect(first.summary).toBe('【目标】第一版')
+    expect(first.coveredSeq).toBe(4)
+
+    const second = upsertConversationSummary(db, {
+      conversationId: conv.id,
+      coveredSeq: 8,
+      coveredMessages: 8,
+      summary: '【目标】第二版',
+      sourceChars: 900
+    })
+    expect(second.summary).toBe('【目标】第二版')
+    expect(second.coveredSeq).toBe(8)
+    expect(second.coveredMessages).toBe(8)
+    // 一份会话只有一份摘要,不能追加出第二行。
+    expect(db.select().from(conversationSummary).all()).toHaveLength(1)
+    raw.close()
+  })
+
+  it('is removed when the covered history is truncated', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: { text: '一' } })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: { text: '二' } })
+    upsertConversationSummary(db, {
+      conversationId: conv.id,
+      coveredSeq: 2,
+      coveredMessages: 2,
+      summary: '摘要',
+      sourceChars: 20
+    })
+
+    truncateConversationFrom(db, conv.id, 2)
+    expect(getConversationSummary(db, conv.id)).toBeUndefined()
+    raw.close()
+  })
+
+  it('survives truncation that starts after the covered range', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: { text: '一' } })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: { text: '二' } })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: { text: '三' } })
+    upsertConversationSummary(db, {
+      conversationId: conv.id,
+      coveredSeq: 2,
+      coveredMessages: 2,
+      summary: '摘要',
+      sourceChars: 20
+    })
+
+    truncateConversationFrom(db, conv.id, 3)
+    expect(getConversationSummary(db, conv.id)?.coveredSeq).toBe(2)
+    raw.close()
+  })
+
+  it('invalidates explicitly only when coverage reaches fromSeq', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    upsertConversationSummary(db, {
+      conversationId: conv.id,
+      coveredSeq: 6,
+      coveredMessages: 6,
+      summary: '摘要',
+      sourceChars: 60
+    })
+    expect(invalidateConversationSummaryFrom(db, conv.id, 7)).toBe(0)
+    expect(getConversationSummary(db, conv.id)).toBeDefined()
+    expect(invalidateConversationSummaryFrom(db, conv.id, 6)).toBe(1)
+    expect(getConversationSummary(db, conv.id)).toBeUndefined()
     raw.close()
   })
 })

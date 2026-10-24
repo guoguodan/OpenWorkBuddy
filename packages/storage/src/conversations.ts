@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { AppDatabase } from './client.js'
 import { nowIso, ulid } from './ids.js'
-import { artifact, conversation, eventLog, message, task, workspace } from './schema.js'
+import { artifact, conversation, conversationSummary, eventLog, message, task, workspace } from './schema.js'
 import { enqueuePendingTx } from './sync.js'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
@@ -580,6 +580,18 @@ export function truncateConversationFrom(
       .delete(message)
       .where(and(eq(message.conversationId, conversationId), sql`${message.seq} >= ${fromSeq}`))
       .run().changes
+
+    // 摘要代表"从头到 covered_seq 的对话"。被截断的消息在 covered_seq 之内时,
+    // 摘要就包含了已经不存在的内容,必须一起删除;否则模型会基于被回退掉的历史回答。
+    // 放在同一事务里,避免截断成功而摘要残留。
+    tx.delete(conversationSummary)
+      .where(
+        and(
+          eq(conversationSummary.conversationId, conversationId),
+          sql`${conversationSummary.coveredSeq} >= ${fromSeq}`
+        )
+      )
+      .run()
 
     const remaining = tx
       .select({ maxSeq: sql<number>`coalesce(max(${message.seq}), 0)` })

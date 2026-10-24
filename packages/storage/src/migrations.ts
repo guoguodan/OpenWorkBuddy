@@ -465,6 +465,25 @@ CREATE TABLE file_checkpoint (
 CREATE UNIQUE INDEX idx_file_checkpoint_msg ON file_checkpoint(user_message_id);
 CREATE INDEX idx_file_checkpoint_conv ON file_checkpoint(conversation_id, message_seq);
 `
+  },
+  {
+    version: 15,
+    name: 'conversation_summary',
+    sql: `-- 长对话压缩:把超出预算的最早若干轮压成一份摘要继续带进模型,
+-- 而不是静默丢弃。covered_seq 记录摘要覆盖到哪条消息:
+-- 回退/重放截断到该序号之前时,摘要必须作废,否则模型会基于不存在的历史回答。
+-- 一个会话只有一份最新摘要,新摘要原子覆盖旧摘要。
+CREATE TABLE conversation_summary (
+  conversation_id   TEXT PRIMARY KEY REFERENCES conversation(id) ON DELETE CASCADE,
+  covered_seq       INTEGER NOT NULL,
+  covered_messages  INTEGER NOT NULL DEFAULT 0,
+  summary           TEXT NOT NULL,
+  source_chars      INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+CREATE INDEX idx_conversation_summary_seq ON conversation_summary(conversation_id, covered_seq);
+`
   }
 ]
 

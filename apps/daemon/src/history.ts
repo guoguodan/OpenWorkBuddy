@@ -22,13 +22,37 @@ export const DEFAULT_HISTORY_LIMITS: HistoryLimits = {
   maxChars: 24_000
 }
 
-export type HistoryMessage = { role: 'user' | 'assistant'; content: string }
+export type HistoryMessage = { role: 'user' | 'assistant'; content: string; seq?: number }
 
 export interface HistoryContext {
   messages: HistoryMessage[]
   /** 因预算被丢弃的消息条数;>0 时由调用方注入省略说明。 */
   dropped: number
   chars: number
+}
+
+/**
+ * 从最近的往前取,取满预算后再翻回原来的先后顺序。
+ *
+ * 单独抽出来是为了让"摘要之后仍超预算"的最后兜底与普通历史共用同一套规则,
+ * 不会出现两处裁剪逻辑,一个保留 assistant 开头、另一个不保留。
+ */
+export function trimHistoryMessages(
+  candidates: HistoryMessage[],
+  limits: HistoryLimits
+): HistoryMessage[] {
+  const kept: HistoryMessage[] = []
+  let chars = 0
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const item = candidates[i]!
+    if (kept.length >= limits.maxMessages) break
+    if (chars + item.content.length > limits.maxChars && kept.length > 0) break
+    kept.unshift(item)
+    chars += item.content.length
+  }
+  // 上下文必须以 user 消息开头:有些网关不接受首条为 assistant 的数组。
+  while (kept.length > 0 && kept[0]!.role === 'assistant') kept.shift()
+  return kept
 }
 
 function textOf(message: MessageRecord): string {
@@ -57,20 +81,9 @@ export function buildHistoryContext(
     candidates.push({ role: message.role, content: text })
   }
 
-  // 从最近的往前取,取满预算后再翻回原来的先后顺序。
-  const kept: HistoryMessage[] = []
-  let chars = 0
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    const item = candidates[i]!
-    if (kept.length >= limits.maxMessages) break
-    if (chars + item.content.length > limits.maxChars && kept.length > 0) break
-    kept.unshift(item)
-    chars += item.content.length
-  }
+  const kept = trimHistoryMessages(candidates, limits)
   if (kept.length === 0) return { messages: [], dropped: candidates.length, chars: 0 }
 
-  // 上下文必须以 user 消息开头:有些网关不接受首条为 assistant 的数组。
-  while (kept.length > 0 && kept[0]!.role === 'assistant') kept.shift()
   return {
     messages: kept,
     dropped: candidates.length - kept.length,

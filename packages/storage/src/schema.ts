@@ -153,6 +153,30 @@ export const fileCheckpoint = sqliteTable(
   ]
 )
 
+/**
+ * 会话上下文压缩摘要。
+ *
+ * 长对话超出上下文预算时,把最早的若干轮压成结构化摘要继续使用,而不是
+ * 静默丢弃。covered_seq 是摘要覆盖到的最后一条消息序号:回退/重放把消息
+ * 截断到该序号之前时,摘要必须失效,否则模型会带着"已经不存在的历史"继续回答。
+ * 一个会话只保留一份最新摘要,旧摘要直接被覆盖。
+ */
+export const conversationSummary = sqliteTable(
+  'conversation_summary',
+  {
+    conversationId: text('conversation_id')
+      .primaryKey()
+      .references(() => conversation.id, { onDelete: 'cascade' }),
+    coveredSeq: integer('covered_seq').notNull(),
+    coveredMessages: integer('covered_messages').notNull().default(0),
+    summary: text('summary').notNull(),
+    sourceChars: integer('source_chars').notNull().default(0),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull()
+  },
+  (t) => [index('idx_conversation_summary_seq').on(t.conversationId, t.coveredSeq)]
+)
+
 export const skill = sqliteTable(
   'skill',
   {
@@ -467,6 +491,7 @@ export const schema = {
   task,
   artifact,
   fileCheckpoint,
+  conversationSummary,
   skill,
   plugin,
   automation,

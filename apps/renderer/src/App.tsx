@@ -68,6 +68,9 @@ type AgentEvent = {
   attempt?: number
   delayMs?: number
   reason?: string
+  coveredMessages?: number
+  coveredSeq?: number
+  fallback?: boolean
 }
 
 interface SystemLine {
@@ -383,6 +386,16 @@ export default function App() {
         }
       } else if (e.type === 'tools.available') {
         note('tools', `本轮可用工具: ${e.names?.length ? e.names.join(', ') : '(无)'}`)
+      } else if (e.type === 'context.summary') {
+        // 长对话压缩是用户能感知的行为:前面的原文不再逐条发送,但关键信息被保留。
+        // 不提示会让用户以为历史丢了,提示太技术化又像报错,这里只说结果。
+        const count = e.coveredMessages ?? 0
+        note(
+          e.fallback ? 'warn' : 'info',
+          e.fallback
+            ? `较早的 ${count} 条对话已压缩为简要摘要(模型摘要失败,已用本地摘要保底)。`
+            : `已将较早的 ${count} 条对话压缩为摘要,关键目标与结论仍会带入后续对话。`
+        )
       } else if (e.type === 'tool.started') {
         setTools((list) => [
           ...list,
