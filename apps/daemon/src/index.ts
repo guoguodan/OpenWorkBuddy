@@ -62,6 +62,7 @@ import {
   listMessages,
   getMessage,
   setMessageFeedback,
+  truncateConversationFrom,
   listPlugins,
   deletePlugin,
   migrateOrThrow,
@@ -1000,6 +1001,8 @@ interface RunInput {
   mode: ModePolicy
   clientRequestId?: string
   conversationId: string
+  /** 本轮用户消息 ID;任务据此归属到具体轮次,回退时才能精确清理。 */
+  userMessageId?: string
   /** 本轮是否是该会话的第一轮;只有首轮才生成自动标题。 */
   firstTurn?: boolean
   /** 用户显式选中的技能:本轮开始时直接加载,不依赖模型自己调用 load_skill。 */
@@ -1404,7 +1407,8 @@ async function runMock(
   const colleague = input.colleagueId ? getColleague(db, input.colleagueId) : undefined
   const taskId = createTask(db, {
     conversationId: input.conversationId,
-    title: input.text.slice(0, 80) || '未命名任务'
+    title: input.text.slice(0, 80) || '未命名任务',
+    ...(input.userMessageId ? { userMessageId: input.userMessageId } : {})
   })
   transitionTask(db, taskId, 'running')
   appendEvent(db, input.conversationId, 'run.started', { taskId, mode: input.mode.id })
@@ -1906,7 +1910,11 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupt
     return await runMock(input, prepared)
   }
 
-  const taskId = createTask(db, { conversationId, title: text.slice(0, 80) || '未命名任务' })
+  const taskId = createTask(db, {
+    conversationId,
+    title: text.slice(0, 80) || '未命名任务',
+    ...(input.userMessageId ? { userMessageId: input.userMessageId } : {})
+  })
   transitionTask(db, taskId, 'running')
   appendEvent(db, conversationId, 'run.started', { taskId, mode: mode.id })
 
@@ -2797,6 +2805,115 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     return true
   }
 
+  if (msg.cmd === 'conversation.replay' || msg.cmd === 'conversation.revert') {
+    if (typeof msg.conversationId !== 'string' || !msg.conversationId) throw new Error('缺少 conversationId')
+    if (typeof msg.messageId !== 'string' || !msg.messageId) throw new Error('缺少 messageId')
+    const target = getMessage(db, msg.messageId)
+    if (!target) throw new Error('无法定位对应的用户消息，请重试')
+    const conv = getConversation(db, target.conversationId)
+    if (!conv || conv.workspaceId !== workspaceId) throw new Error('消息不属于当前工作区')
+    if (target.conversationId !== msg.conversationId) throw new Error('消息不属于该会话')
+    if (target.role !== 'user') throw new Error('只能对用户消息重放或回退')
+    // 运行中的轮次不能被截掉:否则模型回包会写到已删除的序号上,会话被破坏。
+    if (activeRuns.has(target.conversationId) || startingRuns.has(target.conversationId)) {
+      throw new Error('当前会话正在生成，请先停止后再操作')
+    }
+
+    const replay = msg.cmd === 'conversation.replay'
+    // 回退是"回到这个版本",目标轮本身必须保留;重放则是替换目标轮。
+    // 两者都从下一轮用户消息开始截断,避免把目标轮的提问和答复误删。
+    const cutoff = replay
+      ? target.seq
+      : listMessages(db, target.conversationId, { afterSeq: target.seq }).find((m) => m.role === 'user')?.seq
+    const truncated = cutoff
+      ? truncateConversationFrom(db, target.conversationId, cutoff)
+      : {
+          fromSeq: target.seq + 1,
+          lastSeq: conv.lastSeq,
+          deletedMessages: 0,
+          deletedTasks: 0,
+          deletedArtifacts: 0
+        }
+    let replayed: { id: string; seq: number } | null = null
+    if (replay) {
+      const meta = target.meta ?? {}
+      const text = (target.content as { text?: unknown } | null)?.text
+      if (typeof text !== 'string' || !text) throw new Error('该消息没有可重放的内容')
+      // 先写入新的用户消息,再广播快照:界面收到事件时数据库已经可查询,
+      // 不会出现"事件到了、历史还没落库"的空窗。
+      const saved = appendMessage(db, {
+        conversationId: target.conversationId,
+        role: 'user',
+        content: { text },
+        meta,
+        clientRequestId: `replay-${target.id}-${Date.now()}`
+      })
+      replayed = { id: saved.record.id, seq: saved.record.seq }
+    }
+    emit({
+      ...base,
+      type: replay ? 'conversation.replayed' : 'conversation.reverted',
+      conversationId: target.conversationId,
+      messageId: target.id,
+      ...(replayed ? { newMessageId: replayed.id, newSeq: replayed.seq } : {}),
+      // 直接给快照,界面无需在事件后再发一次请求:重放会立即开始流式输出,
+      // 异步刷新若晚到就会把刚出现的助手消息清掉。
+      messages: listMessages(db, target.conversationId),
+      artifacts: listArtifactsByConversation(db, target.conversationId),
+      ...truncated
+    })
+
+    if (!replay) return true
+
+    const meta = target.meta ?? {}
+    const text = (target.content as { text?: unknown } | null)?.text
+    if (typeof text !== 'string' || !text) throw new Error('该消息没有可重放的内容')
+    let mode: ModePolicy
+    try {
+      mode = resolveMode(typeof meta.mode === 'string' ? meta.mode : conv.modeId)
+    } catch (err) {
+      throw new Error(`原模式不可用: ${(err as Error).message}`)
+    }
+    const colleagueId =
+      typeof meta.colleagueId === 'string' && meta.colleagueId ? meta.colleagueId : undefined
+    if (colleagueId) assertColleagueAssignable(db, workspaceId, colleagueId, conv.channelId)
+    const expertId = typeof meta.expertId === 'string' && meta.expertId ? meta.expertId : undefined
+    const skill = typeof meta.skill === 'string' && meta.skill ? meta.skill : undefined
+    const scene =
+      meta.scene === 'working' || meta.scene === 'coding' || meta.scene === 'design'
+        ? meta.scene
+        : undefined
+    const contextPaths = Array.isArray(meta.contextPaths)
+      ? meta.contextPaths.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      : undefined
+
+    if (!replayed) throw new Error('重放消息写入失败')
+    emit({
+      type: 'conversation.ready',
+      conversationId: target.conversationId,
+      seq: replayed.seq,
+      messageId: replayed.id
+    })
+    startingRuns.add(target.conversationId)
+    try {
+      await runAgent({
+        text,
+        mode,
+        conversationId: target.conversationId,
+        userMessageId: replayed.id,
+        firstTurn: listMessages(db, target.conversationId).filter((m) => m.role === 'user').length <= 1,
+        ...(colleagueId ? { colleagueId } : {}),
+        ...(expertId ? { expertId } : {}),
+        ...(skill ? { skill } : {}),
+        ...(scene ? { scene } : {}),
+        ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
+      })
+    } finally {
+      startingRuns.delete(target.conversationId)
+    }
+    return true
+  }
+
   if (msg.cmd === 'conversation.reorderPinned') {
     if (!Array.isArray(msg.orderedIds) || msg.orderedIds.some((id) => typeof id !== 'string')) {
       throw new Error('缺少 orderedIds')
@@ -3267,6 +3384,15 @@ async function handleFrame(value: unknown) {
     conversationId,
     role: 'user',
     content: { text: msg.text },
+    // 记录本轮上下文:重放要复原同一模式/技能/场景/@文件,而不是只重发文本。
+    meta: {
+      mode: mode.id,
+      ...(skill ? { skill } : {}),
+      ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),
+      ...(effectiveExpertId ? { expertId: effectiveExpertId } : {}),
+      ...(scene ? { scene } : {}),
+      ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
+    },
     ...(clientRequestId ? { clientRequestId } : {})
   })
 
@@ -3293,6 +3419,7 @@ async function handleFrame(value: unknown) {
       text: msg.text,
       mode,
       conversationId,
+      userMessageId: saved.record.id,
       firstTurn,
       ...(clientRequestId ? { clientRequestId } : {}),
       ...(skill ? { skill } : {}),

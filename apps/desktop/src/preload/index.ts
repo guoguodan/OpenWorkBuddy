@@ -40,6 +40,10 @@ contextBridge.exposeInMainWorld('openwb', {
     rename: (input: { conversationId: string; title: string }) => ipcRenderer.invoke('conversation.rename', input),
     feedback: (input: { messageId: string; feedback: 'like' | 'dislike' | null; reason?: string }) =>
       ipcRenderer.invoke('message.feedback', input),
+    replay: (input: { conversationId: string; messageId: string }) =>
+      ipcRenderer.invoke('conversation.replay', input),
+    revert: (input: { conversationId: string; messageId: string }) =>
+      ipcRenderer.invoke('conversation.revert', input),
     remove: (conversationId: string) => ipcRenderer.invoke('conversation.delete', conversationId),
     onEvent: (cb: (e: unknown) => void) => {
       const handler = (_: unknown, e: unknown) => cb(e)

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { AppDatabase } from './client.js'
 import { nowIso, ulid } from './ids.js'
 import { artifact, conversation, eventLog, message, task, workspace } from './schema.js'
@@ -359,6 +359,8 @@ export interface MessageRecord {
   tokenOut: number
   feedback: MessageFeedback | null
   feedbackReason: string | null
+  /** 本轮运行上下文:重放时恢复模式/技能/场景/@文件,历史展示不需要读取。 */
+  meta: Record<string, unknown> | null
   createdAt: string
 }
 
@@ -371,6 +373,8 @@ export interface AppendMessageInput {
   tokenIn?: number
   tokenOut?: number
   status?: MessageStatus
+  /** 仅用户消息使用;daemon 在发送时写入,重放据此复原同一请求。 */
+  meta?: Record<string, unknown>
 }
 
 /**
@@ -414,6 +418,7 @@ export function appendMessage(
       tokenOut: safeTokenCount(input.tokenOut),
       feedback: null,
       feedbackReason: null,
+      metaJson: input.meta ? JSON.stringify(input.meta) : null,
       createdAt: at
     }
     tx.insert(message).values(row).run()
@@ -449,7 +454,20 @@ function toMessageRecord(row: typeof message.$inferSelect): MessageRecord {
     tokenOut: row.tokenOut,
     feedback: row.feedback ?? null,
     feedbackReason: row.feedbackReason ?? null,
+    meta: parseMeta(row.metaJson),
     createdAt: row.createdAt
+  }
+}
+
+function parseMeta(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
   }
 }
 
@@ -502,6 +520,80 @@ export function listMessages(
     .limit(limit)
     .all()
     .map(toMessageRecord)
+}
+
+export interface TruncateResult {
+  /** 被删除的第一条消息序号;没有删除时等于 lastSeq + 1 */
+  fromSeq: number
+  /** 截断后该会话最后保留的消息序号 */
+  lastSeq: number
+  deletedMessages: number
+  deletedTasks: number
+  deletedArtifacts: number
+}
+
+/**
+ * 从 fromSeq(含)开始删除会话内容,并把 last_seq 回退到剩余最大值。
+ *
+ * 顺序必须先是 artifact、再 task、最后 message:
+ *   artifact.task_id 是 ON DELETE SET NULL,若先删任务,交付物会变成无法归属的孤儿;
+ *   task.user_message_id 只是普通文本列,先删消息不会级联任务,必须显式清理。
+ *
+ * 不能只把 last_seq 减一:目标轮可能包含多条消息,而且中断/失败路径会少写助手消息。
+ * 回退后的下一个序号从真实最大值继续,否则会撞 (conversation_id, seq) 唯一约束。
+ */
+export function truncateConversationFrom(
+  db: AppDatabase,
+  conversationId: string,
+  fromSeq: number
+): TruncateResult {
+  if (!Number.isInteger(fromSeq) || fromSeq < 1) throw new Error(`非法截断序号: ${fromSeq}`)
+  return db.transaction((tx) => {
+    const conv = tx.select().from(conversation).where(eq(conversation.id, conversationId)).all()[0]
+    if (!conv) throw new Error(`会话不存在: ${conversationId}`)
+
+    // 只删除真正属于被截断消息的任务。旧数据没有归属时不能按时间猜,
+    // 否则可能误删用户在其他轮创建的定时任务或历史交付物。
+    const doomedMessages = tx
+      .select({ id: message.id })
+      .from(message)
+      .where(and(eq(message.conversationId, conversationId), sql`${message.seq} >= ${fromSeq}`))
+      .all()
+    const doomedIds = doomedMessages.map((row) => row.id)
+    const taskIds = doomedIds.length
+      ? tx
+          .select({ id: task.id })
+          .from(task)
+          .where(and(eq(task.conversationId, conversationId), inArray(task.userMessageId, doomedIds)))
+          .all()
+          .map((row) => row.id)
+      : []
+
+    let deletedArtifacts = 0
+    let deletedTasks = 0
+    if (taskIds.length > 0) {
+      deletedArtifacts = tx.delete(artifact).where(inArray(artifact.taskId, taskIds)).run().changes
+      deletedTasks = tx.delete(task).where(inArray(task.id, taskIds)).run().changes
+    }
+
+    const deletedMessages = tx
+      .delete(message)
+      .where(and(eq(message.conversationId, conversationId), sql`${message.seq} >= ${fromSeq}`))
+      .run().changes
+
+    const remaining = tx
+      .select({ maxSeq: sql<number>`coalesce(max(${message.seq}), 0)` })
+      .from(message)
+      .where(eq(message.conversationId, conversationId))
+      .all()[0]
+    const lastSeq = remaining?.maxSeq ?? 0
+    tx.update(conversation)
+      .set({ lastSeq, updatedAt: nowIso() })
+      .where(eq(conversation.id, conversationId))
+      .run()
+
+    return { fromSeq, lastSeq, deletedMessages, deletedTasks, deletedArtifacts }
+  })
 }
 
 /** 断线重放与审计:同一个会话内 seq 单调 */

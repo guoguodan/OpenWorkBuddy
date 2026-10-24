@@ -13,12 +13,15 @@ import {
   listMessages,
   getMessage,
   setMessageFeedback,
+  truncateConversationFrom,
   deleteConversation,
   appendEvent,
   listEvents
 } from '../src/conversations.js'
 import { createTask, transitionTask } from '../src/tasks.js'
+import { insertArtifacts } from '../src/artifacts.js'
 import { conversation, message, task, eventLog } from '../src/schema.js'
+import { artifact } from '../src/schema.js'
 import { eq } from 'drizzle-orm'
 
 const TABLES = [
@@ -272,6 +275,84 @@ describe('conversation and message', () => {
     expect(events.map((e) => e.seq)).toEqual([1, 2])
     expect(events[1]!.payload).toEqual({ n: 2 })
     second.raw.close()
+  })
+
+  it('truncates from a user message and cleans only that turn', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+
+    const firstUser = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: { text: '第一轮' },
+      meta: { mode: 'craft', skill: 'demo' }
+    }).record
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: { text: '第一答' } })
+    const firstTask = createTask(db, {
+      conversationId: conv.id,
+      title: '第一轮任务',
+      userMessageId: firstUser.id
+    })
+    insertArtifacts(db, {
+      taskId: firstTask,
+      conversationId: conv.id,
+      items: [{ kind: 'file', title: 'keep.txt', path: 'keep.txt' }]
+    })
+
+    const secondUser = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: { text: '第二轮' }
+    }).record
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: { text: '第二答' } })
+    const secondTask = createTask(db, {
+      conversationId: conv.id,
+      title: '第二轮任务',
+      userMessageId: secondUser.id
+    })
+    insertArtifacts(db, {
+      taskId: secondTask,
+      conversationId: conv.id,
+      items: [{ kind: 'file', title: 'drop.txt', path: 'drop.txt' }]
+    })
+
+    const result = truncateConversationFrom(db, conv.id, secondUser.seq)
+    expect(result.deletedMessages).toBe(2)
+    expect(result.deletedTasks).toBe(1)
+    expect(result.deletedArtifacts).toBe(1)
+    expect(result.lastSeq).toBe(2)
+
+    const remaining = listMessages(db, conv.id)
+    expect(remaining.map((m) => m.content)).toEqual([{ text: '第一轮' }, { text: '第一答' }])
+    expect(remaining[0]!.meta).toEqual({ mode: 'craft', skill: 'demo' })
+    expect(db.select().from(task).where(eq(task.id, firstTask)).all()).toHaveLength(1)
+    expect(db.select().from(task).where(eq(task.id, secondTask)).all()).toHaveLength(0)
+    expect(
+      db.select().from(artifact).where(eq(artifact.conversationId, conv.id)).all().map((a) => a.title)
+    ).toEqual(['keep.txt'])
+    expect(db.select().from(conversation).where(eq(conversation.id, conv.id)).all()[0]!.lastSeq).toBe(2)
+
+    // 截断后继续追加必须从剩余最大值续号,不能复用 4 撞唯一索引。
+    const next = appendMessage(db, { conversationId: conv.id, role: 'user', content: { text: '重放' } })
+    expect(next.record.seq).toBe(3)
+    raw.close()
+  })
+
+  it('does not delete unowned legacy tasks while truncating', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: { text: '旧轮次' } })
+    const legacyTask = createTask(db, { conversationId: conv.id, title: '旧任务' })
+
+    truncateConversationFrom(db, conv.id, 1)
+    expect(listMessages(db, conv.id)).toHaveLength(0)
+    // 旧数据没有 user_message_id,不能按时间猜归属而误删。
+    expect(db.select().from(task).where(eq(task.id, legacyTask)).all()).toHaveLength(1)
+    raw.close()
   })
 })
 

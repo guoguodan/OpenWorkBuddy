@@ -66,6 +66,8 @@ export const message = sqliteTable(
     tokenOut: integer('token_out').notNull().default(0),
     feedback: text('feedback', { enum: ['like', 'dislike'] }),
     feedbackReason: text('feedback_reason'),
+    /** 本轮的运行上下文(模式/技能/场景/@文件),重放时据此恢复原请求。 */
+    metaJson: text('meta_json'),
     createdAt: text('created_at').notNull()
   },
   (t) => [
@@ -94,6 +96,8 @@ export const task = sqliteTable(
     inputHash: text('input_hash'),
     resultRef: text('result_ref'),
     errorCode: text('error_code'),
+    /** 产生该任务的用户消息;回退时据此精确删除整轮,而不是猜时间。 */
+    userMessageId: text('user_message_id'),
     createdAt: text('created_at').notNull(),
     startedAt: text('started_at'),
     finishedAt: text('finished_at')

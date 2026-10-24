@@ -235,6 +235,29 @@ export default function App() {
     )
   }, [])
 
+  // 重放/回退的事件必须能同步重建整个视图。daemon 会带回数据库快照,
+  // 避免界面保留已被截断的消息、工具行或交付物。
+  const applySnapshot = useCallback((raw: unknown, artifactsNext: unknown) => {
+    const rows = Array.isArray(raw) ? raw : []
+    setArtifacts((Array.isArray(artifactsNext) ? artifactsNext : []) as ArtifactInfo[])
+    setMessages(
+      rows
+        .filter((item): item is { id: string; role?: string; seq?: number; content?: { text?: string }; createdAt?: string; feedback?: 'like' | 'dislike' | null; feedbackReason?: string | null } =>
+          Boolean(item) && typeof item === 'object' &&
+          ((item as { role?: string }).role === 'user' || (item as { role?: string }).role === 'assistant')
+        )
+        .map((m) => ({
+          id: m.id,
+          role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
+          text: m.content?.text ?? '',
+          ...(m.seq !== undefined ? { seq: m.seq } : {}),
+          ...(m.createdAt !== undefined ? { createdAt: m.createdAt } : {}),
+          feedback: m.feedback ?? null,
+          feedbackReason: m.feedbackReason ?? null
+        }) satisfies ChatMessage)
+    )
+  }, [])
+
   const loadMemories = useCallback(async () => {
     const r = await window.openwb.memory.list()
     setMemories(r.items)
@@ -405,6 +428,21 @@ export default function App() {
             return list
           })
         }
+      } else if (e.type === 'conversation.reverted' || e.type === 'conversation.replayed') {
+        // 重放/回退是破坏性操作,以 daemon 回传的数据库快照为准。
+        const snapshot = e as { messages?: unknown; artifacts?: unknown }
+        setTools([])
+        setNotices([])
+        applySnapshot(snapshot.messages, snapshot.artifacts)
+        if (e.type === 'conversation.replayed') {
+          streaming.current = true
+          setBusy(true)
+        } else {
+          setBusy(false)
+          streaming.current = false
+          note('info', '已回退到此版本。')
+        }
+        void loadConversations(activeConversation.current || undefined).catch(() => undefined)
       } else if (e.type === 'done') {
         streaming.current = false
         setBusy(false)
@@ -453,7 +491,7 @@ export default function App() {
         note('system', `[错误] ${e.code}: ${e.message}`)
       }
     })
-  }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, loadSettings, loadUnreadNotifications, note])
+  }, [loadConversations, loadHistory, loadMemories, loadChannels, loadSyncStatus, loadSettings, loadUnreadNotifications, note, applySnapshot])
 
   const send = async () => {
     const text = input.trim()
@@ -545,6 +583,39 @@ export default function App() {
       }
     },
     [note]
+  )
+
+  const replayMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (!conversationId) return
+      try {
+        // 先进入忙碌态:重放会真正重跑模型,期间不允许再次发送或切换。
+        setBusy(true)
+        streaming.current = true
+        await window.openwb.conversation.replay({ conversationId, messageId: message.id })
+      } catch (err) {
+        setBusy(false)
+        streaming.current = false
+        note('system', `[错误] 重放失败: ${(err as Error).message}`)
+        throw err
+      }
+    },
+    [conversationId, note]
+  )
+
+  const revertMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (!conversationId) return
+      try {
+        await window.openwb.conversation.revert({ conversationId, messageId: message.id })
+        // 快照由 conversation.reverted 事件带回;这里不再主动拉历史,
+        // 避免异步请求晚到覆盖服务端已经截断后的状态。
+      } catch (err) {
+        note('system', `[错误] 回退失败: ${(err as Error).message}`)
+        throw err
+      }
+    },
+    [conversationId, note]
   )
 
   const switchConversation = async (id: string) => {
@@ -986,6 +1057,8 @@ export default function App() {
                   onShareArtifact={(a) => void shareArtifact(a)}
                   shareChannelName={activeChannel?.name ?? null}
                   onFeedback={applyFeedback}
+                  onReplay={replayMessage}
+                  onRevert={revertMessage}
                 />
                 <div className="owb-chat__input">
                   {activeColleague ? (

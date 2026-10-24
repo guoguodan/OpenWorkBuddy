@@ -663,6 +663,27 @@ ipcMain.handle('conversation.cancel', async (_e, conversationId?: string) => {
   return { ok: true }
 })
 
+// 重放会真正调用模型,不能走 request():否则主进程会等 10 秒超时,
+// 而 daemon 仍在生成。像 conversation.send 一样写入帧,结果以事件回推。
+for (const command of ['conversation.replay', 'conversation.revert'] as const) {
+  ipcMain.handle(command, async (_e, input: { conversationId?: unknown; messageId?: unknown }) => {
+    await daemonReady
+    if (!daemon?.stdin?.writable) throw new Error('daemon 未就绪')
+    if (!input || typeof input.conversationId !== 'string' || !input.conversationId) {
+      throw new Error('非法会话 ID')
+    }
+    if (typeof input.messageId !== 'string' || !input.messageId) throw new Error('非法消息 ID')
+    daemon.stdin.write(
+      encodeFrame({
+        cmd: command,
+        conversationId: input.conversationId,
+        messageId: input.messageId
+      })
+    )
+    return { accepted: true }
+  })
+}
+
 function attachDaemonOutput() {
   const decoder = new FrameDecoder()
   daemon!.stdout!.on('data', (chunk: Buffer) => {

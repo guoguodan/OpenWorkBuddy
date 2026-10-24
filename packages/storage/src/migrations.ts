@@ -432,6 +432,19 @@ ALTER TABLE message ADD COLUMN feedback TEXT
   CHECK (feedback IS NULL OR feedback IN ('like','dislike'));
 ALTER TABLE message ADD COLUMN feedback_reason TEXT;
 `
+  },
+  {
+    version: 13,
+    name: 'message_run_context_and_task_owner',
+    sql: `-- 重放/回退需要两件事可追溯:
+--   message.meta_json      本轮当时的模式/技能/场景/@文件,重放不能丢上下文
+--   task.user_message_id   任务属于哪一轮,回退时按轮清理任务与交付物
+-- 旧数据没有 meta_json/归属时不猜测,保留 NULL;回退对旧任务按时间不可靠,
+-- 因此仅在能确定归属时删除任务,消息本身仍按 seq 精确截断。
+ALTER TABLE message ADD COLUMN meta_json TEXT;
+ALTER TABLE task ADD COLUMN user_message_id TEXT;
+CREATE INDEX idx_task_user_message ON task(user_message_id);
+`
   }
 ]
 

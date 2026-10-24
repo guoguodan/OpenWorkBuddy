@@ -548,6 +548,21 @@ input, textarea { font-family: inherit; }
 .owb-msg-action:focus-visible { outline: 2px solid var(--owb-brand-6); outline-offset: 1px; }
 .owb-msg-action--active { color: var(--owb-brand-8); }
 .owb-msg-action__text { white-space: nowrap; }
+.owb-msg-action--text { padding: 0 7px; }
+
+/* 重放/回退确认:与点踩弹层共用外壳,但危险动作需要更明确的主按钮。 */
+.owb-confirm { width: min(380px, calc(100vw - 40px)); }
+.owb-confirm__text {
+  margin: 0 0 16px; color: var(--owb-text-secondary);
+  font-size: 12px; line-height: 1.7;
+}
+.owb-confirm__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.owb-confirm__cancel {
+  padding: 7px 14px; border: 1px solid var(--owb-border-subtle);
+  border-radius: var(--owb-radius-full); background: var(--owb-bg-secondary);
+  color: var(--owb-text-secondary); font: inherit; font-size: 12px; cursor: pointer;
+}
+.owb-confirm__cancel:hover { background: var(--owb-bg-hover); color: var(--owb-text-primary); }
 
 /* 点踩原因:复刻真实产品的多选原因 + 其他文本。 */
 .owb-feedback-backdrop {

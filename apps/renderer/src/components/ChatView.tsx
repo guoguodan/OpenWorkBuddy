@@ -4,6 +4,8 @@ import {
   IconCheck,
   IconCopy,
   IconLoader,
+  IconRefresh,
+  IconClock,
   IconThumbDown,
   IconThumbUp,
   IconTool,
@@ -41,6 +43,8 @@ interface ChatViewProps {
   onShareArtifact?: ((artifact: ArtifactInfo) => void) | undefined
   shareChannelName?: string | null | undefined
   onFeedback?: (message: ChatMessage, feedback: 'like' | 'dislike' | null, reason?: string) => Promise<void>
+  onReplay?: (message: ChatMessage) => Promise<void>
+  onRevert?: (message: ChatMessage) => Promise<void>
 }
 
 const DISLIKE_REASONS = [
@@ -83,16 +87,22 @@ async function copyText(text: string): Promise<boolean> {
 
 function MessageToolbar({
   message,
-  onFeedback
+  onFeedback,
+  onReplay,
+  onRevert
 }: {
   message: ChatMessage
   onFeedback?: ChatViewProps['onFeedback']
+  onReplay?: ChatViewProps['onReplay']
+  onRevert?: ChatViewProps['onRevert']
 }) {
   const [copied, setCopied] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [otherText, setOtherText] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<'replay' | 'revert' | null>(null)
+  const [pending, setPending] = useState(false)
 
   useEffect(() => {
     if (!copied) return
@@ -136,6 +146,19 @@ function MessageToolbar({
   }
 
   const canFeedback = Boolean(onFeedback && message.id && !message.streaming)
+  const canVersion = Boolean(message.role === 'user' && message.id && !message.id.startsWith('u-'))
+
+  const runVersionAction = async (action: 'replay' | 'revert') => {
+    if (pending) return
+    setPending(true)
+    try {
+      if (action === 'replay') await onReplay?.(message)
+      else await onRevert?.(message)
+      setConfirmAction(null)
+    } finally {
+      setPending(false)
+    }
+  }
   return (
     <>
       <div className="owb-msg-actions" data-testid={'message-actions-' + message.id}>
@@ -176,7 +199,73 @@ function MessageToolbar({
             </button>
           </>
         ) : null}
+        {canVersion && onReplay ? (
+          <button
+            type="button"
+            className="owb-msg-action owb-msg-action--text"
+            title="点击将重新生成内容，此会话后的内容都将被覆盖，请谨慎操作"
+            onClick={() => setConfirmAction('replay')}
+            data-testid="message-replay"
+          >
+            <IconRefresh size={13} />
+            <span className="owb-msg-action__text">重放</span>
+          </button>
+        ) : null}
+        {canVersion && onRevert ? (
+          <button
+            type="button"
+            className="owb-msg-action owb-msg-action--text"
+            title="回退到此版本"
+            onClick={() => setConfirmAction('revert')}
+            data-testid="message-revert"
+          >
+            <IconClock size={13} />
+            <span className="owb-msg-action__text">回退到此版本</span>
+          </button>
+        ) : null}
       </div>
+      {confirmAction ? (
+        <div className="owb-feedback-backdrop" onClick={() => (pending ? undefined : setConfirmAction(null))}>
+          <div
+            className="owb-feedback owb-confirm"
+            role="dialog"
+            aria-modal="true"
+            aria-label={confirmAction === 'replay' ? '确认重放' : '确认回退'}
+            onClick={(event) => event.stopPropagation()}
+            data-testid={confirmAction === 'replay' ? 'replay-confirm' : 'revert-confirm'}
+          >
+            <div className="owb-feedback__header">
+              <span className="owb-feedback__title">
+                {confirmAction === 'replay' ? '重放这条消息？' : '回退到此版本？'}
+              </span>
+            </div>
+            <p className="owb-confirm__text">
+              {confirmAction === 'replay'
+                ? '点击将重新生成内容，此会话后的内容都将被覆盖，请谨慎操作。'
+                : '此版本之后的消息与任务记录将被删除，且不可恢复。'}
+            </p>
+            <div className="owb-confirm__actions">
+              <button
+                type="button"
+                className="owb-confirm__cancel"
+                onClick={() => setConfirmAction(null)}
+                disabled={pending}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="owb-feedback__submit"
+                onClick={() => void runVersionAction(confirmAction)}
+                disabled={pending}
+                data-testid="confirm-version-action"
+              >
+                {pending ? '处理中…' : confirmAction === 'replay' ? '重放' : '回退'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {dialogOpen ? (
         <div className="owb-feedback-backdrop" onClick={() => setDialogOpen(false)}>
           <div
@@ -284,7 +373,9 @@ export function ChatView({
   onOpenArtifact,
   onShareArtifact,
   shareChannelName,
-  onFeedback
+  onFeedback,
+  onReplay,
+  onRevert
 }: ChatViewProps) {
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
@@ -362,7 +453,9 @@ export function ChatView({
                       <MessageToolbar message={m} onFeedback={onFeedback} />
                     </>
                   )}
-                  {m.role === 'user' ? <MessageToolbar message={m} onFeedback={onFeedback} /> : null}
+                  {m.role === 'user' ? (
+                    <MessageToolbar message={m} onFeedback={onFeedback} onReplay={onReplay} onRevert={onRevert} />
+                  ) : null}
                 </div>
               </div>
             )

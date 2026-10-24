@@ -42,6 +42,8 @@ export interface CreateTaskInput {
   parentId?: string
   phase?: string
   inputHash?: string
+  /** 该任务服务的用户消息;重放/回退按轮清理时使用。 */
+  userMessageId?: string
 }
 
 export function createTask(db: AppDatabase, input: CreateTaskInput): string {
@@ -56,7 +58,8 @@ export function createTask(db: AppDatabase, input: CreateTaskInput): string {
       createdAt: nowIso(),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.phase ? { phase: input.phase } : {}),
-      ...(input.inputHash ? { inputHash: input.inputHash } : {})
+      ...(input.inputHash ? { inputHash: input.inputHash } : {}),
+      ...(input.userMessageId ? { userMessageId: input.userMessageId } : {})
     })
     .run()
   return id

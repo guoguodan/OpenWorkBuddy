@@ -339,6 +339,8 @@ interface Window {
         feedback: 'like' | 'dislike' | null
         reason?: string
       }) => Promise<{ messageId: string; feedback: 'like' | 'dislike' | null; feedbackReason: string | null }>
+      replay: (input: { conversationId: string; messageId: string }) => Promise<{ accepted: boolean }>
+      revert: (input: { conversationId: string; messageId: string }) => Promise<{ accepted: boolean }>
       remove: (conversationId: string) => Promise<{ conversationId: string }>
       onEvent: (cb: (e: unknown) => void) => () => void
     }
