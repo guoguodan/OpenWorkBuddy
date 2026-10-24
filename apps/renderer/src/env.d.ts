@@ -111,6 +111,8 @@ interface PluginSnapshotInfo {
   verifiedPublisher: boolean
   permissions: string[]
   instructions: string
+  /** 专家团队成员引用;普通专家与连接器为空数组 */
+  team?: Array<{ ref: string; role: string | null }>
 }
 
 interface HistoryMessage {

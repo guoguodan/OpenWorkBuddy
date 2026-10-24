@@ -54,6 +54,19 @@ export const HighCreditToolSchema = z
   })
   .strict()
 
+/**
+ * 专家团队成员引用。
+ *
+ * 团队不复制成员的提示词:它只引用已安装的专家,运行时再展开。
+ * 这样成员升级、关闭或卸载会立即反映到团队上,不会留下"装了两份、改了其中一份"的漂移。
+ */
+export const ExpertTeamMemberSchema = z
+  .object({
+    ref: z.string().regex(PLUGIN_NAME_RE, 'ref 必须是已安装专家的插件名'),
+    role: z.string().min(1).max(200).optional()
+  })
+  .strict()
+
 export const PluginManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -71,13 +84,16 @@ export const PluginManifestSchema = z
     /** 声明了 highCreditTools 却不能延迟加载的工具,见 §6.6 */
     skills: z.array(z.string()).optional(),
     /** 专家角色指令:只有 kind=expert 可用,由运行时注入 system prompt */
-    instructions: z.string().max(20_000).optional()
+    instructions: z.string().max(20_000).optional(),
+    /** 专家团队:引用其它已安装专家;只有 kind=expert 可用,最多 16 名成员 */
+    team: z.array(ExpertTeamMemberSchema).min(1).max(16).optional()
   })
   .strict()
 
 export type PluginManifest = z.infer<typeof PluginManifestSchema>
 export type McpServerSpec = z.infer<typeof McpServerSpecSchema>
 export type CredentialDecl = z.infer<typeof CredentialDeclSchema>
+export type ExpertTeamMember = z.infer<typeof ExpertTeamMemberSchema>
 
 export class ManifestError extends Error {
   constructor(readonly detail: string) {
@@ -115,6 +131,19 @@ export function assertManifestCoherent(manifest: PluginManifest): void {
   }
   if (manifest.kind === 'connector' && manifest.instructions !== undefined) {
     throw new ManifestError('connector 插件不能声明 instructions')
+  }
+  if (manifest.kind === 'connector' && manifest.team !== undefined) {
+    throw new ManifestError('connector 插件不能声明专家团队')
+  }
+
+  if (manifest.team) {
+    const refs = manifest.team.map((member) => member.ref)
+    if (refs.includes(manifest.name)) {
+      throw new ManifestError('专家团队不能引用自己')
+    }
+    if (new Set(refs).size !== refs.length) {
+      throw new ManifestError('专家团队成员存在重复引用')
+    }
   }
 
   const credentialKeys = new Set(manifest.credentials.map((c) => c.key))

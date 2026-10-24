@@ -15,6 +15,12 @@ import {
 import { z } from 'zod'
 import { listRemoteModels, modelFor, reasoningProviderOptions, resolveModelName } from './model.js'
 import { routeModel } from './model-routing.js'
+import {
+  assertExpertExclusive,
+  buildExpertPrompt,
+  ExpertConflictError,
+  type ExpertInfo
+} from './expert-mode.js'
 import { transcribeAudio, VOICE_MESSAGES } from './transcribe.js'
 import { probeServiceEndpoint } from './service-probe.js'
 import { budgetExceededMessage, evaluateTokenBudget } from './budget.js'
@@ -701,7 +707,9 @@ function pluginStatusList() {
           pids: [],
           warnings: [],
           verifiedPublisher: false,
-          permissions: row.permissions
+          permissions: row.permissions,
+          instructions: '',
+          team: []
         }))
     : []
   return [...snapshots, ...missing].sort((a, b) => a.name.localeCompare(b.name))
@@ -1200,6 +1208,9 @@ function injectedSections(
   if (input.scene) sections.push('scene')
   if (input.colleagueId) sections.push('colleague')
   if (input.expertId) sections.push('expert')
+  if (input.expertId && (pluginRuntime.snapshotOf(input.expertId)?.team.length ?? 0) > 0) {
+    sections.push('expert-team')
+  }
   if ((input.contextPaths ?? []).length > 0) sections.push('context')
   return sections
 }
@@ -1210,17 +1221,40 @@ function injectedSections(
  * 专家是插件清单资产,可能被卸载或关闭;每次发送都重新校验,
  * 避免已失效的 expert_id 继续以旧身份运行。
  */
-function requireExpert(expertId: string): { id: string; name: string; description: string; instructions: string } {
+function requireExpert(expertId: string): ExpertInfo {
   const plugin = pluginRuntime.snapshotOf(expertId)
   if (!plugin || plugin.kind !== 'expert') {
     throw new Error(`专家不存在: ${expertId}`)
   }
   if (!plugin.enabled) throw new Error(`专家已关闭: ${plugin.displayName}`)
+
+  // 团队只引用已安装专家:成员关闭或卸载必须当场报错,不能悄悄少掉一块专业准则;
+  // 也不允许嵌套团队,否则同一成员可能被多层重复注入。
+  const team = plugin.team.map((member) => {
+    const resolved = pluginRuntime.snapshotOf(member.ref)
+    if (!resolved || resolved.kind !== 'expert') {
+      throw new Error(`专家团队「${plugin.displayName}」的成员不存在: ${member.ref}`)
+    }
+    if (!resolved.enabled) {
+      throw new Error(`专家团队「${plugin.displayName}」的成员已关闭: ${resolved.displayName}`)
+    }
+    if (resolved.team.length > 0) {
+      throw new Error(`专家团队「${plugin.displayName}」不能包含另一个专家团队: ${resolved.displayName}`)
+    }
+    return {
+      id: resolved.name,
+      name: resolved.displayName,
+      role: member.role,
+      instructions: resolved.instructions
+    }
+  })
+
   return {
     id: plugin.name,
     name: plugin.displayName,
     description: plugin.description,
-    instructions: plugin.instructions
+    instructions: plugin.instructions,
+    team
   }
 }
 
@@ -1229,6 +1263,18 @@ function requireExpert(expertId: string): { id: string; name: string; descriptio
  * 这种情况不应让用户永久无法发送:解除绑定并提示一次,后续按普通会话运行。
  */
 function resolveConversationExpert(db: AppDatabase, conversationId: string, requested: string | undefined, existing: ConversationRecord | undefined): string | undefined {
+  // 同一会话同时绑定两个专家必须拒绝:只靠界面拦截的话,
+  // 重放、脚本或旧客户端仍能把第二轮换成另一个人格。
+  if (requested && existing?.expertId && existing.expertId !== requested) {
+    const current = pluginRuntime.snapshotOf(existing.expertId)
+    const next = pluginRuntime.snapshotOf(requested)
+    if (current?.kind === 'expert' && next?.kind === 'expert') {
+      assertExpertExclusive(
+        { id: current.name, name: current.displayName },
+        { id: next.name, name: next.displayName }
+      )
+    }
+  }
   const candidate = requested ?? existing?.expertId ?? undefined
   if (!candidate) return undefined
   try {
@@ -1297,15 +1343,7 @@ async function applyHarnessContext(
 
   if (input.expertId) {
     const expert = requireExpert(input.expertId)
-    const lines = [
-      '',
-      '# 专家角色',
-      `你正在以「${expert.name}」专家身份工作。`,
-      expert.description ? `专长: ${expert.description}` : '',
-      expert.instructions ? `必须遵守的专业准则:\n${expert.instructions}` : '',
-      '保持专业边界;不要声称拥有未提供的权限。'
-    ].filter(Boolean)
-    system += `\n${lines.join('\n')}`
+    system += buildExpertPrompt(expert)
   }
 
   const contextPaths = (input.contextPaths ?? []).slice(0, MAX_CONTEXT_FILES)
@@ -4059,7 +4097,26 @@ async function handleFrame(value: unknown) {
   if (effectiveColleagueId) {
     assertColleagueAssignable(db, workspaceId, effectiveColleagueId, existingConversation?.channelId ?? null)
   }
-  const effectiveExpertId = resolveConversationExpert(db, conversationId, expertId, existingConversation)
+  let effectiveExpertId: string | undefined
+  try {
+    effectiveExpertId = resolveConversationExpert(db, conversationId, expertId, existingConversation)
+  } catch (err) {
+    if (err instanceof ExpertConflictError) {
+      // 带机器可读错误码:界面据此弹"先退出当前专家",而不是把互斥当成普通失败。
+      emit({
+        type: 'error',
+        code: err.code,
+        message: err.message,
+        retryable: false,
+        currentExpertId: err.current.id,
+        currentExpertName: err.current.name,
+        requestedExpertId: err.requested.id,
+        requestedExpertName: err.requested.name
+      })
+      return
+    }
+    throw err
+  }
   // 首轮判定必须在写入本次用户消息之前取:之后历史里至少已有这一条,
   // 再数一遍会把每一轮都当成"新会话"。
   const firstTurn = listMessages(db, conversationId).every((m) => m.role !== 'user')

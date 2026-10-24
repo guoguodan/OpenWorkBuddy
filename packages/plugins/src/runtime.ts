@@ -60,6 +60,8 @@ export interface PluginSnapshot {
   permissions: string[]
   /** 专家角色指令;连接器与未声明时为空串 */
   instructions: string
+  /** 专家团队成员引用;普通专家与连接器为空数组 */
+  team: Array<{ ref: string; role: string | null }>
 }
 
 export interface PluginRuntimeEvent {
@@ -594,7 +596,8 @@ export class PluginRuntime {
       warnings: instance.plugin.warnings,
       verifiedPublisher: instance.plugin.verifiedPublisher,
       permissions: manifest.permissions,
-      instructions: manifest.instructions ?? ''
+      instructions: manifest.instructions ?? '',
+      team: (manifest.team ?? []).map((member) => ({ ref: member.ref, role: member.role ?? null }))
     }
   }
 

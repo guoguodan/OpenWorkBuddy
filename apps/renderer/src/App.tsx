@@ -89,6 +89,10 @@ type AgentEvent = {
   rule?: string
   limit?: number
   used?: number
+  currentExpertId?: string
+  currentExpertName?: string
+  requestedExpertId?: string
+  requestedExpertName?: string
 }
 
 interface SystemLine {
@@ -287,6 +291,8 @@ export default function App() {
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [activeColleague, setActiveColleague] = useState<{ id: string; name: string } | null>(null)
   const [activeExpert, setActiveExpert] = useState<{ id: string; name: string } | null>(null)
+  // 互斥提示:已有专家时再选另一个,先让用户明确"会退出前一个",确认后才真的切换。
+  const [pendingExpert, setPendingExpert] = useState<{ id: string; name: string } | null>(null)
   const streaming = useRef(false)
   const activeConversation = useRef('')
 
@@ -573,6 +579,13 @@ export default function App() {
       } else if (e.type === 'expert.released') {
         setActiveExpert(null)
         note('warn', '当前专家已关闭或卸载,已自动退出专家模式;本会话将按普通会话继续。')
+      } else if (e.type === 'error' && e.code === 'EXPERT_CONFLICT') {
+        // daemon 是最终裁决者:即使界面状态过期,也要把冲突变成可操作的确认框,
+        // 而不是只留一行无法理解的错误。
+        if (e.requestedExpertId) {
+          setPendingExpert({ id: e.requestedExpertId, name: e.requestedExpertName ?? e.requestedExpertId })
+        }
+        note('warn', e.message ?? '一个会话只允许一个专家,请先退出当前专家。')
       } else if (e.type === 'approval.request' && e.request) {
         const request = e.request as ApprovalRequestInfo
         setApprovalQueue((list) => (list.some((item) => item.id === request.id) ? list : [...list, request]))
@@ -936,8 +949,27 @@ export default function App() {
     void newConversation()
   }
 
+  /**
+   * 专家互斥(WM-MODE-07)。
+   *
+   * 一个会话只允许一个专家或一个专家团队:重复选同一个专家视为"继续协作",
+   * 选另一个则先确认,避免用户以为两个专家会同时参与。
+   */
   const useExpert = async (expert: { id: string; name: string }) => {
     if (busy) return
+    if (activeExpert?.id === expert.id) {
+      setPanel(null)
+      note('info', `当前已在与专家「${expert.name}」协作。`)
+      return
+    }
+    if (activeExpert) {
+      setPendingExpert(expert)
+      return
+    }
+    await startExpertConversation(expert)
+  }
+
+  const startExpertConversation = async (expert: { id: string; name: string }) => {
     try {
       const r = await window.openwb.conversation.create({
         title: `与「${expert.name}」协作`,
@@ -945,6 +977,7 @@ export default function App() {
         expertId: expert.id,
         ...(activeChannelId ? { channelId: activeChannelId } : {})
       })
+      setPendingExpert(null)
       setPanel(null)
       setConversationId(r.conversationId)
       activeConversation.current = r.conversationId
@@ -955,7 +988,12 @@ export default function App() {
       setTools([])
       setNotices([])
       await loadConversations(r.conversationId)
-      note('info', `已切换到专家「${expert.name}」,直接描述任务即可。`)
+      note(
+        'info',
+        activeExpert
+          ? `已退出专家「${activeExpert.name}」,切换到「${expert.name}」,直接描述任务即可。`
+          : `已切换到专家「${expert.name}」,直接描述任务即可。`
+      )
     } catch (err) {
       note('system', `启用专家失败: ${(err as Error).message}`)
     }
@@ -1600,6 +1638,11 @@ export default function App() {
                     </span>
                   </div>
                 ) : null}
+                {activeExpert ? (
+                  <p className="owb-expert-exclusive" data-testid="expert-exclusive-hint">
+                    同一会话只允许一个专家或专家团队;启用其他专家会先退出当前专家。
+                  </p>
+                ) : null}
                 {composer(true)}
               </WelcomeView>
             ) : (
@@ -1696,6 +1739,48 @@ export default function App() {
           onClose={() => setPreviewArtifact(null)}
           onOpenExternal={() => void openArtifactExternally(previewArtifact.artifact)}
         />
+      ) : null}
+      {pendingExpert && activeExpert ? (
+        <div
+          className="owb-feedback-backdrop"
+          role="presentation"
+          onClick={() => setPendingExpert(null)}
+        >
+          <div
+            className="owb-feedback owb-confirm"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="专家互斥提示"
+            data-testid="expert-conflict-dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="owb-feedback__header">
+              <span className="owb-feedback__title">一个会话只能有一个专家</span>
+            </div>
+            <p className="owb-confirm__text" data-testid="expert-conflict-text">
+              当前正在与专家「{activeExpert.name}」协作。启用「{pendingExpert.name}」会退出「
+              {activeExpert.name}」,并新建一个专家任务;原会话的历史与成果不会丢失。
+            </p>
+            <div className="owb-confirm__actions">
+              <button
+                type="button"
+                className="owb-confirm__cancel"
+                onClick={() => setPendingExpert(null)}
+                data-testid="expert-conflict-cancel"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="owb-feedback__submit"
+                onClick={() => void startExpertConversation(pendingExpert)}
+                data-testid="expert-conflict-confirm"
+              >
+                退出并切换
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
       {panel === 'skills' || panel === 'connectors' ? (
         <SkillsHubPanel

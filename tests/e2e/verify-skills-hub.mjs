@@ -173,7 +173,9 @@ const expertDir = await makePlugin(pluginSource, 'hub-expert', {
   instructions: '先给出结论,再列出关键证据;引用数据时必须说明来源与时间。'
 })
 
-const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${port}`], {
+// 独立 user-data-dir:共享默认目录会被本机已运行实例的单实例锁挡住,页面无法就绪。
+const userData = await mkdtemp(join(tmpdir(), 'owb-hub-user-'))
+const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], {
   cwd: workspace,
   env: {
     ...process.env,
@@ -454,6 +456,7 @@ try {
   app.kill()
   await sleep(500)
   await rm(base, { recursive: true, force: true })
+  await rm(userData, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch(() => undefined)
 }
 
 if (failed > 0) {

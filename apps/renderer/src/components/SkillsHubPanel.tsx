@@ -572,6 +572,11 @@ export function SkillsHubPanel({
                   <div>
                     <div className="owb-hub__name-row">
                       <span className="owb-hub__name">{plugin.displayName}</span>
+                      {plugin.team?.length ? (
+                        <span className="owb-hub__badge" data-testid={`expert-team-badge-${plugin.name}`}>
+                          {`团队 · ${plugin.team.length} 人`}
+                        </span>
+                      ) : null}
                       <span className={`owb-hub__dot ${stateTone(plugin.state)}`} />
                     </div>
                     <p className="owb-hub__desc">{plugin.description || '专业领域专家'}</p>
@@ -642,6 +647,20 @@ export function SkillsHubPanel({
                     <span>状态</span>
                     <strong>{STATE_LABEL[detailPlugin.state]}</strong>
                   </div>
+                  {detailPlugin.team?.length ? (
+                    <div className="owb-hub__kv" data-testid="expert-team-members">
+                      <span>团队</span>
+                      <strong>
+                        {detailPlugin.team
+                          .map((member) => {
+                            const name =
+                              plugins.find((item) => item.name === member.ref)?.displayName ?? member.ref
+                            return member.role ? `${name}(${member.role})` : name
+                          })
+                          .join('、')}
+                      </strong>
+                    </div>
+                  ) : null}
                   {detailPlugin.permissions.length > 0 ? (
                     <div className="owb-hub__kv">
                       <span>权限</span>
