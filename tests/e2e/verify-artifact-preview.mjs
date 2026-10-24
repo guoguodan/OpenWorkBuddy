@@ -110,9 +110,10 @@ async function waitFor(evaluate, expression, timeoutMs = 20000) {
 
 const workdir = await mkdtemp(join(tmpdir(), 'owb-artifact-preview-ws-'))
 const dataDir = await mkdtemp(join(tmpdir(), 'owb-artifact-preview-data-'))
+const userDataDir = await mkdtemp(join(tmpdir(), 'owb-artifact-preview-profile-'))
 await writeFile(join(workdir, 'package.json'), '{"name":"artifact-preview-ws"}\n', 'utf8')
 
-const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${port}`], {
+const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${port}`, `--user-data-dir=${userDataDir}`], {
   cwd: workdir,
   env: {
     ...process.env,
@@ -211,6 +212,7 @@ try {
   }
   await rm(workdir, { recursive: true, force: true }).catch(() => undefined)
   await rm(dataDir, { recursive: true, force: true }).catch(() => undefined)
+  await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
 }
 
 process.exit(failed === 0 ? 0 : 1)

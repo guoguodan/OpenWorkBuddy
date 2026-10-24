@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import type { ArtifactInfo } from './ArtifactCards'
 import { Markdown } from '../lib/markdown'
 import { IconFile, IconX } from './Icons'
+import { PdfPreview } from './PdfPreview'
 
 export interface TextPreviewInfo {
   path: string
@@ -11,9 +12,20 @@ export interface TextPreviewInfo {
   format: 'markdown' | 'code' | 'text' | 'html'
 }
 
+export interface DocumentPreviewInfo {
+  path: string
+  format: 'office' | 'pdf'
+  kind?: 'docx' | 'xlsx' | 'pptx'
+  content?: string
+  data?: Uint8Array
+  size: number
+  sha256: string
+}
+
 interface ArtifactPreviewProps {
   artifact: ArtifactInfo
   preview: TextPreviewInfo | null
+  document?: DocumentPreviewInfo | null
   onClose: () => void
   onOpenExternal: () => void
 }
@@ -39,7 +51,22 @@ const FRAME_STYLE = `
   th, td { border: 1px solid #e5e7eb; padding: 6px 10px; }
 `
 
-export function ArtifactPreview({ artifact, preview, onClose, onOpenExternal }: ArtifactPreviewProps) {
+/** Office 提取结果只有语义标签,版式相关样式统一放在这里。 */
+const OFFICE_STYLE = `
+  .office h1, .office h2, .office h3 { line-height: 1.35; margin: 24px 0 12px; }
+  .office h1:first-child, .office h2:first-child, .office h3:first-child { margin-top: 0; }
+  .office p { margin: 8px 0; }
+  .office table { width: 100%; margin: 12px 0; font-size: 13px; }
+  .office th { background: #f6f7f9; font-weight: 600; }
+  .office-slide { border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px 24px; margin: 0 0 20px; }
+  .office-slide h3 { margin-top: 0; color: #6b7280; font-size: 12px; font-weight: 500; }
+  .office-sheet { margin: 0 0 28px; }
+  .office-note { color: #6b7280; font-size: 12px; }
+  .office-error { border: 1px solid #fecaca; background: #fef2f2; border-radius: 10px; padding: 16px 18px; }
+  .office-bullet { color: #6b7280; }
+`
+
+export function ArtifactPreview({ artifact, preview, document, onClose, onOpenExternal }: ArtifactPreviewProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -53,6 +80,13 @@ export function ArtifactPreview({ artifact, preview, onClose, onOpenExternal }: 
     // srcDoc 里的文档与宿主同源;sandbox 空值会把脚本、表单、弹窗和顶层导航全部关掉。
     return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}"><style>${FRAME_STYLE}</style></head><body>${preview.text}</body></html>`
   }, [preview])
+
+  const officeHtml = useMemo(() => {
+    if (!document || document.format !== 'office' || !document.content) return ''
+    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}"><style>${FRAME_STYLE}${OFFICE_STYLE}</style></head><body>${document.content}</body></html>`
+  }, [document])
+
+  const size = preview?.size ?? document?.size ?? 0
 
   return (
     <div
@@ -75,7 +109,7 @@ export function ArtifactPreview({ artifact, preview, onClose, onOpenExternal }: 
             <h2 title={artifact.title}>{artifact.title}</h2>
             <p title={artifact.path ?? ''}>
               {artifact.path ?? artifact.url ?? ''}
-              {preview ? ` · ${formatSize(preview.size)}` : ''}
+              {size ? ` · ${formatSize(size)}` : ''}
             </p>
           </div>
           <button
@@ -98,7 +132,18 @@ export function ArtifactPreview({ artifact, preview, onClose, onOpenExternal }: 
         </header>
 
         <div className="owb-artifact-preview__body">
-          {!preview ? (
+          {document?.format === 'pdf' && document.data ? (
+            <PdfPreview data={document.data} title={artifact.title} />
+          ) : document?.format === 'office' ? (
+            <iframe
+              className="owb-artifact-preview__frame"
+              data-testid="artifact-preview-office"
+              title={`预览 ${artifact.title}`}
+              sandbox=""
+              referrerPolicy="no-referrer"
+              srcDoc={officeHtml}
+            />
+          ) : !preview ? (
             <div className="owb-artifact-preview__fallback" data-testid="artifact-preview-unsupported">
               <IconFile size={28} />
               <strong>此文件暂不支持预览</strong>

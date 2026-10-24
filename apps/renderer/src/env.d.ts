@@ -8,6 +8,11 @@ declare module '*.svg' {
   export default src
 }
 
+declare module '*?url' {
+  const src: string
+  export default src
+}
+
 interface ConversationInfo {
   id: string
   title: string
@@ -603,6 +608,17 @@ interface Window {
           size: number
           truncated: boolean
           format: 'markdown' | 'code' | 'text' | 'html'
+        } | null
+      }>
+      document: (input: { path: string }) => Promise<{
+        document: {
+          path: string
+          format: 'office' | 'pdf'
+          kind?: 'docx' | 'xlsx' | 'pptx'
+          content?: string
+          data?: Uint8Array
+          size: number
+          sha256: string
         } | null
       }>
       share: (input: { channelId: string; artifactId: string }) => Promise<{

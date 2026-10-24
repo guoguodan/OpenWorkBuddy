@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto'
 import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import {
+  MAX_OFFICE_BYTES,
+  MAX_PDF_BYTES,
+  officeErrorDocument,
+  officeKind,
+  renderOfficeDocument
+} from './office-preview.js'
 
 /** 不可信 HTML 预览的 CSP:禁脚本、禁网、只允许内联样式与 data/blob 图片 */
 export const PREVIEW_CSP = [
@@ -174,4 +181,85 @@ function completeUtf8PrefixLength(buffer: Buffer): number {
   // 非法起始字节交给解码器替换,不擅自吞掉内容。
   if (expected === 0) return end
   return end - lead < expected ? lead : end
+}
+
+export interface DocumentPreview {
+  path: string
+  /** Office 只返回经过转义的受限 HTML;PDF 返回原始字节供 PDF.js 绘制。 */
+  format: 'office' | 'pdf'
+  kind?: 'docx' | 'xlsx' | 'pptx'
+  content?: string
+  data?: Uint8Array
+  size: number
+  sha256: string
+  truncated?: boolean
+}
+
+const DOCUMENT_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.pdf'])
+
+export function isDocumentPreviewPath(filePath: string): boolean {
+  return DOCUMENT_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+}
+
+/**
+ * 应用内文档预览。
+ *
+ * 路径边界与 artifact.read 完全一致。Office 走受限 HTML 提取,PDF 只把字节交给
+ * 渲染进程用 PDF.js 绘制;两者都不启动外部程序,也不允许任意本地文件读取。
+ * 解析失败时返回错误 HTML 而不是抛出,页面仍能提供"用系统程序打开"。
+ */
+export async function readDocumentPreview(
+  workspaceRoot: string,
+  target: { path?: string }
+): Promise<DocumentPreview | null> {
+  if (!target.path) throw new Error('缺少 path')
+  const workspace = path.resolve(workspaceRoot)
+  const abs = path.resolve(workspace, target.path)
+  if (abs !== workspace && !abs.startsWith(workspace + path.sep)) {
+    throw new Error(`路径越界: ${target.path}`)
+  }
+  const info = await stat(abs)
+  if (!info.isFile()) throw new Error(`不是文件: ${target.path}`)
+  const ext = path.extname(abs).toLowerCase()
+  if (!DOCUMENT_EXTENSIONS.has(ext)) return null
+
+  if (ext === '.pdf') {
+    if (info.size > MAX_PDF_BYTES) {
+      throw new Error(`PDF 超过 60MB(${info.size} 字节),请用系统程序打开`)
+    }
+    const buf = await readFile(abs)
+    return {
+      path: target.path,
+      format: 'pdf',
+      data: new Uint8Array(buf),
+      size: info.size,
+      sha256: createHash('sha256').update(buf).digest('hex')
+    }
+  }
+
+  if (info.size > MAX_OFFICE_BYTES) {
+    throw new Error(`Office 文档超过 30MB(${info.size} 字节),请用系统程序打开`)
+  }
+  const buf = await readFile(abs)
+  const kind = officeKind(ext)
+  try {
+    return {
+      path: target.path,
+      format: 'office',
+      ...(kind ? { kind } : {}),
+      content: renderOfficeDocument(buf, ext),
+      size: info.size,
+      sha256: createHash('sha256').update(buf).digest('hex')
+    }
+  } catch (err) {
+    // 文档损坏不应该让预览入口直接报错,改为展示可读的诊断。
+    return {
+      path: target.path,
+      format: 'office',
+      ...(kind ? { kind } : {}),
+      content: officeErrorDocument((err as Error).message),
+      size: info.size,
+      sha256: createHash('sha256').update(buf).digest('hex')
+    }
+  }
 }

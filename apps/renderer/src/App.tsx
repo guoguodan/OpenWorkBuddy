@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView'
 import { type ArtifactInfo } from './components/ArtifactCards'
 import { ArtifactPanel } from './components/ArtifactPanel'
-import { ArtifactPreview, type TextPreviewInfo } from './components/ArtifactPreview'
+import {
+  ArtifactPreview,
+  type DocumentPreviewInfo,
+  type TextPreviewInfo
+} from './components/ArtifactPreview'
 import {
   Composer,
   type ComposerAttachment,
@@ -216,6 +220,7 @@ export default function App() {
   const [previewArtifact, setPreviewArtifact] = useState<{
     artifact: ArtifactInfo
     preview: TextPreviewInfo | null
+    document: DocumentPreviewInfo | null
   } | null>(null)
   const [notices, setNotices] = useState<SystemLine[]>([])
   const [modes, setModes] = useState<ModeInfo[]>([])
@@ -1131,7 +1136,16 @@ export default function App() {
       }
       if (!artifact.path) return
       const r = await window.openwb.artifact.read({ path: artifact.path })
-      setPreviewArtifact({ artifact, preview: (r.preview ?? null) as TextPreviewInfo | null })
+      if (r.preview) {
+        setPreviewArtifact({ artifact, preview: r.preview as TextPreviewInfo, document: null })
+        return
+      }
+      const d = await window.openwb.artifact.document({ path: artifact.path })
+      setPreviewArtifact({
+        artifact,
+        preview: null,
+        document: (d.document ?? null) as DocumentPreviewInfo | null
+      })
     } catch (err) {
       note('system', `打开交付物失败: ${(err as Error).message}`)
     }
@@ -1140,8 +1154,8 @@ export default function App() {
   /**
    * 打开用户消息里的附件。
    *
-   * 附件已经是工作区内的副本,预览仍复用 artifact.read 的工作区边界与 2MB 上限;
-   * 图片单独走受控图片窗口,其余不支持内嵌预览的格式明确回退到系统程序。
+   * 附件已经是工作区内的副本,文本复用 artifact.read 的工作区边界与 2MB 上限,
+   * Office/PDF 走 artifact.document,图片单独走受控图片窗口。
    */
   const openAttachment = async (attachment: {
     name: string
@@ -1164,14 +1178,7 @@ export default function App() {
         return
       }
       const r = await window.openwb.artifact.read({ path: attachment.path })
-      if (!r.preview) {
-        await window.openwb.artifact.preview({
-          kind: 'file',
-          path: attachment.path,
-          title: attachment.name
-        })
-        return
-      }
+      const d = r.preview ? null : await window.openwb.artifact.document({ path: attachment.path })
       setPreviewArtifact({
         artifact: {
           id: `attachment:${attachment.path}`,
@@ -1179,7 +1186,8 @@ export default function App() {
           title: attachment.name,
           path: attachment.path
         },
-        preview: (r.preview ?? null) as TextPreviewInfo | null
+        preview: (r.preview ?? null) as TextPreviewInfo | null,
+        document: (d?.document ?? null) as DocumentPreviewInfo | null
       })
     } catch (err) {
       note('warn', `无法打开附件「${attachment.name}」: ${(err as Error).message}`)
@@ -1648,6 +1656,7 @@ export default function App() {
         <ArtifactPreview
           artifact={previewArtifact.artifact}
           preview={previewArtifact.preview}
+          document={previewArtifact.document}
           onClose={() => setPreviewArtifact(null)}
           onOpenExternal={() => void openArtifactExternally(previewArtifact.artifact)}
         />

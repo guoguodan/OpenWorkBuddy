@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
 import { openExternal, openHtmlPreview, openImagePreview, openWithSystem, resolvePreview, type PreviewTarget } from './preview.js'
-import { readTextPreview } from './preview-policy.js'
+import { readDocumentPreview, readTextPreview } from './preview-policy.js'
 import { listWorkspaceFiles, resolveWorkspaceEntry } from './workspace-files.js'
 import {
   ATTACHMENT_ACCEPT,
@@ -253,6 +253,20 @@ ipcMain.handle('artifact.read', async (_e, input: { path?: unknown }) => {
   const workspace = resolvedWorkspace ?? resolveWorkspace()
   const preview = await readTextPreview(workspace, { path: input.path })
   return { preview }
+})
+
+/**
+ * Office / PDF 应用内预览。
+ *
+ * 只接受工作区内路径,并沿用 artifact.read 的边界与大小限制。
+ * 返回的是渲染进程可直接展示的受限 HTML 或 PDF 字节,不启动外部程序。
+ */
+ipcMain.handle('artifact.document', async (_e, input: { path?: unknown }) => {
+  await daemonReady
+  if (!input || typeof input.path !== 'string' || !input.path) throw new Error('缺少文件路径')
+  const workspace = resolvedWorkspace ?? resolveWorkspace()
+  const document = await readDocumentPreview(workspace, { path: input.path })
+  return { document }
 })
 
 ipcMain.handle('artifact.rename', async (_e, input: { artifactId?: unknown; title?: unknown }) => {

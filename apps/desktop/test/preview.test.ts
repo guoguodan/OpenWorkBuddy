@@ -2,7 +2,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { MAX_TEXT_BYTES, PREVIEW_CSP, readTextPreview, resolvePreview } from '../src/main/preview-policy.js'
+import {
+  MAX_TEXT_BYTES,
+  PREVIEW_CSP,
+  readDocumentPreview,
+  readTextPreview,
+  resolvePreview
+} from '../src/main/preview-policy.js'
 
 let root = ''
 
@@ -14,6 +20,8 @@ beforeEach(async () => {
   await writeFile(join(root, 'app.ts'), ['export const answer = 42', ''].join(String.fromCharCode(10)), 'utf8')
   await writeFile(join(root, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
   await writeFile(join(root, 'page.html'), '<p>hello</p>', 'utf8')
+  await writeFile(join(root, 'broken.docx'), Buffer.from('not a zip'))
+  await writeFile(join(root, 'paper.pdf'), Buffer.from('%PDF-1.4\n%fake\n%%EOF\n', 'ascii'))
 })
 
 afterEach(async () => {
@@ -104,5 +112,27 @@ describe('readTextPreview', () => {
     expect(r?.size).toBe(total)
     expect(Buffer.byteLength(r?.text ?? '', 'utf8')).toBeLessThanOrEqual(MAX_TEXT_BYTES)
     expect(r?.text).not.toContain('\uFFFD')
+  })
+})
+
+describe('readDocumentPreview', () => {
+  it('PDF 返回原始字节与摘要', async () => {
+    const result = await readDocumentPreview(root, { path: 'paper.pdf' })
+    expect(result?.format).toBe('pdf')
+    expect(result?.data?.length).toBe(21)
+    expect(Buffer.from(result?.data ?? []).subarray(0, 4).toString('ascii')).toBe('%PDF')
+    expect(result?.sha256).toHaveLength(64)
+  })
+
+  it('损坏的 Office 文档降级为安全错误页,不抛出', async () => {
+    const result = await readDocumentPreview(root, { path: 'broken.docx' })
+    expect(result?.format).toBe('office')
+    expect(result?.kind).toBe('docx')
+    expect(result?.content).toContain('无法解析此文档')
+  })
+
+  it('非文档扩展名与越界路径的处理与文本预览一致', async () => {
+    expect(await readDocumentPreview(root, { path: 'notes.md' })).toBeNull()
+    await expect(readDocumentPreview(root, { path: '../secret.docx' })).rejects.toThrow(/路径越界/)
   })
 })
