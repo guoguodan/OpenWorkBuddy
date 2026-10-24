@@ -14,6 +14,7 @@ import {
 import { z } from 'zod'
 import { listRemoteModels, modelFor, resolveModelName } from './model.js'
 import { probeServiceEndpoint } from './service-probe.js'
+import { budgetExceededMessage, evaluateTokenBudget } from './budget.js'
 import {
   loadModes,
   assertRequiredModes,
@@ -2129,6 +2130,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   // 模型在一轮开始时确定:中途改设置不能改变已经发出的请求,
   // 否则同一条回复可能前半段来自 A、后半段来自 B,日志也无法解释。
   const workspaceSettings = getWorkspaceSettings(db, workspaceId)
+  const tokenBudget = workspaceSettings.tokenBudget
   const selectedModel = resolveModelName(workspaceSettings.model)
   const configuredFallback = workspaceSettings.fallbackModel?.trim() ?? ''
   const fallbackModel = configuredFallback ? resolveModelName(configuredFallback) : null
@@ -2148,6 +2150,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   let reply = ''
   let totalInput = 0
   let totalOutput = 0
+  let budgetExceeded = false
   let activeSkill: string | undefined = explicitSkill
   let toolCalls = 0
   const wroteFiles = { value: false }
@@ -2321,6 +2324,23 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
 
       messages.push(...stepResponseMessages)
 
+      // 预算在每步请求后按真实 usage 结算。达到上限时保留这一步的回复,
+      // 但不再发起下一步或收尾请求,否则"硬上限"只是提示而不是限制。
+      const budget = evaluateTokenBudget(tokenBudget, totalInput + totalOutput)
+      if (budget.exceeded) {
+        budgetExceeded = true
+        emit({
+          type: 'budget.exceeded',
+          limit: tokenBudget,
+          used: totalInput + totalOutput,
+          message: budgetExceededMessage(tokenBudget, totalInput + totalOutput)
+        })
+        process.stderr.write(
+          `[budget] 达到 ${tokenBudget} token 上限(已用 ${totalInput + totalOutput}),停止后续模型调用\n`
+        )
+        break
+      }
+
       const active = skills.activeSkill()
       if (active && active.name !== activeSkill) {
         activeSkill = active.name
@@ -2341,7 +2361,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
 
     // 步数用尽时模型往往还在试下一步工具,此时 reply 为空,用户只看到一排失败的
     // 工具行,像"报错"。强制补一轮不带工具的收尾,把已有观测变成可读结论。
-    if (!reply.trim()) {
+    if (!reply.trim() && !budgetExceeded) {
       try {
         const wrapUp = streamText({
           model: activeModel,
@@ -2377,6 +2397,11 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
     }
 
     if (signal.aborted) throw new RunCancelledError()
+    if (!reply.trim() && budgetExceeded) {
+      // 预算耗尽且当前步没有可见文本时,必须解释为什么停下,不能留空白回复。
+      reply = budgetExceededMessage(tokenBudget, totalInput + totalOutput)
+      emit({ type: 'delta', text: reply })
+    }
 
     const finalNames = effectiveTools(mode, colleague ?? null)
     const trace = buildTrace(
@@ -2406,7 +2431,11 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
     const missing = checkDelivery(taskId, conversationId, wroteFiles.value)
     transitionTask(db, taskId, 'done', {
       resultRef: trace.outputSha256.slice(0, 16),
-      ...(missing ? { errorCode: 'DELIVERY_MISSING' } : {})
+      ...(budgetExceeded
+        ? { errorCode: 'BUDGET_EXCEEDED' }
+        : missing
+          ? { errorCode: 'DELIVERY_MISSING' }
+          : {})
     })
     notifyTaskFinished({ conversationId, taskId, status: 'done', title: text.slice(0, 80) || '未命名任务' })
     appendEvent(db, conversationId, 'run.finished', { taskId, steps: toolCalls })
@@ -2428,6 +2457,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
         ...(totalInput > 0 ? { input: totalInput } : {}),
         ...(totalOutput > 0 ? { output: totalOutput } : {})
       },
+      ...(budgetExceeded ? { budget: { limit: tokenBudget, used: totalInput + totalOutput } } : {}),
       ...(activeSkill ? { skill: activeSkill } : {})
     })
     return 'done'
@@ -2592,7 +2622,13 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
 
   if (msg.cmd === 'settings.set') {
     const key = msg.key
-    if (key !== 'permissionMode' && key !== 'taskTarget' && key !== 'model' && key !== 'fallbackModel') {
+    if (
+      key !== 'permissionMode' &&
+      key !== 'taskTarget' &&
+      key !== 'model' &&
+      key !== 'fallbackModel' &&
+      key !== 'tokenBudget'
+    ) {
       throw new Error('未知设置项')
     }
     if (key === 'permissionMode' && msg.value !== 'default' && msg.value !== 'fullAccess' && msg.value !== 'readOnly') {
@@ -2603,6 +2639,14 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     }
     if ((key === 'model' || key === 'fallbackModel') && typeof msg.value === 'string' && msg.value.includes('\n')) {
       throw new Error(`${key} 不能包含换行`)
+    }
+    if (key === 'tokenBudget') {
+      if (msg.value !== null && typeof msg.value !== 'number') {
+        throw new Error('tokenBudget 必须是数字或 null')
+      }
+      if (typeof msg.value === 'number' && (!Number.isFinite(msg.value) || msg.value < 0)) {
+        throw new Error('tokenBudget 必须是不小于 0 的数字')
+      }
     }
     const value = msg.value === null ? null : typeof msg.value === 'string' ? msg.value : String(msg.value)
     const settings = setWorkspaceSetting(db, workspaceId, key as SettingKey, value)

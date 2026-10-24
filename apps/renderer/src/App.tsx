@@ -73,6 +73,8 @@ type AgentEvent = {
   fallback?: boolean
   from?: string
   to?: string
+  limit?: number
+  used?: number
 }
 
 interface SystemLine {
@@ -210,7 +212,8 @@ export default function App() {
     permissionMode: 'default',
     taskTarget: 'local',
     model: null,
-    fallbackModel: null
+    fallbackModel: null,
+    tokenBudget: 0
   })
   const [modelLabel, setModelLabel] = useState('')
   const [modelOptions, setModelOptions] = useState<string[]>([])
@@ -468,6 +471,8 @@ export default function App() {
         note('warn', `主模型「${e.from ?? ''}」不可用,已切换到备用模型「${e.to ?? ''}」继续生成。`)
       } else if (e.type === 'model.fallback.recovered') {
         note('info', `备用模型「${e.to ?? ''}」已恢复生成。`)
+      } else if (e.type === 'budget.exceeded') {
+        note('warn', e.message ?? `本轮已达到 ${e.limit ?? 0} token 成本上限,已停止后续调用。`)
       } else if (e.type === 'ready' && e.workspace) {
         setWorkspacePath(e.workspace)
       } else if (e.type === 'artifact.created' && e.artifact) {
@@ -1030,6 +1035,16 @@ export default function App() {
     }
   }
 
+  const changeTokenBudget = async (value: number) => {
+    try {
+      const r = await window.openwb.settings.set({ key: 'tokenBudget', value })
+      setSettings(r.settings)
+      note('info', value > 0 ? `单轮 token 上限已设为 ${value}` : '已取消单轮 token 上限')
+    } catch (err) {
+      note('system', `保存成本上限失败: ${(err as Error).message}`)
+    }
+  }
+
   /**
    * 模型候选来自网关 /v1/models,不再写死常见模型名。
    * 失败时保留当前模型与自定义输入,并把原因交给菜单显示。
@@ -1338,6 +1353,7 @@ export default function App() {
               }}
               onPermissionChange={changePermission}
               onFallbackModelChange={changeFallbackModel}
+              onTokenBudgetChange={changeTokenBudget}
               onClose={() => setSheet(null)}
             />
           ) : sheet === 'automation' ? (

@@ -7,6 +7,7 @@ export interface WorkspaceSettingsInfo {
   taskTarget: 'local'
   model: string | null
   fallbackModel: string | null
+  tokenBudget: number
   disabledSkills?: string[]
   pinnedSkills?: string[]
   openSkillsDir?: string
@@ -26,6 +27,7 @@ interface SettingsPanelProps {
   /** 备用模型候选与主模型一致,来自网关真实清单。 */
   fallbackModelDraft?: string | null
   onFallbackModelChange: (name: string | null) => Promise<void>
+  onTokenBudgetChange: (value: number) => Promise<void>
   onClose: () => void
 }
 
@@ -58,15 +60,22 @@ export function SettingsPanel({
   onPermissionChange,
   fallbackModelDraft,
   onFallbackModelChange,
+  onTokenBudgetChange,
   onClose
 }: SettingsPanelProps) {
   const [saving, setSaving] = useState<PermissionMode | null>(null)
   const [fallbackDraft, setFallbackDraft] = useState('')
   const [fallbackSaving, setFallbackSaving] = useState(false)
+  const [budgetDraft, setBudgetDraft] = useState('')
+  const [budgetSaving, setBudgetSaving] = useState(false)
 
   useEffect(() => {
     setFallbackDraft(settings.fallbackModel ?? '')
   }, [settings.fallbackModel])
+
+  useEffect(() => {
+    setBudgetDraft(settings.tokenBudget > 0 ? String(settings.tokenBudget) : '')
+  }, [settings.tokenBudget])
 
   const currentFallback = (fallbackModelDraft ?? settings.fallbackModel ?? '').trim()
   const saveFallback = async (value: string | null) => {
@@ -167,6 +176,35 @@ export function SettingsPanel({
           <div className="owb-kv">
             <span>任务位置</span>
             <span>{settings.taskTarget === 'local' ? '本地电脑' : settings.taskTarget}</span>
+          </div>
+          <div className="owb-kv owb-kv--stack">
+            <span>单轮成本上限</span>
+            <div className="owb-fallback-row">
+              <input
+                value={budgetDraft}
+                onChange={(event) => setBudgetDraft(event.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="输入 token 数;留空表示不限制"
+                aria-label="单轮 token 上限"
+                inputMode="numeric"
+                data-testid="token-budget-input"
+                disabled={budgetSaving}
+              />
+              <button
+                type="button"
+                className="owb-sheet__action"
+                disabled={budgetSaving || budgetDraft === (settings.tokenBudget > 0 ? String(settings.tokenBudget) : '')}
+                onClick={() => {
+                  setBudgetSaving(true)
+                  void onTokenBudgetChange(Number(budgetDraft || 0)).finally(() => setBudgetSaving(false))
+                }}
+                data-testid="token-budget-save"
+              >
+                {budgetSaving ? '保存中…' : '保存'}
+              </button>
+            </div>
+            <span className="owb-settings-hint">
+              按网关返回的输入+输出 token 实时核算。达到上限后立即停止后续模型调用,已生成内容保留。
+            </span>
           </div>
           <div className="owb-kv owb-kv--stack">
             <span>工作区</span>

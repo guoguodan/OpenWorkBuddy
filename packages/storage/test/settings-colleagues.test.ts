@@ -78,6 +78,18 @@ describe('workspace settings', () => {
     expect(settings.model).toBe('demo-model')
   })
 
+  it('stores a non-negative integer token budget and ignores corrupt values', () => {
+    setWorkspaceSetting(handle.db, workspaceId, 'tokenBudget', '12000.9')
+    expect(getWorkspaceSettings(handle.db, workspaceId).tokenBudget).toBe(12000)
+    setWorkspaceSetting(handle.db, workspaceId, 'tokenBudget', 'abc')
+    expect(getWorkspaceSettings(handle.db, workspaceId).tokenBudget).toBe(0)
+    setWorkspaceSetting(handle.db, workspaceId, 'tokenBudget', '-5')
+    expect(getWorkspaceSettings(handle.db, workspaceId).tokenBudget).toBe(0)
+    setWorkspaceSetting(handle.db, workspaceId, 'tokenBudget', '3000')
+    setWorkspaceSetting(handle.db, workspaceId, 'tokenBudget', null)
+    expect(getWorkspaceSettings(handle.db, workspaceId).tokenBudget).toBe(0)
+  })
+
   it('persists disabled skills as a deduplicated sorted set', () => {
     setDisabledSkills(handle.db, workspaceId, ['beta', ' alpha ', 'beta', ''])
     expect(getWorkspaceSettings(handle.db, workspaceId).disabledSkills).toEqual(['alpha', 'beta'])

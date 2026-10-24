@@ -14,6 +14,7 @@ export const SETTING_KEYS = [
   'taskTarget',
   'model',
   'fallbackModel',
+  'tokenBudget',
   'disabledSkills',
   'pinnedSkills'
 ] as const
@@ -27,6 +28,8 @@ export interface WorkspaceSettings {
   model: string | null
   /** 主模型连续失败且尚未产生输出时使用的备用模型;为空表示不启用降级。 */
   fallbackModel: string | null
+  /** 单轮 token 硬上限(输入+输出)。0 表示不限制;超限后停止继续调用模型。 */
+  tokenBudget: number
   /** 已关闭自动触发的技能名;仅存显式关闭项,默认开启不落库。 */
   disabledSkills: string[]
   /** 已置顶技能名;排序只影响展示,不影响运行。 */
@@ -38,6 +41,7 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   taskTarget: 'local',
   model: null,
   fallbackModel: null,
+  tokenBudget: 0,
   disabledSkills: [],
   pinnedSkills: []
 }
@@ -73,9 +77,21 @@ export function getWorkspaceSettings(db: AppDatabase, workspaceId: string): Work
     taskTarget: 'local',
     model: map.get('model') ?? null,
     fallbackModel: map.get('fallbackModel') ?? null,
+    tokenBudget: parseTokenBudget(map.get('tokenBudget')),
     disabledSkills: parseNameList(map.get('disabledSkills'), true),
     pinnedSkills: parseNameList(map.get('pinnedSkills'))
   }
+}
+
+/**
+ * 预算来自可手改的本地设置,必须收敛成非负整数。
+ * 非法/负值按"不限"处理,不能在运行中把上限误读成 0 而拒绝一切请求。
+ */
+export function parseTokenBudget(raw: string | null | undefined): number {
+  if (!raw) return 0
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 0) return 0
+  return Math.trunc(value)
 }
 
 export function setWorkspaceSetting(
