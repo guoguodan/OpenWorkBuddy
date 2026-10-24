@@ -200,12 +200,12 @@ try {
   check(partialRejected.includes('全部置顶任务'), 'partial-reorder-rejected', String(partialRejected))
 
   await evaluate(`location.reload()`)
-  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="section-pinned"]'))`, 40000)
-  check(
-    JSON.stringify(await pinnedTitles()) === JSON.stringify(['排序C', '排序A', '排序B']),
-    'drag-order-survives-reload',
-    JSON.stringify(await pinnedTitles())
+  const reloadedOrder = await waitFor(
+    evaluate,
+    `JSON.stringify(Array.from(document.querySelector('[data-testid="section-pinned"]')?.parentElement?.querySelectorAll('[data-testid="conversation-item"]') ?? []).map((e) => e.querySelector('.owb-conv-item__title')?.textContent.trim().replace(/^\\s+/, ''))) === JSON.stringify(['排序C', '排序A', '排序B'])`,
+    40000
   )
+  check(reloadedOrder, 'drag-order-survives-reload', JSON.stringify(await pinnedTitles()))
 
   const shot = await send('Page.captureScreenshot', { format: 'png' }, 20000)
   if (shot.result?.data) {

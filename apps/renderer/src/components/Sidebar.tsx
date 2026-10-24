@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { TaskFilterState } from './TopBar'
 import {
   IconBell,
@@ -325,6 +325,29 @@ export function Sidebar({
     }
   }, [conversations, filter])
 
+  const workspaceGroupKeys = useMemo(
+    () => grouped.workspaces.map((group) => `ws:${group.key}`),
+    [grouped.workspaces]
+  )
+
+  // 与真实产品一致:节标题右侧的"全部折叠/展开"只作用于当前节的所有子分组。
+  const allWorkspaceGroupsCollapsed =
+    workspaceGroupKeys.length > 0 &&
+    workspaceGroupKeys.every((key) => Boolean(sectionState.collapsedGroups[key]))
+
+  const toggleAllWorkspaceGroups = useCallback(() => {
+    setSectionState((s) => {
+      const nextCollapsed = { ...s.collapsedGroups }
+      const keys = workspaceGroupKeys
+      const allCollapsed = keys.length > 0 && keys.every((key) => Boolean(nextCollapsed[key]))
+      for (const key of keys) {
+        if (allCollapsed) delete nextCollapsed[key]
+        else nextCollapsed[key] = true
+      }
+      return { ...s, collapsedGroups: nextCollapsed }
+    })
+  }, [workspaceGroupKeys])
+
   const submitRename = (id: string) => {
     const next = renaming?.value.trim() ?? ''
     if (next) onRename(id, next)
@@ -443,7 +466,12 @@ export function Sidebar({
     id: SectionId,
     label: string,
     items: ConversationSummary[],
-    options: { pinned?: boolean; key?: string } = {}
+    options: {
+      pinned?: boolean
+      key?: string
+      icon?: 'folder'
+      action?: { label: string; onClick: () => void; content: ReactNode }
+    } = {}
   ) => {
     if (items.length === 0) return null
     const collapsed = options.key
@@ -453,17 +481,47 @@ export function Sidebar({
     const shown = items.slice(0, visible)
     const remaining = items.length - shown.length
     return (
-      <div className={`owb-sidebar__group${options.key ? ' owb-sidebar__group--sub' : ''}`} key={options.key ?? id}>
+      <div
+        className={`owb-sidebar__group${options.key ? ' owb-sidebar__group--sub' : ''}`}
+        key={options.key ?? id}
+        data-workspace-group={options.key?.startsWith('ws:') ? options.key.slice(3) : undefined}
+      >
         <button
           className="owb-sidebar__section"
           data-testid={options.key ? 'conversation-subsection' : `section-${id}`}
           aria-expanded={!collapsed}
           onClick={() => (options.key ? toggleGroup(options.key) : toggleSection(id))}
         >
+          {options.icon === 'folder' ? (
+            <span className="owb-sidebar__folder-icon" aria-hidden="true">
+              <IconFolder size={14} />
+            </span>
+          ) : null}
+          <span className="owb-sidebar__section-label">{label} ({items.length})</span>
+          {options.action ? (
+            <span
+              className="owb-sidebar__section-action"
+              role="button"
+              tabIndex={0}
+              title={options.action.label}
+              aria-label={options.action.label}
+              onClick={(event) => {
+                event.stopPropagation()
+                options.action?.onClick()
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                event.stopPropagation()
+                options.action?.onClick()
+              }}
+            >
+              {options.action.content}
+            </span>
+          ) : null}
           <span className={`owb-sidebar__chevron${collapsed ? '' : ' owb-sidebar__chevron--open'}`}>
             <IconChevron size={12} />
           </span>
-          <span>{label} ({items.length})</span>
         </button>
         {collapsed ? null : (
           <div className="owb-sidebar__list">
@@ -626,7 +684,7 @@ export function Sidebar({
                             aria-expanded={!folded}
                             onClick={() => toggleGroup(key)}
                           >
-                            <IconFolder size={14} />
+                            <IconFolder size={14} className="owb-task-popover__folder-icon" />
                             <span>{g.title}</span>
                             <span className={`owb-sidebar__chevron${folded ? '' : ' owb-sidebar__chevron--open'}`}>
                               <IconChevron size={12} />
@@ -672,14 +730,42 @@ export function Sidebar({
               aria-expanded={!sectionState.collapsed.workspaces}
               onClick={() => toggleSection('workspaces')}
             >
+              <span className="owb-sidebar__section-label">工作空间 ({grouped.workspaces.length})</span>
+              <span
+                className="owb-sidebar__section-action"
+                role="button"
+                tabIndex={0}
+                data-testid="toggle-all-workspaces"
+                title={allWorkspaceGroupsCollapsed ? '展开所有工作空间' : '折叠所有工作空间'}
+                aria-label={allWorkspaceGroupsCollapsed ? '展开所有工作空间' : '折叠所有工作空间'}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  toggleAllWorkspaceGroups()
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  toggleAllWorkspaceGroups()
+                }}
+              >
+                <IconChevron
+                  size={12}
+                  className={allWorkspaceGroupsCollapsed ? '' : 'owb-sidebar__toggle-all--open'}
+                />
+              </span>
               <span className={`owb-sidebar__chevron${sectionState.collapsed.workspaces ? '' : ' owb-sidebar__chevron--open'}`}>
                 <IconChevron size={12} />
               </span>
-              <span>工作空间</span>
             </button>
             {sectionState.collapsed.workspaces
               ? null
-              : grouped.workspaces.map((g) => renderSection('workspaces', g.title, g.conversations, { key: `ws:${g.key}` }))}
+              : grouped.workspaces.map((g) =>
+                  renderSection('workspaces', g.title, g.conversations, {
+                    key: `ws:${g.key}`,
+                    icon: 'folder'
+                  })
+                )}
           </div>
         ) : null}
         {grouped.colleagues.length > 0 ? (
