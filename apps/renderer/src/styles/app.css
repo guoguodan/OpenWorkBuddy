@@ -2086,6 +2086,23 @@ input, textarea { font-family: inherit; }
 }
 .owb-footer { margin-top: auto; }
 
+/*
+ * 窗口较矮时首页必须整屏放下。
+ * 默认尺寸在 900 高窗口里会让推荐区溢出并出现滚动条,真实产品的首页不会
+ * 在首屏就出现滚动:这里按高度收紧留白与输入卡高度,而不是让内容被裁掉。
+ */
+@media (max-height: 820px) {
+  .owb-welcome__body { padding: 24px 0 12px; }
+  .owb-welcome__hero { margin-bottom: 12px; }
+  .owb-welcome__hero h1 { font-size: 26px; line-height: 36px; }
+  .owb-scene-tabs { margin-bottom: 28px; }
+  .owb-capabilities { margin-bottom: 12px; }
+  .owb-welcome .owb-composer__box { min-height: 168px; }
+  .owb-welcome .owb-composer__editor { min-height: 58px; }
+  .owb-suggestions { gap: 8px; margin-top: 20px; }
+  .owb-suggestion { height: 34px; padding: 6px 14px; font-size: 13px; line-height: 20px; }
+}
+
 /* ---- 消息中心:贴左侧栏的右侧抽屉 ---- */
 .owb-notifications-btn { position: relative; }
 .owb-notifications-btn__dot {

@@ -223,6 +223,11 @@ export default function App() {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  /**
+   * 快捷键监听只注册一次,但新建任务依赖当前的场景与忙碌状态。
+   * 用 ref 转发最新闭包,避免 Ctrl+N 沿用首次渲染时的旧场景。
+   */
+  const newTaskRef = useRef<() => void>(() => undefined)
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [conversationId, setConversationId] = useState('')
   /**
@@ -910,6 +915,11 @@ export default function App() {
     return r.conversationId
   }
 
+  // 每次渲染都刷新,快捷键真正按下时取到的是当前场景与忙碌状态。
+  newTaskRef.current = () => {
+    void newConversation()
+  }
+
   const useExpert = async (expert: { id: string; name: string }) => {
     if (busy) return
     try {
@@ -1370,6 +1380,11 @@ export default function App() {
         e.preventDefault()
         setCollapsed((v) => !v)
       }
+      // 真实产品用 Ctrl+N 新建任务;输入框里同样生效,与菜单项提示一致。
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        newTaskRef.current()
+      }
       if (e.key === 'Escape') {
         setPanel(null)
         setSheet(null)
@@ -1446,6 +1461,7 @@ export default function App() {
         onClearInput={() => setInput('')}
         onOpenSettings={() => setSheet('settings')}
         onOpenWorkspace={() => void openWorkspace()}
+        onNewTask={() => void newConversation()}
         filter={taskFilter}
         onFilterChange={setTaskFilter}
       />

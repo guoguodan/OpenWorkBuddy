@@ -190,10 +190,10 @@ try {
   })()`)
   check(modelPill !== null && !modelPill.includes('"clipped":true'), 'model-name-not-clipped', String(modelPill))
 
-  // 页面内菜单必须存在;原生 Electron 菜单已移除,不应出现英文 File/Edit。
+  // 页面内菜单必须与真实产品同构:文件 / 编辑 / 视图 / 帮助,且不出现英文 File。
   const menubar = await evaluate(`document.querySelector('.owb-menubar')?.innerText ?? ''`)
   check(
-    menubar.includes('编辑(E)') && menubar.includes('窗口(W)') && !menubar.includes('File'),
+    ['文件', '编辑', '视图', '帮助'].every((x) => menubar.includes(x)) && !menubar.includes('File'),
     'in-page-menubar-only',
     menubar.replace(/\n/g, ' | ')
   )
@@ -211,7 +211,7 @@ try {
   await typeIntoComposer('请总结 @')
   const pickerOpen = await waitFor(
     evaluate,
-    `Boolean(document.querySelector('[data-testid="composer-picker"][aria-label="添加上下文"]'))`
+    `Boolean(document.querySelector('[data-testid="composer-picker"][aria-label="添加文件作为回答背景"]'))`
   )
   const fileListed = await waitFor(
     evaluate,

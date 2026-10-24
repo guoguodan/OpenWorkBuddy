@@ -24,6 +24,7 @@ interface TopBarProps {
   onClearInput: () => void
   onOpenSettings: () => void
   onOpenWorkspace: () => void
+  onNewTask: () => void
   filter: TaskFilterState
   onFilterChange: (next: TaskFilterState) => void
 }
@@ -146,6 +147,7 @@ export function TopBar({
   onClearInput,
   onOpenSettings,
   onOpenWorkspace,
+  onNewTask,
   filter,
   onFilterChange
 }: TopBarProps) {
@@ -243,21 +245,24 @@ export function TopBar({
       </div>
 
       <nav className="owb-menubar" aria-label="主菜单">
-        {menu('edit', '编辑(E)', [
+        {menu('file', '文件', [
+          { text: '新建任务', hint: 'Ctrl+N', onPick: onNewTask },
+          { text: '打开工作区目录', onPick: onOpenWorkspace },
+          { text: '账号与设置', onPick: onOpenSettings }
+        ])}
+        {menu('edit', '编辑', [
           { text: '清空输入框', hint: 'Ctrl+Shift+X', onPick: onClearInput },
           { text: '搜索任务', hint: 'Ctrl+K', onPick: onFocusSearch }
         ])}
-        {menu('view', '窗口(W)', [
+        {menu('view', '视图', [
           { text: theme === 'dark' ? '切换到浅色主题' : '切换到深色主题', onPick: onToggleTheme },
           { text: collapsed ? '展开侧边栏' : '收起侧边栏', hint: 'Ctrl+B', onPick: onToggleCollapse },
           { text: '打开工作区目录', onPick: onOpenWorkspace }
         ])}
-        {menu('help', '帮助(H)', [
+        {menu('help', '帮助', [
           { text: '发送：Enter', onPick: () => undefined },
           { text: '换行：Shift + Enter', onPick: () => undefined },
-          { text: '设置与权限', onPick: onOpenSettings }
-        ])}
-        {menu('about', '关于(A)', [
+          { text: '设置与权限', onPick: onOpenSettings },
           { text: 'OpenWorkBuddy 0.0.1', onPick: () => undefined },
           { text: '本地优先的 AI 工作台', onPick: () => undefined }
         ])}
