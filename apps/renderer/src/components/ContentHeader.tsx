@@ -1,4 +1,5 @@
-import { IconChevron, IconFolder } from './Icons'
+import { useEffect, useRef, useState } from 'react'
+import { IconChevron, IconFolder, IconPin } from './Icons'
 
 interface ContentHeaderProps {
   title: string
@@ -6,18 +7,79 @@ interface ContentHeaderProps {
   workspaceLabel: string
   workspacePath: string
   busy: boolean
+  pinned: boolean
+  onPin: (pinned: boolean) => void
+  onRename: (title: string) => void
+  onDelete: () => void
 }
 
-export function ContentHeader({ title, modeLabel, workspaceLabel, workspacePath, busy }: ContentHeaderProps) {
+export function ContentHeader({
+  title,
+  modeLabel,
+  workspaceLabel,
+  workspacePath,
+  busy,
+  pinned,
+  onPin,
+  onRename,
+  onDelete
+}: ContentHeaderProps) {
+  const [menu, setMenu] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!menu) return
+    const onDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setMenu(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenu(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
+
+  useEffect(() => {
+    if (editing !== null) inputRef.current?.select()
+  }, [editing])
+
+  const submitRename = () => {
+    const next = editing?.trim()
+    setEditing(null)
+    if (next && next !== title) onRename(next)
+  }
+
   return (
-    <div className="owb-content-header">
+    <div className="owb-content-header" ref={rootRef}>
       <div className="owb-breadcrumb" title={`${workspacePath || workspaceLabel} / ${modeLabel} / ${title}`}>
         <IconFolder size={17} className="owb-breadcrumb__icon" />
         <span className="owb-breadcrumb__crumb">{workspaceLabel}</span>
         <span className="owb-breadcrumb__sep">/</span>
         <span className="owb-breadcrumb__crumb">{modeLabel}</span>
         <span className="owb-breadcrumb__sep">/</span>
-        <span className="owb-breadcrumb__current">{title}</span>
+        {editing !== null ? (
+          <input
+            ref={inputRef}
+            className="owb-breadcrumb__rename"
+            data-testid="header-rename-input"
+            value={editing}
+            maxLength={200}
+            onChange={(event) => setEditing(event.target.value)}
+            onBlur={submitRename}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') submitRename()
+              if (event.key === 'Escape') setEditing(null)
+            }}
+          />
+        ) : (
+          <span className="owb-breadcrumb__current" data-testid="header-title">{title}</span>
+        )}
       </div>
       <div className="owb-content-header__right">
         {busy ? (
@@ -26,7 +88,53 @@ export function ContentHeader({ title, modeLabel, workspaceLabel, workspacePath,
             执行中
           </span>
         ) : null}
-        <IconChevron size={16} className="owb-content-header__more" />
+        <button
+          type="button"
+          className="owb-content-header__menu-trigger"
+          title="任务操作"
+          aria-label="任务操作"
+          aria-haspopup="menu"
+          aria-expanded={menu}
+          data-testid="header-menu-trigger"
+          onClick={() => setMenu((value) => !value)}
+        >
+          <IconChevron size={16} className="owb-content-header__more" />
+        </button>
+        {menu ? (
+          <div className="owb-content-header__menu" role="menu" data-testid="header-menu">
+            <button
+              role="menuitem"
+              onClick={() => {
+                setEditing(title)
+                setMenu(false)
+              }}
+            >
+              重命名
+            </button>
+            <button
+              role="menuitem"
+              onClick={() => {
+                onPin(!pinned)
+                setMenu(false)
+              }}
+            >
+              <IconPin size={14} />
+              {pinned ? '取消置顶' : '置顶'}
+            </button>
+            <button
+              role="menuitem"
+              className="owb-content-header__danger"
+              disabled={busy}
+              title={busy ? '任务运行中,结束后才能删除' : undefined}
+              onClick={() => {
+                setMenu(false)
+                onDelete()
+              }}
+            >
+              删除任务
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   )

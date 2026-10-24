@@ -211,6 +211,7 @@ export default function App() {
   const [workspacePath, setWorkspacePath] = useState('')
   const workspaceLabel = workspacePath ? baseName(workspacePath) : '选择工作空间'
   const currentTitle = conversations.find((c) => c.id === conversationId)?.title ?? ''
+  const currentPinned = Boolean(conversations.find((c) => c.id === conversationId)?.pinnedAt)
   const modeLabel = modes.find((m) => m.id === mode)?.displayName ?? mode
   const activeChannel = channels.find((c) => c.id === activeChannelId) ?? null
 
@@ -1101,6 +1102,16 @@ export default function App() {
               workspaceLabel={workspaceLabel}
               workspacePath={workspacePath}
               busy={busy}
+              pinned={currentPinned}
+              onPin={(pinned) => {
+                if (conversationId) void pinConversation(conversationId, pinned)
+              }}
+              onRename={(title) => {
+                if (conversationId) void renameConversation(conversationId, title)
+              }}
+              onDelete={() => {
+                if (conversationId) void removeConversation(conversationId)
+              }}
             />
           ) : null}
 

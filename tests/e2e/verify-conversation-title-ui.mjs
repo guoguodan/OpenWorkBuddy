@@ -155,7 +155,9 @@ try {
       const titles = Array.from(document.querySelectorAll('.owb-conv-item__title'))
         .map((e) => (e.textContent ?? '').trim())
         .filter(Boolean)
-      return titles.length > 0 && !titles.every((t) => t === '新会话')
+      // 不能把“默认会话”之类已有标题当作成功信号:首轮自动标题是异步落库的,
+      // 过早取样会在标题广播到达前读到旧值,造成随机通过。
+      return titles.some((t) => t.includes('季度销售') || t.includes('分析报告'))
     })()`,
     25000
   )
