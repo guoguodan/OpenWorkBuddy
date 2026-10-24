@@ -60,6 +60,8 @@ import {
   setConversationExpert,
   setConversationPinned,
   listMessages,
+  getMessage,
+  setMessageFeedback,
   listPlugins,
   deletePlugin,
   migrateOrThrow,
@@ -1481,7 +1483,15 @@ async function runMockInner(
       firstTurn: input.firstTurn === true,
       signal
     }).catch((err: Error) => process.stderr.write(`[title] 自动标题失败: ${err.message}\n`))
-    emit({ type: 'done', conversationId: input.conversationId, usage: { input: 0, output: 0 } })
+    // 助手消息在分支里已经落库;把真实 ID 一并交给界面,点赞/点踩才能绑定到
+    // 持久化实体,而不是只存在于当前渲染进程的临时消息。
+    const last = listMessages(db, input.conversationId).at(-1)
+    emit({
+      type: 'done',
+      conversationId: input.conversationId,
+      usage: { input: 0, output: 0 },
+      ...(last?.role === 'assistant' ? { messageId: last.id } : {})
+    })
     return 'done'
   }
 
@@ -2048,7 +2058,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupt
       `[trace] ${mode.id} sha256=${trace.outputSha256.slice(0, 12)} tools=[${finalNames.join(',')}] skill=${activeSkill ?? '-'} -> ${file}\n`
     )
 
-    appendMessage(db, {
+    const assistantSaved = appendMessage(db, {
       conversationId,
       role: 'assistant',
       content: { text: reply },
@@ -2077,6 +2087,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupt
     emit({
       type: 'done',
       conversationId,
+      messageId: assistantSaved.record.id,
       usage: {
         ...(totalInput > 0 ? { input: totalInput } : {}),
         ...(totalOutput > 0 ? { output: totalOutput } : {})
@@ -2761,6 +2772,31 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     return true
   }
 
+  if (msg.cmd === 'message.feedback') {
+    if (typeof msg.messageId !== 'string' || !msg.messageId) throw new Error('缺少 messageId')
+    if (msg.feedback !== null && msg.feedback !== 'like' && msg.feedback !== 'dislike') {
+      throw new Error('非法反馈值')
+    }
+    const existing = getMessage(db, msg.messageId)
+    if (!existing) throw new Error('消息不存在')
+    const owner = getConversation(db, existing.conversationId)
+    // 跨工作区消息不能通过猜测 ID 修改,反馈接口也必须做归属校验。
+    if (!owner || owner.workspaceId !== workspaceId) throw new Error('消息不属于当前工作区')
+    if (existing.role !== 'assistant') throw new Error('只能对助手消息反馈')
+    const reason = typeof msg.reason === 'string' ? msg.reason : null
+    const updated = setMessageFeedback(db, msg.messageId, msg.feedback, reason)
+    if (!updated) throw new Error('消息不存在')
+    emit({
+      ...base,
+      type: 'message.feedback',
+      messageId: updated.id,
+      conversationId: updated.conversationId,
+      feedback: updated.feedback,
+      feedbackReason: updated.feedbackReason
+    })
+    return true
+  }
+
   if (msg.cmd === 'conversation.reorderPinned') {
     if (!Array.isArray(msg.orderedIds) || msg.orderedIds.some((id) => typeof id !== 'string')) {
       throw new Error('缺少 orderedIds')
@@ -3245,7 +3281,12 @@ async function handleFrame(value: unknown) {
     return
   }
 
-  emit({ type: 'conversation.ready', conversationId, seq: saved.record.seq })
+  emit({
+    type: 'conversation.ready',
+    conversationId,
+    seq: saved.record.seq,
+    messageId: saved.record.id
+  })
   startingRuns.add(conversationId)
   try {
     await runAgent({

@@ -116,6 +116,8 @@ interface HistoryMessage {
   status: string
   tokenIn: number
   tokenOut: number
+  feedback: 'like' | 'dislike' | null
+  feedbackReason: string | null
   createdAt: string
 }
 
@@ -332,6 +334,11 @@ interface Window {
         conversationId: string
         title: string
       }>
+      feedback: (input: {
+        messageId: string
+        feedback: 'like' | 'dislike' | null
+        reason?: string
+      }) => Promise<{ messageId: string; feedback: 'like' | 'dislike' | null; feedbackReason: string | null }>
       remove: (conversationId: string) => Promise<{ conversationId: string }>
       onEvent: (cb: (e: unknown) => void) => () => void
     }

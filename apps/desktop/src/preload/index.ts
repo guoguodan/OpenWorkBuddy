@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('openwb', {
     pin: (input: { conversationId: string; pinned: boolean }) => ipcRenderer.invoke('conversation.pin', input),
     reorderPinned: (orderedIds: string[]) => ipcRenderer.invoke('conversation.reorderPinned', orderedIds),
     rename: (input: { conversationId: string; title: string }) => ipcRenderer.invoke('conversation.rename', input),
+    feedback: (input: { messageId: string; feedback: 'like' | 'dislike' | null; reason?: string }) =>
+      ipcRenderer.invoke('message.feedback', input),
     remove: (conversationId: string) => ipcRenderer.invoke('conversation.delete', conversationId),
     onEvent: (cb: (e: unknown) => void) => {
       const handler = (_: unknown, e: unknown) => cb(e)

@@ -227,7 +227,9 @@ export default function App() {
             role: m.role === 'user' ? 'user' : 'assistant',
             text: content?.text ?? '',
             seq: m.seq,
-            createdAt: m.createdAt
+            createdAt: m.createdAt,
+            feedback: m.feedback ?? null,
+            feedbackReason: m.feedbackReason ?? null
           } satisfies ChatMessage
         })
     )
@@ -389,11 +391,30 @@ export default function App() {
       } else if (e.type === 'conversation.ready' && e.conversationId) {
         setConversationId(e.conversationId)
         activeConversation.current = e.conversationId
+        // 用户消息以 daemon 落库后的真实 ID 为准:发送时的临时 ID 只用于先显示,
+        // 不替换就会让复制之后的扩展操作(重放/回退)找不到实体。
+        const messageId = (e as { messageId?: string }).messageId
+        if (messageId) {
+          setMessages((list) => {
+            for (let i = list.length - 1; i >= 0; i--) {
+              const item = list[i]!
+              if (item.role === 'user' && item.id.startsWith('u-')) {
+                return list.map((m, idx) => (idx === i ? { ...m, id: messageId } : m))
+              }
+            }
+            return list
+          })
+        }
       } else if (e.type === 'done') {
         streaming.current = false
         setBusy(false)
+        const messageId = (e as { messageId?: string }).messageId
         setMessages((list) =>
-          list.map((m, i) => (i === list.length - 1 && m.role === 'assistant' ? { ...m, streaming: false } : m))
+          list.map((m, i) =>
+            i === list.length - 1 && m.role === 'assistant'
+              ? { ...m, streaming: false, ...(messageId ? { id: messageId } : {}) }
+              : m
+          )
         )
         if (e.usage && (e.usage.input || e.usage.output)) {
           note('usage', `本轮回合计费: 输入 ${e.usage.input ?? 0} / 输出 ${e.usage.output ?? 0} token (接口返回)`)
@@ -484,6 +505,47 @@ export default function App() {
       note('system', `[错误] 停止失败: ${(err as Error).message}`)
     }
   }
+
+  const applyFeedback = useCallback(
+    async (message: ChatMessage, feedback: 'like' | 'dislike' | null, reason?: string) => {
+      if (!message.id || !message.id.match(/^[0-9A-Za-z]+$/)) {
+        note('warn', '这条消息还在发送中,完成后才能反馈。')
+        return
+      }
+      const previous = { feedback: message.feedback ?? null, feedbackReason: message.feedbackReason ?? null }
+      // 先乐观更新:点赞/点踩要即时响应;daemon 失败时回滚到原状态,
+      // 不能让界面显示成功而数据库里没有记录。
+      setMessages((list) =>
+        list.map((item) =>
+          item.id === message.id
+            ? {
+                ...item,
+                feedback,
+                feedbackReason: feedback === 'dislike' ? (reason ?? null) : null
+              }
+            : item
+        )
+      )
+      try {
+        const updated = await window.openwb.conversation.feedback({
+          messageId: message.id,
+          feedback,
+          ...(reason ? { reason } : {})
+        })
+        setMessages((list) =>
+          list.map((item) =>
+            item.id === message.id
+              ? { ...item, feedback: updated.feedback, feedbackReason: updated.feedbackReason }
+              : item
+          )
+        )
+      } catch (err) {
+        setMessages((list) => list.map((item) => (item.id === message.id ? { ...item, ...previous } : item)))
+        note('system', `[错误] 反馈保存失败: ${(err as Error).message}`)
+      }
+    },
+    [note]
+  )
 
   const switchConversation = async (id: string) => {
     if (busy) return
@@ -923,6 +985,7 @@ export default function App() {
                   onOpenArtifact={(a) => void openArtifact(a)}
                   onShareArtifact={(a) => void shareArtifact(a)}
                   shareChannelName={activeChannel?.name ?? null}
+                  onFeedback={applyFeedback}
                 />
                 <div className="owb-chat__input">
                   {activeColleague ? (

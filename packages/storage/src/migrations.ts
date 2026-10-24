@@ -421,6 +421,17 @@ ALTER TABLE conversation ADD COLUMN expert_id TEXT;
 -- 后续轮次自动标题不得覆盖用户的选择.
 ALTER TABLE conversation ADD COLUMN custom_title TEXT;
 `
+  },
+  {
+    version: 12,
+    name: 'message_feedback',
+    sql: `-- 消息级反馈:点赞/点踩绑定具体助手消息,刷新或重启后仍能恢复。
+-- feedback_reason 单独存放,避免以后增加原因枚举时再改一次表结构;
+-- 清除反馈时两列必须一起清空,不能让原因残留在未点踩的消息上。
+ALTER TABLE message ADD COLUMN feedback TEXT
+  CHECK (feedback IS NULL OR feedback IN ('like','dislike'));
+ALTER TABLE message ADD COLUMN feedback_reason TEXT;
+`
   }
 ]
 

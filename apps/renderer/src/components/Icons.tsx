@@ -181,6 +181,18 @@ export function IconLink({ size = 18, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="M10 13.5a4 4 0 0 0 5.7 0l2.8-2.8a4 4 0 1 0-5.7-5.7l-1.4 1.4" /><path d="M14 10.5a4 4 0 0 0-5.7 0l-2.8 2.8a4 4 0 1 0 5.7 5.7l1.4-1.4" /></svg>
 }
 
+export function IconCopy({ size = 14, className }: IconProps) {
+  return <svg {...base(size)} className={className}><rect x="8.5" y="8.5" width="11" height="11" rx="2" /><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5" /></svg>
+}
+
+export function IconThumbUp({ size = 14, className }: IconProps) {
+  return <svg {...base(size)} className={className}><path d="M7.5 10.5 11 4.2a1.6 1.6 0 0 1 1.6-1.2c.9 0 1.6.7 1.6 1.6v4.6h4.2a2 2 0 0 1 2 2.4l-1.2 6.2a2 2 0 0 1-2 1.6H7.5" /><rect x="3.5" y="10.5" width="4" height="9" rx="1.4" /></svg>
+}
+
+export function IconThumbDown({ size = 14, className }: IconProps) {
+  return <svg {...base(size)} className={className}><path d="M7.5 13.5 11 19.8a1.6 1.6 0 0 0 1.6 1.2c.9 0 1.6-.7 1.6-1.6v-4.6h4.2a2 2 0 0 0 2-2.4l-1.2-6.2a2 2 0 0 0-2-1.6H7.5" /><rect x="3.5" y="4.5" width="4" height="9" rx="1.4" /></svg>
+}
+
 export function IconMoon({ size = 16, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="M20 13.5A8 8 0 0 1 10.5 4a8 8 0 1 0 9.5 9.5Z" /></svg>
 }

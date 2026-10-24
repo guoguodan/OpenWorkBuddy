@@ -64,6 +64,8 @@ export const message = sqliteTable(
     model: text('model'),
     tokenIn: integer('token_in').notNull().default(0),
     tokenOut: integer('token_out').notNull().default(0),
+    feedback: text('feedback', { enum: ['like', 'dislike'] }),
+    feedbackReason: text('feedback_reason'),
     createdAt: text('created_at').notNull()
   },
   (t) => [

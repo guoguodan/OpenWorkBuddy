@@ -212,6 +212,28 @@ ipcMain.handle('conversation.rename', async (_e, input: { conversationId: string
   })
 })
 
+ipcMain.handle(
+  'message.feedback',
+  async (
+    _e,
+    input: { messageId?: unknown; feedback?: unknown; reason?: unknown }
+  ) => {
+    await daemonReady
+    if (!input || typeof input.messageId !== 'string' || !input.messageId) throw new Error('非法消息 ID')
+    if (input.feedback !== null && input.feedback !== 'like' && input.feedback !== 'dislike') {
+      throw new Error('非法反馈值')
+    }
+    if (input.reason !== undefined && typeof input.reason !== 'string') throw new Error('非法反馈原因')
+    const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : undefined
+    return request<{ messageId: string; feedback: 'like' | 'dislike' | null; feedbackReason: string | null }>({
+      cmd: 'message.feedback',
+      messageId: input.messageId,
+      feedback: input.feedback,
+      ...(reason ? { reason } : {})
+    })
+  }
+)
+
 ipcMain.handle('channel.list', async () => {
   await daemonReady
   return request<{ channels: unknown[] }>({ cmd: 'channel.list' })

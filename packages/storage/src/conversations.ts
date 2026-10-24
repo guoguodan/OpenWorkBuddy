@@ -6,6 +6,7 @@ import { enqueuePendingTx } from './sync.js'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'streaming' | 'done' | 'interrupted'
+export type MessageFeedback = 'like' | 'dislike'
 
 export interface WorkspaceRecord {
   id: string
@@ -356,6 +357,8 @@ export interface MessageRecord {
   model: string | null
   tokenIn: number
   tokenOut: number
+  feedback: MessageFeedback | null
+  feedbackReason: string | null
   createdAt: string
 }
 
@@ -409,6 +412,8 @@ export function appendMessage(
       model: input.model ?? null,
       tokenIn: safeTokenCount(input.tokenIn),
       tokenOut: safeTokenCount(input.tokenOut),
+      feedback: null,
+      feedbackReason: null,
       createdAt: at
     }
     tx.insert(message).values(row).run()
@@ -442,8 +447,44 @@ function toMessageRecord(row: typeof message.$inferSelect): MessageRecord {
     model: row.model,
     tokenIn: row.tokenIn,
     tokenOut: row.tokenOut,
+    feedback: row.feedback ?? null,
+    feedbackReason: row.feedbackReason ?? null,
     createdAt: row.createdAt
   }
+}
+
+export function getMessage(db: AppDatabase, id: string): MessageRecord | undefined {
+  const row = db.select().from(message).where(eq(message.id, id)).all()[0]
+  return row ? toMessageRecord(row) : undefined
+}
+
+/**
+ * 设置或清除一条消息的反馈。
+ *
+ * 反馈只对助手消息有意义;存储层只保证 feedback/reason 一致,
+ * 归属校验(消息属于当前工作区)由 daemon 在命令入口完成。
+ * 传 null 会同时清空原因,避免出现"无反馈但保留点踩理由"的脏状态。
+ */
+export function setMessageFeedback(
+  db: AppDatabase,
+  messageId: string,
+  feedback: MessageFeedback | null,
+  reason?: string | null
+): MessageRecord | undefined {
+  const existing = getMessage(db, messageId)
+  if (!existing) return undefined
+  const nextReason =
+    feedback === 'dislike'
+      ? (typeof reason === 'string' ? reason.trim().slice(0, 500) || null : existing.feedbackReason ?? null)
+      : null
+  db.update(message)
+    .set({
+      feedback: feedback ?? null,
+      feedbackReason: nextReason
+    })
+    .where(eq(message.id, messageId))
+    .run()
+  return getMessage(db, messageId)
 }
 
 export function listMessages(

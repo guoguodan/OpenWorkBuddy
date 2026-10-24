@@ -11,6 +11,8 @@ import {
   createConversation,
   appendMessage,
   listMessages,
+  getMessage,
+  setMessageFeedback,
   deleteConversation,
   appendEvent,
   listEvents
@@ -176,6 +178,53 @@ describe('conversation and message', () => {
     expect(b.record.id).toBe(a.record.id)
     expect(listMessages(db, conv.id)).toHaveLength(1)
     raw.close()
+  })
+
+  it('persists like/dislike and clears the reason together', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    const saved = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: { text: 'answer' }
+    })
+    expect(saved.record.feedback).toBeNull()
+
+    const liked = setMessageFeedback(db, saved.record.id, 'like')
+    expect(liked?.feedback).toBe('like')
+    expect(liked?.feedbackReason).toBeNull()
+
+    const disliked = setMessageFeedback(db, saved.record.id, 'dislike', 'code_error|示例')
+    expect(disliked?.feedback).toBe('dislike')
+    expect(disliked?.feedbackReason).toBe('code_error|示例')
+
+    const cleared = setMessageFeedback(db, saved.record.id, null)
+    expect(cleared?.feedback).toBeNull()
+    expect(cleared?.feedbackReason).toBeNull()
+    expect(getMessage(db, saved.record.id)?.feedback).toBeNull()
+    raw.close()
+  })
+
+  it('keeps feedback across reopen and returns it in listMessages', () => {
+    const first = openDatabase(dbPath)
+    migrateOrThrow(first.raw, { dbPath })
+    const ws = ensureWorkspace(first.db, dir)
+    const conv = createConversation(first.db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    const saved = appendMessage(first.db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: { text: 'answer' }
+    })
+    setMessageFeedback(first.db, saved.record.id, 'dislike', 'misunderstanding')
+    first.raw.close()
+
+    const second = openDatabase(dbPath)
+    const rows = listMessages(second.db, conv.id)
+    expect(rows[0]!.feedback).toBe('dislike')
+    expect(rows[0]!.feedbackReason).toBe('misunderstanding')
+    second.raw.close()
   })
 
   it('isolates messages between conversations', () => {

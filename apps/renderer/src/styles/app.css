@@ -530,6 +530,71 @@ input, textarea { font-family: inherit; }
 .owb-msg__text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.7; }
 .owb-msg--assistant .owb-msg__text { padding: 0 16px; }
 
+/* 消息级操作:默认弱化,悬停/聚焦时显现,避免每条回复都堆一排醒目的按钮。 */
+.owb-msg-actions {
+  display: flex; align-items: center; gap: 2px; margin-top: 6px;
+  min-height: 26px; opacity: 0; transition: opacity 0.16s ease;
+}
+.owb-msg--assistant .owb-msg-actions { padding: 0 16px; }
+.owb-msg:hover .owb-msg-actions, .owb-msg-actions:focus-within { opacity: 1; }
+.owb-msg-action {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: 26px; height: 26px; padding: 0 6px;
+  border: 0; border-radius: var(--owb-radius-md, 6px);
+  background: transparent; color: var(--owb-text-tertiary);
+  font: inherit; font-size: 11px; cursor: pointer;
+}
+.owb-msg-action:hover { background: var(--owb-bg-hover); color: var(--owb-text-primary); }
+.owb-msg-action:focus-visible { outline: 2px solid var(--owb-brand-6); outline-offset: 1px; }
+.owb-msg-action--active { color: var(--owb-brand-8); }
+.owb-msg-action__text { white-space: nowrap; }
+
+/* 点踩原因:复刻真实产品的多选原因 + 其他文本。 */
+.owb-feedback-backdrop {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+}
+.owb-feedback {
+  width: min(420px, calc(100vw - 40px));
+  border: 1px solid var(--owb-border-subtle);
+  border-radius: var(--owb-radius-lg);
+  background: var(--owb-bg-primary);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  padding: 16px;
+}
+.owb-feedback__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.owb-feedback__title { font-size: 14px; font-weight: 600; }
+.owb-feedback__close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border: 0; border-radius: var(--owb-radius-md, 6px);
+  background: transparent; color: var(--owb-text-tertiary); cursor: pointer;
+}
+.owb-feedback__close:hover { background: var(--owb-bg-hover); color: var(--owb-text-primary); }
+.owb-feedback__items { display: flex; flex-wrap: wrap; gap: 8px; }
+.owb-feedback__item {
+  padding: 6px 10px; border: 1px solid var(--owb-border-subtle);
+  border-radius: var(--owb-radius-full); background: var(--owb-bg-secondary);
+  color: var(--owb-text-secondary); font: inherit; font-size: 12px; cursor: pointer;
+}
+.owb-feedback__item:hover { border-color: var(--owb-brand-6); color: var(--owb-text-primary); }
+.owb-feedback__item--active { border-color: var(--owb-brand-7); background: var(--owb-brand-1, rgba(59,130,246,.12)); color: var(--owb-brand-8); }
+.owb-feedback__other { position: relative; margin-top: 12px; }
+.owb-feedback__other textarea {
+  width: 100%; resize: vertical; min-height: 70px;
+  padding: 8px 10px 20px; box-sizing: border-box;
+  border: 1px solid var(--owb-border-subtle); border-radius: var(--owb-radius-lg);
+  background: var(--owb-bg-secondary); color: var(--owb-text-primary); font: inherit; font-size: 13px;
+}
+.owb-feedback__other textarea:focus { outline: 2px solid var(--owb-brand-6); outline-offset: -1px; }
+.owb-feedback__counter { position: absolute; right: 10px; bottom: 7px; font-size: 10px; color: var(--owb-text-tertiary); }
+.owb-feedback__footer { display: flex; justify-content: flex-end; margin-top: 14px; }
+.owb-feedback__submit {
+  padding: 7px 14px; border: 0; border-radius: var(--owb-radius-full);
+  background: var(--owb-brand-8); color: #fff; font: inherit; font-size: 12px; cursor: pointer;
+}
+.owb-feedback__submit:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* 工具调用 */
 .owb-tools { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .owb-tool {
