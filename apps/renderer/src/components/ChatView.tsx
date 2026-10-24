@@ -32,7 +32,7 @@ export interface ChatMessage {
   feedback?: 'like' | 'dislike' | null
   feedbackReason?: string | null
   /** 用户本轮添加的附件。只展示原始文件名,内部存储路径不进入气泡。 */
-  attachments?: Array<{ name: string; path: string; kind?: 'file' | 'image' }>
+  attachments?: Array<{ name: string; path: string; size?: number; kind?: 'file' | 'image' }>
 }
 
 interface ChatViewProps {
@@ -44,6 +44,8 @@ interface ChatViewProps {
   /** 从全局搜索跳转过来时,需要滚到并高亮的消息序号;nonce 让同一序号可重复触发 */
   focusRequest?: { seq: number; nonce: number } | null
   onOpenArtifact: (artifact: ArtifactInfo) => void
+  /** 打开用户消息里的附件;路径已由主进程限定在工作区。 */
+  onOpenAttachment?: (attachment: { name: string; path: string; kind?: 'file' | 'image' }) => void
   onShareArtifact?: ((artifact: ArtifactInfo) => void) | undefined
   shareChannelName?: string | null | undefined
   onFeedback?: (message: ChatMessage, feedback: 'like' | 'dislike' | null, reason?: string) => Promise<void>
@@ -375,6 +377,7 @@ export function ChatView({
   busy,
   focusRequest,
   onOpenArtifact,
+  onOpenAttachment,
   onShareArtifact,
   shareChannelName,
   onFeedback,
@@ -439,15 +442,18 @@ export function ChatView({
                       {m.attachments && m.attachments.length > 0 ? (
                         <div className="owb-msg__attachments" data-testid="message-attachments">
                           {m.attachments.map((file) => (
-                            <span
+                            <button
                               key={file.path}
+                              type="button"
                               className="owb-msg__attachment"
                               data-kind={file.kind ?? 'file'}
-                              title={file.path}
+                              title={`${file.name}\n${file.path}`}
+                              onClick={() => onOpenAttachment?.(file)}
+                              data-testid="message-attachment"
                             >
                               {file.kind === 'image' ? <IconImage size={13} /> : <IconFile size={13} />}
                               <span className="owb-msg__attachment-name">{file.name}</span>
-                            </span>
+                            </button>
                           ))}
                         </div>
                       ) : null}

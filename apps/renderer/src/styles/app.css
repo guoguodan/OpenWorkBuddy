@@ -554,7 +554,13 @@ input, textarea { font-family: inherit; }
   height: 26px; padding: 0 9px; border: 1px solid var(--owb-border-default);
   border-radius: var(--owb-radius-full); background: var(--owb-bg-card);
   color: var(--owb-text-secondary); font-size: 12px;
+  cursor: pointer; font-family: inherit;
 }
+.owb-msg__attachment:hover {
+  background: var(--owb-bg-hover); border-color: var(--owb-border-strong);
+  color: var(--owb-text-primary);
+}
+.owb-msg__attachment:focus-visible { outline: 2px solid var(--owb-brand-6); outline-offset: 1px; }
 .owb-msg__attachment > svg { flex-shrink: 0; color: var(--owb-text-tertiary); }
 .owb-msg__attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

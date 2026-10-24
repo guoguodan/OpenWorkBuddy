@@ -14,7 +14,7 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -257,6 +257,45 @@ try {
   check(
     await evaluate(`document.querySelector('[data-testid="message-attachments"]')?.textContent?.includes('需求 说明.md')`),
     '历史恢复的附件仍显示原始文件名'
+  )
+  check(
+    await evaluate(`document.querySelector('[data-testid="message-attachment"]')?.tagName === 'BUTTON'`),
+    '消息附件是可交互的打开入口'
+  )
+  await evaluate(`document.querySelector('[data-testid="message-attachment"]')?.click()`)
+  check(
+    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="artifact-preview"]'))`, 15000),
+    '点击历史附件在应用内打开预览'
+  )
+  check(
+    await evaluate(`document.querySelector('[data-testid="artifact-preview"]')?.textContent?.includes('需求 说明.md')`),
+    '附件预览显示原始文件名'
+  )
+  const attachmentPreview = await evaluate(
+    `document.querySelector('[data-testid="artifact-preview-content"]')?.textContent ?? ''`
+  )
+  check(attachmentPreview.includes('验收附件'), '附件正文可读取', attachmentPreview.slice(0, 120))
+  check(
+    !attachmentPreview.includes('.openwb/attachments'),
+    '附件预览正文不暴露内部存储路径'
+  )
+  await evaluate(`document.querySelector('[data-testid="artifact-preview-close"]')?.click()`)
+  check(
+    await waitFor(evaluate, `!document.querySelector('[data-testid="artifact-preview"]')`),
+    '关闭附件预览'
+  )
+
+  // 用户可能在工作区里删掉附件;这时点击必须给出可见失败提示,而不是静默无反应。
+  const saved = await readdir(join(workdir, '.openwb', 'attachments'))
+  for (const name of saved) await unlink(join(workdir, '.openwb', 'attachments', name))
+  await evaluate(`document.querySelector('[data-testid="message-attachment"]')?.click()`)
+  check(
+    await waitFor(
+      evaluate,
+      `Array.from(document.querySelectorAll('.owb-status--warn')).some((el) => el.textContent?.includes('无法打开附件'))`,
+      12000
+    ),
+    '附件已丢失时提示无法打开'
   )
 } finally {
   try {

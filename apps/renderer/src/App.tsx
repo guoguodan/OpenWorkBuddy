@@ -1110,6 +1110,46 @@ export default function App() {
     }
   }
 
+  /**
+   * 打开用户消息里的附件。
+   *
+   * 附件已经是工作区内的副本,预览仍复用 artifact.read 的工作区边界与 2MB 上限;
+   * 图片单独走受控图片窗口,其余不支持内嵌预览的格式明确回退到系统程序。
+   */
+  const openAttachment = async (attachment: { name: string; path: string; kind?: 'file' | 'image' }) => {
+    if (!attachment.path) return
+    try {
+      if (attachment.kind === 'image') {
+        await window.openwb.artifact.preview({
+          kind: 'image',
+          path: attachment.path,
+          title: attachment.name
+        })
+        return
+      }
+      const r = await window.openwb.artifact.read({ path: attachment.path })
+      if (!r.preview) {
+        await window.openwb.artifact.preview({
+          kind: 'file',
+          path: attachment.path,
+          title: attachment.name
+        })
+        return
+      }
+      setPreviewArtifact({
+        artifact: {
+          id: `attachment:${attachment.path}`,
+          kind: 'file',
+          title: attachment.name,
+          path: attachment.path
+        },
+        preview: (r.preview ?? null) as TextPreviewInfo | null
+      })
+    } catch (err) {
+      note('warn', `无法打开附件「${attachment.name}」: ${(err as Error).message}`)
+    }
+  }
+
   /** 预览里点"用系统程序打开"才允许启动外部程序;网页类仍保留工作区与大小校验。 */
   const openArtifactExternally = async (artifact: ArtifactInfo) => {
     try {
@@ -1456,6 +1496,7 @@ export default function App() {
                   busy={busy}
                   focusRequest={focusTarget}
                   onOpenArtifact={(a) => void openArtifact(a)}
+                  onOpenAttachment={(a) => void openAttachment(a)}
                   onShareArtifact={(a) => void shareArtifact(a)}
                   shareChannelName={activeChannel?.name ?? null}
                   onFeedback={applyFeedback}
