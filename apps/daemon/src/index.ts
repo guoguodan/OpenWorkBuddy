@@ -41,6 +41,7 @@ import {
   ensureWorkspace,
   getConversation,
   getPlugin,
+  listConversationSummaries,
   listConversations,
   renameConversation,
   setConversationColleague,
@@ -2097,7 +2098,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       ...base,
       type: 'conversation.list',
       conversationId: activeConversationId,
-      conversations: listConversations(db, workspaceId).map((c) => ({
+      conversations: listConversationSummaries(db, workspaceId).map((c) => ({
         id: c.id,
         title: c.title,
         modeId: c.modeId,
@@ -2115,7 +2116,14 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
           ? (listChannels(db, workspaceId).find((ch) => ch.id === c.channelId)?.name ?? null)
           : null,
         updatedAt: c.updatedAt,
-        lastSeq: c.lastSeq
+        lastSeq: c.lastSeq,
+        taskTotal: c.taskTotal,
+        pending: c.pending,
+        running: c.running,
+        failed: c.failed,
+        done: c.done,
+        artifacts: c.artifacts,
+        status: c.status
       }))
     })
     return true

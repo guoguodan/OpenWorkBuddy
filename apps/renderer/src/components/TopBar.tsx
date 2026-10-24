@@ -1,5 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconFilter, IconSearch, IconSidebar } from './Icons'
+import { IconCheck, IconFilter, IconSearch, IconSidebar } from './Icons'
+
+export type TaskStatusFilter = 'working' | 'completed' | 'failed' | 'pending' | 'planning'
+export type TaskDateFilter = 'today' | 'last7days' | 'last30days'
+
+export interface TaskFilterState {
+  sessionStatus: TaskStatusFilter[]
+  date: TaskDateFilter | null
+}
+
+export const EMPTY_TASK_FILTER: TaskFilterState = { sessionStatus: [], date: null }
+
+export function hasTaskFilter(filter: TaskFilterState): boolean {
+  return filter.sessionStatus.length > 0 || filter.date !== null
+}
 
 interface TopBarProps {
   collapsed: boolean
@@ -10,6 +24,112 @@ interface TopBarProps {
   onClearInput: () => void
   onOpenSettings: () => void
   onOpenWorkspace: () => void
+  filter: TaskFilterState
+  onFilterChange: (next: TaskFilterState) => void
+}
+
+const STATUS_OPTIONS: Array<{ value: TaskStatusFilter | null; label: string }> = [
+  { value: null, label: '全部状态' },
+  { value: 'working', label: '进行中' },
+  { value: 'completed', label: '已完成' },
+  { value: 'failed', label: '失败' },
+  { value: 'pending', label: '待处理' },
+  { value: 'planning', label: '规划中' }
+]
+
+const DATE_OPTIONS: Array<{ value: TaskDateFilter | null; label: string }> = [
+  { value: null, label: '全部时间' },
+  { value: 'today', label: '今天' },
+  { value: 'last7days', label: '最近 7 天' },
+  { value: 'last30days', label: '最近 30 天' }
+]
+
+/**
+ * 任务筛选菜单。
+ *
+ * 对齐真实产品的两条独立维度:状态可多选、时间单选;选中的项才写进条件。
+ * "全部"不是第三个互斥项,而是清空该维度,避免出现"全部 + 进行中"这种自相矛盾状态。
+ */
+function TaskFilterMenu({
+  value,
+  onChange,
+  onReset
+}: {
+  value: TaskFilterState
+  onChange: (next: TaskFilterState) => void
+  onReset: () => void
+}) {
+  const active = hasTaskFilter(value)
+  const pickStatus = (next: TaskStatusFilter | null) => {
+    if (next === null) {
+      onChange({ ...value, sessionStatus: [] })
+      return
+    }
+    const list = value.sessionStatus.includes(next)
+      ? value.sessionStatus.filter((item) => item !== next)
+      : [...value.sessionStatus, next]
+    onChange({ ...value, sessionStatus: list })
+  }
+  const pickDate = (next: TaskDateFilter | null) => {
+    onChange({ ...value, date: next === null || value.date === next ? null : next })
+  }
+
+  return (
+    <div className="owb-task-filter" role="menu" data-testid="task-filter-menu">
+      <div className="owb-task-filter__section">
+        <div className="owb-task-filter__title">筛选状态</div>
+        <div className="owb-task-filter__options">
+          {STATUS_OPTIONS.map((item) => {
+            const selected = item.value === null ? value.sessionStatus.length === 0 : value.sessionStatus.includes(item.value)
+            return (
+              <button
+                key={item.value ?? 'all'}
+                role="menuitemcheckbox"
+                aria-checked={selected}
+                className={`owb-task-filter__option${selected ? ' owb-task-filter__option--on' : ''}`}
+                onClick={() => pickStatus(item.value)}
+                data-testid={`filter-status-${item.value ?? 'all'}`}
+              >
+                <span>{item.label}</span>
+                {selected ? <IconCheck size={14} className="owb-task-filter__check" /> : null}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className="owb-task-filter__divider" />
+      <div className="owb-task-filter__section">
+        <div className="owb-task-filter__title">筛选时间</div>
+        <div className="owb-task-filter__options">
+          {DATE_OPTIONS.map((item) => {
+            const selected = item.value === null ? value.date === null : value.date === item.value
+            return (
+              <button
+                key={item.value ?? 'all'}
+                role="menuitemradio"
+                aria-checked={selected}
+                className={`owb-task-filter__option${selected ? ' owb-task-filter__option--on' : ''}`}
+                onClick={() => pickDate(item.value)}
+                data-testid={`filter-date-${item.value ?? 'all'}`}
+              >
+                <span>{item.label}</span>
+                {selected ? <IconCheck size={14} className="owb-task-filter__check" /> : null}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className="owb-task-filter__divider" />
+      <button
+        className={`owb-task-filter__reset${active ? '' : ' owb-task-filter__reset--disabled'}`}
+        onClick={onReset}
+        disabled={!active}
+        data-testid="filter-reset"
+      >
+        重置筛选条件
+      </button>
+    </div>
+  )
 }
 
 /**
@@ -25,7 +145,9 @@ export function TopBar({
   onFocusSearch,
   onClearInput,
   onOpenSettings,
-  onOpenWorkspace
+  onOpenWorkspace,
+  filter,
+  onFilterChange
 }: TopBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const rootRef = useRef<HTMLElement>(null)
@@ -95,32 +217,29 @@ export function TopBar({
         <button className="owb-icon-btn owb-topbar__btn" onClick={onFocusSearch} title="搜索任务" aria-label="搜索任务">
           <IconSearch size={17} />
         </button>
-        <button
-          className="owb-icon-btn owb-topbar__btn"
-          onClick={() => setOpenMenu(openMenu === 'filter' ? null : 'filter')}
-          title="筛选"
-          aria-label="筛选"
-        >
-          <IconFilter size={17} />
-        </button>
-        {openMenu === 'filter' ? (
-          <div className="owb-menu owb-menu--anchor" role="menu">
-            {[
-              { text: '全部任务', onPick: onFocusSearch },
-              { text: '只看执行中', onPick: onFocusSearch },
-              { text: '只看有交付物的任务', onPick: onOpenWorkspace }
-            ].map((item) => (
-              <button
-                key={item.text}
-                role="menuitem"
-                className="owb-menu__item"
-                onClick={() => { setOpenMenu(null); item.onPick() }}
-              >
-                {item.text}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <span className="owb-topbar__filter">
+          <button
+            className="owb-icon-btn owb-topbar__btn"
+            onClick={() => setOpenMenu(openMenu === 'filter' ? null : 'filter')}
+            title="筛选"
+            aria-label="筛选"
+            aria-expanded={openMenu === 'filter'}
+            data-testid="open-filter"
+          >
+            <IconFilter size={17} />
+            {hasTaskFilter(filter) ? <span className="owb-topbar__filter-dot" data-testid="filter-dot" /> : null}
+          </button>
+          {openMenu === 'filter' ? (
+            <TaskFilterMenu
+              value={filter}
+              onChange={onFilterChange}
+              onReset={() => {
+                onFilterChange(EMPTY_TASK_FILTER)
+                setOpenMenu(null)
+              }}
+            />
+          ) : null}
+        </span>
       </div>
 
       <nav className="owb-menubar" aria-label="主菜单">

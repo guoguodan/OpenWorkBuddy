@@ -21,6 +21,13 @@ interface ConversationInfo {
   projectName?: string | null
   updatedAt: string
   lastSeq: number
+  taskTotal?: number
+  pending?: number
+  running?: number
+  failed?: number
+  done?: number
+  artifacts?: number
+  status?: 'active' | 'archived'
 }
 
 interface ChannelInfo {

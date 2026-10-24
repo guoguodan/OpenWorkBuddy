@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import type { AppDatabase } from './client.js'
 import { nowIso, ulid } from './ids.js'
-import { conversation, eventLog, message, workspace } from './schema.js'
+import { artifact, conversation, eventLog, message, task, workspace } from './schema.js'
 import { enqueuePendingTx } from './sync.js'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
@@ -43,6 +43,23 @@ export interface ConversationRecord {
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * 任务列表筛选用的聚合状态。
+ *
+ * 会话本身没有运行状态:真正执行的是 task 行。这里把 task/artifact 聚合成
+ * 界面需要的四个事实,避免渲染层根据消息数量或时间猜测"是否执行中"。
+ */
+export interface ConversationSummaryStats {
+  taskTotal: number
+  pending: number
+  running: number
+  failed: number
+  done: number
+  artifacts: number
+}
+
+export type ConversationSummaryRecord = ConversationRecord & ConversationSummaryStats
 
 export function createConversation(
   db: AppDatabase,
@@ -98,6 +115,62 @@ export function listConversations(db: AppDatabase, workspaceId: string): Convers
     .where(eq(conversation.workspaceId, workspaceId))
     .orderBy(desc(conversation.updatedAt))
     .all() as ConversationRecord[]
+}
+
+/**
+ * 列出工作区会话并附带任务/交付物统计。
+ *
+ * 用一次分组查询而不是每个会话再查一次:列表滚动时 N+1 会直接拖慢首屏。
+ * 统计来自真实 task 与 artifact 行,不做任何乐观推断。
+ */
+export function listConversationSummaries(
+  db: AppDatabase,
+  workspaceId: string
+): ConversationSummaryRecord[] {
+  const rows = listConversations(db, workspaceId)
+  if (rows.length === 0) return []
+
+  const taskStats = db
+    .select({
+      conversationId: task.conversationId,
+      total: sql<number>`count(*)`,
+        pending: sql<number>`sum(case when ${task.status} = 'pending' then 1 else 0 end)`,
+      running: sql<number>`sum(case when ${task.status} = 'running' then 1 else 0 end)`,
+      failed: sql<number>`sum(case when ${task.status} = 'failed' then 1 else 0 end)`,
+      done: sql<number>`sum(case when ${task.status} = 'done' then 1 else 0 end)`
+    })
+    .from(task)
+    .groupBy(task.conversationId)
+    .all()
+
+  const artifactStats = db
+    .select({
+      conversationId: artifact.conversationId,
+      total: sql<number>`count(*)`
+    })
+    .from(artifact)
+    .groupBy(artifact.conversationId)
+    .all()
+
+  const tasksById = new Map(taskStats.map((row) => [row.conversationId, row]))
+  const artifactsById = new Map(
+    artifactStats
+      .filter((row) => Boolean(row.conversationId))
+      .map((row) => [row.conversationId as string, row.total])
+  )
+
+  return rows.map((row) => {
+    const stats = tasksById.get(row.id)
+    return {
+      ...row,
+      taskTotal: Number(stats?.total ?? 0),
+      pending: Number(stats?.pending ?? 0),
+      running: Number(stats?.running ?? 0),
+      failed: Number(stats?.failed ?? 0),
+      done: Number(stats?.done ?? 0),
+      artifacts: Number(artifactsById.get(row.id) ?? 0)
+    }
+  })
 }
 
 /** 置顶只改排序依据,不改 updatedAt:置顶不应把任务伪装成“刚刚有活动”。 */

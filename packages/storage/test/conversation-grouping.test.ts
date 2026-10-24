@@ -9,10 +9,13 @@ import {
   createConversation,
   ensureWorkspace,
   getConversation,
+  listConversationSummaries,
   listConversations,
   renameConversation,
   setConversationPinned
 } from '../src/conversations.js'
+import { createTask, transitionTask } from '../src/tasks.js'
+import { insertArtifacts } from '../src/artifacts.js'
 
 let dir: string
 let handle: OpenDbResult
@@ -77,5 +80,37 @@ describe('conversation grouping fields', () => {
 
     expect(deleteColleague(handle.db, colleague.id)).toBe(true)
     expect(getConversation(handle.db, conv.id)?.colleagueId).toBeNull()
+  })
+
+  it('aggregates task and artifact facts per conversation for filtering', () => {
+    const conv = createConversation(handle.db, { workspaceId, title: '带任务', modeId: 'craft' })
+    createTask(handle.db, { conversationId: conv.id, title: '待处理任务' })
+    const running = createTask(handle.db, { conversationId: conv.id, title: '执行中任务' })
+    transitionTask(handle.db, running, 'running')
+    const failed = createTask(handle.db, { conversationId: conv.id, title: '失败任务' })
+    transitionTask(handle.db, failed, 'running')
+    transitionTask(handle.db, failed, 'failed')
+    const done = createTask(handle.db, { conversationId: conv.id, title: '完成任务' })
+    transitionTask(handle.db, done, 'running')
+    transitionTask(handle.db, done, 'done')
+    insertArtifacts(handle.db, {
+      taskId: done,
+      conversationId: conv.id,
+      items: [{ kind: 'file', title: 'report.md', path: 'report.md', sha256: 'abc123' }]
+    })
+
+    const summary = listConversationSummaries(handle.db, workspaceId).find((item) => item.id === conv.id)
+    expect(summary?.taskTotal).toBe(4)
+    expect(summary?.pending).toBe(1)
+    expect(summary?.running).toBe(1)
+    expect(summary?.failed).toBe(1)
+    expect(summary?.done).toBe(1)
+    expect(summary?.artifacts).toBe(1)
+  })
+
+  it('reports zero stats for a conversation that never ran a task', () => {
+    const conv = createConversation(handle.db, { workspaceId, title: '草稿', modeId: 'craft' })
+    const summary = listConversationSummaries(handle.db, workspaceId).find((item) => item.id === conv.id)
+    expect(summary).toMatchObject({ taskTotal: 0, pending: 0, running: 0, failed: 0, done: 0, artifacts: 0 })
   })
 })

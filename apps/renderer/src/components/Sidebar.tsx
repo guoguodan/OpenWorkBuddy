@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { TaskFilterState } from './TopBar'
 import {
   IconBell,
   IconBook,
@@ -30,6 +31,13 @@ export interface ConversationSummary {
   updatedAt: string
   lastSeq: number
   messageCount?: number
+  taskTotal?: number
+  pending?: number
+  running?: number
+  failed?: number
+  done?: number
+  artifacts?: number
+  status?: 'active' | 'archived'
 }
 
 export type MoreEntry =
@@ -93,6 +101,47 @@ interface SidebarProps {
   onOpenSupport: () => void
   onOpenMore: (entry: MoreEntry) => void
   onOpenAccount: () => void
+  filter: TaskFilterState
+  onOpenFilter: () => void
+}
+
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+}
+
+/**
+ * 判断一个会话是否命中筛选条件。
+ *
+ * 状态来自 task/artifact 的真实汇总:
+ *   进行中 = 有 running 任务
+ *   待处理 = 没有 running 但存在未开始的 pending 任务
+ *   规划中 = 任务从未真正启动(没有 task 行),仍处于草稿阶段
+ *   已完成 = 至少完成过一个任务;失败 = 存在 failed 任务
+ * 多选状态是"任一命中",与真实产品的多选语义一致。
+ */
+export function matchesTaskFilter(c: ConversationSummary, filter: TaskFilterState): boolean {
+  if (filter.sessionStatus.length > 0) {
+    const total = c.taskTotal ?? 0
+    const completed = (c.done ?? 0) > 0
+    const hit = filter.sessionStatus.some((status) => {
+      if (status === 'working') return (c.running ?? 0) > 0
+      if (status === 'failed') return (c.failed ?? 0) > 0
+      if (status === 'completed') return completed
+      if (status === 'pending') return (c.pending ?? 0) > 0
+      return total === 0 && (c.messageCount ?? 0) === 0
+    })
+    if (!hit) return false
+  }
+
+  if (filter.date) {
+    const time = Date.parse(c.updatedAt)
+    if (!Number.isFinite(time)) return false
+    const now = new Date()
+    if (filter.date === 'today') return time >= startOfDay(now)
+    if (filter.date === 'last7days') return time >= startOfDay(now) - 6 * 86_400_000
+    return time >= startOfDay(now) - 29 * 86_400_000
+  }
+  return true
 }
 
 function dayLabel(iso: string): string {
@@ -138,7 +187,9 @@ export function Sidebar({
   onOpenActivity,
   onOpenSupport,
   onOpenMore,
-  onOpenAccount
+  onOpenAccount,
+  filter,
+  onOpenFilter
 }: SidebarProps) {
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
@@ -217,7 +268,11 @@ export function Sidebar({
     const workspaces = new Map<string, ConversationSummary[]>()
     const colleagues = new Map<string, ConversationSummary[]>()
 
-    for (const c of conversations) {
+    // 筛选只作用于列表视图,不改变数据本身。四项分组都必须使用同一份过滤结果,
+    // 否则会出现"任务为空但工作空间里还挂着被筛掉的任务"这种不一致。
+    const filtered = conversations.filter((c) => matchesTaskFilter(c, filter))
+
+    for (const c of filtered) {
       if (c.pinnedAt) {
         pinned.push(c)
         continue
@@ -238,6 +293,7 @@ export function Sidebar({
     return {
       pinned,
       tasks,
+      filtered,
       workspaces: Array.from(workspaces.entries()).map(([key, list]) => ({
         key,
         title: list[0]?.channelName ?? '未命名工作空间',
@@ -249,7 +305,7 @@ export function Sidebar({
         conversations: list
       }))
     }
-  }, [conversations])
+  }, [conversations, filter])
 
   const submitRename = (id: string) => {
     const next = renaming?.value.trim() ?? ''
@@ -526,6 +582,14 @@ export function Sidebar({
           </div>
         ) : null}
         {conversations.length === 0 ? <div className="owb-conv-empty">还没有任务</div> : null}
+        {conversations.length > 0 && grouped.filtered.length === 0 ? (
+          <div className="owb-conv-empty owb-conv-empty--filtered" data-testid="filter-empty">
+            <span>没有匹配的任务</span>
+            <button className="owb-sidebar__more" onClick={onOpenFilter}>
+              调整筛选条件
+            </button>
+          </div>
+        ) : null}
         {renderSection('pinned', '置顶', grouped.pinned, { pinned: true })}
         {renderSection('tasks', '任务', grouped.tasks)}
         {grouped.workspaces.length > 0 ? (

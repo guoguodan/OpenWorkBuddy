@@ -16,7 +16,12 @@ import {
   type ApprovalScope
 } from './components/ApprovalDialog'
 import { Sidebar, type ConversationSummary, type MoreEntry } from './components/Sidebar'
-import { TopBar } from './components/TopBar'
+import {
+  EMPTY_TASK_FILTER,
+  TopBar,
+  hasTaskFilter,
+  type TaskFilterState
+} from './components/TopBar'
 import { WelcomeView, type SceneId } from './components/WelcomeView'
 import { SettingsPanel, type WorkspaceSettingsInfo } from './components/SettingsPanel'
 import { AutomationPanel } from './components/AutomationPanel'
@@ -78,6 +83,27 @@ type Sheet =
 
 const THEME_KEY = 'owb.theme'
 const COLLAPSE_KEY = 'owb.sidebar.collapsed'
+const FILTER_KEY = 'owb.task.filter.v1'
+
+function readTaskFilter(): TaskFilterState {
+  try {
+    const raw = localStorage.getItem(FILTER_KEY)
+    if (!raw) return EMPTY_TASK_FILTER
+    const parsed = JSON.parse(raw) as Partial<TaskFilterState>
+    const statuses = Array.isArray(parsed.sessionStatus)
+      ? parsed.sessionStatus.filter((item): item is TaskFilterState['sessionStatus'][number] =>
+          ['working', 'completed', 'failed', 'pending', 'planning'].includes(String(item))
+        )
+      : []
+    const date =
+      parsed.date === 'today' || parsed.date === 'last7days' || parsed.date === 'last30days'
+        ? parsed.date
+        : null
+    return { sessionStatus: statuses, date }
+  } catch {
+    return EMPTY_TASK_FILTER
+  }
+}
 
 function readTheme(): 'light' | 'dark' {
   const saved = localStorage.getItem(THEME_KEY)
@@ -140,6 +166,7 @@ export default function App() {
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1')
   const [theme, setTheme] = useState<'light' | 'dark'>(readTheme)
+  const [taskFilter, setTaskFilter] = useState<TaskFilterState>(readTaskFilter)
   const [settings, setSettings] = useState<WorkspaceSettingsInfo>({
     permissionMode: 'default',
     taskTarget: 'local',
@@ -165,6 +192,11 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0')
   }, [collapsed])
+
+  useEffect(() => {
+    if (hasTaskFilter(taskFilter)) localStorage.setItem(FILTER_KEY, JSON.stringify(taskFilter))
+    else localStorage.removeItem(FILTER_KEY)
+  }, [taskFilter])
 
   const note = useCallback((kind: SystemLine['kind'], text: string) => {
     setNotices((list) => [...list, { id: `${kind}-${Date.now()}-${list.length}`, kind, text }])
@@ -693,6 +725,8 @@ export default function App() {
         onClearInput={() => setInput('')}
         onOpenSettings={() => setSheet('settings')}
         onOpenWorkspace={() => void openWorkspace()}
+        filter={taskFilter}
+        onFilterChange={setTaskFilter}
       />
 
       <div className="owb-app">
@@ -717,6 +751,11 @@ export default function App() {
           onOpenSupport={() => note('info', '客服入口需要登录账号后使用')}
           onOpenMore={handleMore}
           onOpenAccount={() => setSheet('settings')}
+          filter={taskFilter}
+          onOpenFilter={() => {
+            // 空态里的"调整筛选条件"直接打开同一个真实筛选菜单。
+            document.querySelector<HTMLElement>('[data-testid="open-filter"]')?.click()
+          }}
         />
 
         <main className="owb-main">

@@ -710,6 +710,53 @@ input, textarea { font-family: inherit; }
 .owb-menu__item:hover { background: var(--owb-bg-hover); }
 .owb-menu__hint { font-size: 11px; color: var(--owb-text-tertiary); flex-shrink: 0; }
 
+/* ---- 任务筛选菜单(对齐 WorkBuddy TaskFilterMenu) ---- */
+.owb-topbar__filter { position: relative; display: inline-flex; }
+.owb-topbar__filter-dot {
+  position: absolute; top: 5px; right: 5px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--owb-brand-8);
+  box-shadow: 0 0 0 2px var(--owb-sidebar-bg);
+}
+.owb-task-filter {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+  width: 232px; padding: 6px;
+  background: var(--owb-bg-elevated);
+  border: 1px solid var(--owb-border-default);
+  border-radius: var(--owb-radius-xl);
+  box-shadow: var(--owb-shadow-popup);
+  display: flex; flex-direction: column;
+}
+.owb-task-filter__section { padding: 4px; }
+.owb-task-filter__title {
+  padding: 4px 6px 6px; font-size: 11px; font-weight: 500;
+  color: var(--owb-text-tertiary);
+}
+.owb-task-filter__options { display: flex; flex-direction: column; gap: 1px; }
+.owb-task-filter__option {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 7px 8px; border: none; background: transparent;
+  border-radius: var(--owb-radius-md); cursor: pointer;
+  color: var(--owb-text-primary); font-size: 13px; text-align: left;
+}
+.owb-task-filter__option:hover { background: var(--owb-bg-hover); }
+.owb-task-filter__option--on { font-weight: 500; }
+.owb-task-filter__check { color: var(--owb-brand-8); flex-shrink: 0; }
+.owb-task-filter__divider { height: 1px; margin: 4px 6px; background: var(--owb-border-subtle); }
+.owb-task-filter__reset {
+  margin: 2px 4px 4px; padding: 7px 8px;
+  border: none; background: transparent; border-radius: var(--owb-radius-md);
+  color: var(--owb-text-secondary); font-size: 13px; text-align: left; cursor: pointer;
+}
+.owb-task-filter__reset:hover { background: var(--owb-bg-hover); color: var(--owb-text-primary); }
+.owb-task-filter__reset--disabled { color: var(--owb-text-disabled); cursor: default; }
+.owb-task-filter__reset--disabled:hover { background: transparent; color: var(--owb-text-disabled); }
+
+.owb-conv-empty--filtered {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 12px 10px;
+}
+
 /* ============ 内容头(面包屑) ============ */
 .owb-content-header {
   flex-shrink: 0;
