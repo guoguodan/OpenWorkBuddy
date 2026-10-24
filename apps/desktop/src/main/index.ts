@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
 import { openExternal, openHtmlPreview, openImagePreview, openWithSystem, resolvePreview, type PreviewTarget } from './preview.js'
+import { listWorkspaceFiles } from './workspace-files.js'
 
 app.setName('OpenWorkBuddy')
 
@@ -63,6 +64,18 @@ ipcMain.handle('workspace.open', async () => {
   const target = resolvedWorkspace ?? resolveWorkspace()
   await shell.openPath(target)
   return { path: target }
+})
+
+ipcMain.handle('workspace.files', async (_e, input?: { limit?: number; maxDepth?: number }) => {
+  await daemonReady
+  const target = resolvedWorkspace ?? resolveWorkspace()
+  const limit = typeof input?.limit === 'number' ? input.limit : undefined
+  const maxDepth = typeof input?.maxDepth === 'number' ? input.maxDepth : undefined
+  const files = await listWorkspaceFiles(target, {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(maxDepth !== undefined ? { maxDepth } : {})
+  })
+  return { workspace: target, files }
 })
 
 ipcMain.handle('modes.list', async () => {

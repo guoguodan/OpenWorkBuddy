@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView'
 import { type ArtifactInfo } from './components/ArtifactCards'
-import { Composer, type PermissionMode } from './components/Composer'
+import { Composer, type ComposerAttachment, type PermissionMode } from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
 import { InfoPanel, type SkillInfo } from './components/InfoPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
@@ -104,6 +104,7 @@ export default function App() {
   const [mode, setMode] = useState('craft')
   const [scene, setScene] = useState<SceneId>('working')
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null)
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
@@ -337,19 +338,29 @@ export default function App() {
 
   const send = async () => {
     const text = input.trim()
-    if (!text || busy) return
+    if ((!text && attachments.length === 0) || busy) return
+    // 只有附件没有文字时也要给出可执行的指令,否则模型不知道要对文件做什么。
+    const outgoing = text || '请阅读我添加的上下文文件，并说明你看到了什么。'
     setBusy(true)
     setInput('')
     setTools([])
     setNotices([])
     setMessages((list) => [
       ...list,
-      { id: `u-${Date.now()}-${list.length}`, role: 'user', text, createdAt: new Date().toISOString() }
+      {
+        id: `u-${Date.now()}-${list.length}`,
+        role: 'user',
+        text: attachments.length > 0 ? `${outgoing}\n\n@ ${attachments.map((a) => a.path).join(' ')}` : outgoing,
+        createdAt: new Date().toISOString()
+      }
     ])
-    const contextPaths = parseContextPaths(text)
+    const typedPaths = parseContextPaths(outgoing)
+    const contextPaths = Array.from(new Set([...attachments.map((a) => a.path), ...typedPaths])).slice(0, 20)
+    const sentAttachments = attachments
+    setAttachments([])
     try {
       await window.openwb.conversation.send({
-        text,
+        text: outgoing,
         mode,
         scene,
         ...(conversationId ? { conversationId } : {}),
@@ -360,6 +371,8 @@ export default function App() {
     } catch (err) {
       streaming.current = false
       setBusy(false)
+      setAttachments(sentAttachments)
+      setInput(outgoing)
       note('system', `[错误] 发送失败: ${(err as Error).message}`)
     }
   }
@@ -575,11 +588,20 @@ export default function App() {
       workspacePath={workspacePath}
       permission={settings.permissionMode}
       modelLabel={modelLabel || '未配置模型'}
+      attachments={attachments}
       onChange={setInput}
       onSend={() => void send()}
       onPickSkill={setSelectedSkill}
       onPickPermission={(next) => void changePermission(next)}
       onOpenWorkspace={() => void openWorkspace()}
+      onListFiles={async () => {
+        const r = await window.openwb.workspace.files({ limit: 400, maxDepth: 4 })
+        return r.files
+      }}
+      onAddAttachment={(file) =>
+        setAttachments((list) => (list.some((a) => a.path === file.path) || list.length >= 20 ? list : [...list, file]))
+      }
+      onRemoveAttachment={(path) => setAttachments((list) => list.filter((a) => a.path !== path))}
     />
   )
 

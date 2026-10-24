@@ -164,10 +164,65 @@ try {
     `document.querySelector('textarea[data-testid="composer-input"]')?.getAttribute('placeholder') ?? ''`
   )
   check(
-    placeholder === '告诉我你想做些什么？  @ 添加上下文，/ 调用技能与指令',
+    placeholder === '告诉我你想做些什么？ @ 添加上下文，/调用技能与指令',
     'composer-placeholder',
     placeholder
   )
+
+  // @ 直接打开工作区文件选择器,选中后成为可移除的附件;不应偷偷发送。
+  const typeIntoComposer = (text) =>
+    evaluate(`(() => {
+      const input = document.querySelector('textarea[data-testid="composer-input"]')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+      setter.call(input, ${JSON.stringify(text)})
+      input.focus()
+      input.setSelectionRange(input.value.length, input.value.length)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+  await typeIntoComposer('请总结 @')
+  const pickerOpen = await waitFor(
+    evaluate,
+    `Boolean(document.querySelector('[data-testid="composer-picker"][aria-label="添加上下文"]'))`
+  )
+  const fileListed = await waitFor(
+    evaluate,
+    `Array.from(document.querySelectorAll('[data-testid="picker-file"]')).some((b) => b.textContent.includes('note.md'))`
+  )
+  const pickerFiles = await evaluate(
+    `Array.from(document.querySelectorAll('[data-testid="picker-file"]')).map((b) => b.textContent.trim())`
+  )
+  check(pickerOpen && fileListed, 'at-opens-file-picker', JSON.stringify(pickerFiles))
+  await evaluate(`(() => {
+    const b = Array.from(document.querySelectorAll('[data-testid="picker-file"]')).find((x) => x.textContent.includes('note.md'))
+    if (!b) throw new Error('找不到 note.md')
+    b.click()
+  })()`)
+  const chipAdded = await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="attachment-chip"]'))`)
+  const chipText = await evaluate(`document.querySelector('[data-testid="attachment-chip"]')?.textContent?.trim() ?? ''`)
+  const inputAfterPick = await evaluate(`document.querySelector('textarea[data-testid="composer-input"]')?.value ?? ''`)
+  const sentAfterPick = await evaluate(`Boolean(document.querySelector('.owb-conversation, .owb-chat'))`)
+  check(chipAdded && chipText.includes('note.md'), 'at-attachment-chip', chipText)
+  check(!inputAfterPick.includes('@') && inputAfterPick.includes('请总结'), 'at-token-removed', inputAfterPick)
+  check(!sentAfterPick, 'at-does-not-send')
+
+  await evaluate(`document.querySelector('[data-testid="attachment-chip"] button').click()`)
+  const chipRemoved = await waitFor(evaluate, `!document.querySelector('[data-testid="attachment-chip"]')`)
+  check(chipRemoved, 'attachment-removable')
+
+  // / 唤起技能与指令;没有已安装技能时也要给出明确空态,而不是弹不出。
+  await typeIntoComposer('/')
+  const skillPickerOpen = await waitFor(
+    evaluate,
+    `Boolean(document.querySelector('[data-testid="composer-picker"][aria-label="调用技能与指令"]'))`
+  )
+  check(skillPickerOpen, 'slash-opens-skill-picker')
+  const noSkillPill = await evaluate(
+    `!Array.from(document.querySelectorAll('.owb-composer__chip')).some((b) => b.textContent.includes('技能'))`
+  )
+  check(noSkillPill, 'composer-has-no-skill-pill')
+  await evaluate(`document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
+  await typeIntoComposer('')
+  await sleep(200)
 
   const suggestions = await evaluate(`document.querySelectorAll('.owb-suggestion').length`)
   check(suggestions === 4, 'suggestion-count', String(suggestions))

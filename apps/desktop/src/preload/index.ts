@@ -12,7 +12,8 @@ contextBridge.exposeInMainWorld('openwb', {
   },
   workspace: {
     info: () => ipcRenderer.invoke('workspace.info'),
-    open: () => ipcRenderer.invoke('workspace.open')
+    open: () => ipcRenderer.invoke('workspace.open'),
+    files: (input?: unknown) => ipcRenderer.invoke('workspace.files', input)
   },
   plugins: {
     list: () => ipcRenderer.invoke('plugins.list'),

@@ -171,6 +171,10 @@ interface Window {
     workspace: {
       info: () => Promise<{ path: string }>
       open: () => Promise<{ path: string }>
+      files: (input?: { limit?: number; maxDepth?: number }) => Promise<{
+        workspace: string
+        files: Array<{ path: string; name: string; size: number }>
+      }>
     }
     skills: {
       list: () => Promise<{

@@ -323,6 +323,7 @@ input, textarea { font-family: inherit; }
 /* ============ 输入框 ============ */
 .owb-composer { width: 100%; min-width: 0; }
 .owb-composer__box {
+  position: relative;
   background: var(--owb-bg-input);
   border-radius: 24px;
   padding: 2px 2px 4px;
@@ -1114,6 +1115,46 @@ input, textarea { font-family: inherit; }
 .owb-composer__menu-detail { font-size: 11px; color: var(--owb-text-tertiary); }
 .owb-composer__tick { color: var(--owb-brand-8); flex-shrink: 0; }
 .owb-composer__menu-empty { padding: 10px; font-size: 12px; color: var(--owb-text-tertiary); }
+.owb-composer__picker {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 90;
+  width: min(560px, 100%); max-height: 340px; overflow-y: auto; padding: 6px;
+  background: var(--owb-bg-elevated); border: 1px solid var(--owb-border-default);
+  border-radius: var(--owb-radius-xl); box-shadow: var(--owb-shadow-popup);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.owb-composer__picker-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 10px 8px; color: var(--owb-text-secondary);
+  font-size: 12px; font-weight: 500;
+}
+.owb-composer__picker-head svg { color: var(--owb-text-tertiary); }
+.owb-composer__picker-hint { margin-left: auto; color: var(--owb-text-tertiary); font-weight: 400; }
+.owb-composer__picker .owb-composer__menu-item { align-items: center; gap: 14px; }
+.owb-composer__picker-item--active { background: var(--owb-bg-hover); }
+.owb-composer__picker-name {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.owb-composer__picker-name svg { flex-shrink: 0; color: var(--owb-text-tertiary); }
+.owb-composer__picker-path {
+  max-width: 52%; flex-shrink: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  color: var(--owb-text-tertiary); font-size: 11px;
+}
+.owb-composer__attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.owb-composer__attachment {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 260px; height: 26px; padding: 0 6px 0 9px;
+  border: 1px solid var(--owb-border-subtle); border-radius: var(--owb-radius-full);
+  background: var(--owb-bg-secondary); color: var(--owb-text-secondary); font-size: 12px;
+}
+.owb-composer__attachment > svg { flex-shrink: 0; color: var(--owb-text-tertiary); }
+.owb-composer__attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owb-composer__attachment-remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
+  background: transparent; color: var(--owb-text-tertiary); cursor: pointer;
+}
+.owb-composer__attachment-remove:hover { background: var(--owb-bg-hover); color: var(--owb-text-primary); }
 .owb-composer__model {
   display: inline-flex; align-items: center; gap: 4px;
   height: 28px; padding: 0 10px; font-size: 12px; color: var(--owb-text-tertiary);
