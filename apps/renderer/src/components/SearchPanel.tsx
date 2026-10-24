@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconSearch, IconX } from './Icons'
 
 export interface SearchHit {
-  group: 'message' | 'artifact' | 'task'
+  group: 'message' | 'artifact' | 'task' | 'project'
   id: string
   conversationId: string
   conversationTitle: string
+  projectId?: string
   seq: number | null
   title: string
   snippet: string
@@ -14,7 +15,7 @@ export interface SearchHit {
 }
 
 export interface SearchGroup {
-  group: 'message' | 'artifact' | 'task'
+  group: 'message' | 'artifact' | 'task' | 'project'
   total: number
   items: SearchHit[]
 }
@@ -22,7 +23,8 @@ export interface SearchGroup {
 const GROUP_LABEL: Record<SearchGroup['group'], string> = {
   message: '消息',
   artifact: '交付物',
-  task: '任务'
+  task: '任务',
+  project: '项目'
 }
 
 interface SearchPanelProps {
@@ -119,7 +121,7 @@ export function SearchPanel({ open, onClose, onQuery, onJump }: SearchPanelProps
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索消息、交付物与任务…"
+            placeholder="搜索消息、交付物、任务与项目…"
             aria-label="全局搜索"
             data-testid="search-input"
           />
@@ -146,7 +148,7 @@ export function SearchPanel({ open, onClose, onQuery, onJump }: SearchPanelProps
                     onClick={() => { onJump(hit); onClose() }}
                   >
                     <span className="owb-search-hit__title">
-                      {hit.conversationTitle || hit.title}
+                      {hit.group === 'project' ? hit.title : hit.conversationTitle || hit.title}
                       {hit.seq !== null ? <span className="owb-search-hit__seq">#{hit.seq}</span> : null}
                     </span>
                     <span className="owb-search-hit__snippet">{hit.snippet}</span>

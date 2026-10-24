@@ -7,6 +7,7 @@ import { migrateOrThrow } from '../src/migrate.js'
 import { appendMessage, createConversation, ensureWorkspace } from '../src/conversations.js'
 import { createTask } from '../src/tasks.js'
 import { insertArtifacts } from '../src/artifacts.js'
+import { createProject } from '../src/projects.js'
 import { search, toMatchQuery, type SearchResult } from '../src/search.js'
 
 let dir: string
@@ -96,6 +97,48 @@ describe('global search', () => {
   it('returns an empty result for whitespace-only queries', () => {
     withDb(({ raw }) => {
       expect(search(raw, '   ').groups).toEqual([])
+    })
+  })
+
+  it('finds projects by name, description or instructions', () => {
+    withDb(({ db, raw, wsId }) => {
+      const byName = createProject(db, { workspaceId: wsId, name: '星河项目' })
+      const byDesc = createProject(db, { workspaceId: wsId, name: '内部代号', description: '星河交付计划' })
+      const byInstruction = createProject(db, {
+        workspaceId: wsId,
+        name: '另一个项目',
+        instructions: '围绕星河做竞品分析'
+      })
+      const other = createProject(db, { workspaceId: wsId, name: '无关项目' })
+
+      const projects = groupOf(search(raw, '星河', wsId), 'project')
+      expect(projects?.total).toBe(3)
+      expect(projects?.items.map((item) => item.id).sort()).toEqual([byName.id, byDesc.id, byInstruction.id].sort())
+      expect(projects?.items.every((item) => item.projectId === item.id)).toBe(true)
+      expect(projects?.items.some((item) => item.id === other.id)).toBe(false)
+    })
+  })
+
+  it('isolates project hits by workspace when a workspace is given', () => {
+    withDb(({ db, raw, wsId }) => {
+      const mine = createProject(db, { workspaceId: wsId, name: '隔离验证项目' })
+      const otherWs = ensureWorkspace(db, join(dir, 'other'))
+      createProject(db, { workspaceId: otherWs.id, name: '隔离验证项目' })
+
+      const scoped = groupOf(search(raw, '隔离验证', wsId), 'project')
+      expect(scoped?.items.map((item) => item.id)).toEqual([mine.id])
+
+      const unscoped = groupOf(search(raw, '隔离验证'), 'project')
+      expect(unscoped?.total).toBe(2)
+    })
+  })
+
+  it('caps project hits at five but keeps the full total', () => {
+    withDb(({ db, raw, wsId }) => {
+      for (let i = 0; i < 7; i++) createProject(db, { workspaceId: wsId, name: `批次项目 ${i}` })
+      const projects = groupOf(search(raw, '批次项目', wsId), 'project')
+      expect(projects?.items.length).toBe(5)
+      expect(projects?.total).toBe(7)
     })
   })
 })

@@ -10,6 +10,8 @@ import {
 } from './Icons'
 
 interface ProjectsPanelProps {
+  /** 从全局搜索跳入时要定位的项目;面板自己负责滚动与短暂高亮 */
+  focusProjectId?: string | null
   onClose: () => void
   onNotify: (kind: 'system' | 'info', text: string) => void
   onOpenTask: (id: string) => void
@@ -203,7 +205,14 @@ function dayText(iso: string | null): string {
  * 项目不是文件夹:它把项目指令、技能白名单和归属任务绑定到同一条运行链上。
  * 删除项目只解除任务归属,不会删除用户已经完成的任务。
  */
-export function ProjectsPanel({ onClose, onNotify, onOpenTask, onCreateTask, onChanged }: ProjectsPanelProps) {
+export function ProjectsPanel({
+  focusProjectId = null,
+  onClose,
+  onNotify,
+  onOpenTask,
+  onCreateTask,
+  onChanged
+}: ProjectsPanelProps) {
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [skills, setSkills] = useState<Array<{ name: string; description: string }>>([])
   const [loading, setLoading] = useState(true)
@@ -217,6 +226,7 @@ export function ProjectsPanel({ onClose, onNotify, onOpenTask, onCreateTask, onC
   const [renameId, setRenameId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [highlightId, setHighlightId] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -236,6 +246,17 @@ export function ProjectsPanel({ onClose, onNotify, onOpenTask, onCreateTask, onC
       .then((r) => setSkills(r.skills.map((skill) => ({ name: skill.name, description: skill.description }))))
       .catch(() => undefined)
   }, [refresh])
+
+  // 搜索结果跳入:等列表渲染完成后定位卡片,并只高亮一小段时间,避免看起来像选中态。
+  useEffect(() => {
+    if (!focusProjectId || loading) return
+    const target = document.querySelector<HTMLElement>(`[data-project-id="${focusProjectId}"]`)
+    if (!target) return
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    setHighlightId(focusProjectId)
+    const timer = setTimeout(() => setHighlightId(null), 1800)
+    return () => clearTimeout(timer)
+  }, [focusProjectId, loading, projects])
 
   const openCreate = () => {
     setEditingId(null)
@@ -526,9 +547,10 @@ export function ProjectsPanel({ onClose, onNotify, onOpenTask, onCreateTask, onC
                 {filtered.map((project) => (
                   <article
                     key={project.id}
-                    className="owb-project-tile"
+                    className={`owb-project-tile${highlightId === project.id ? ' owb-project-tile--focus' : ''}`}
                     data-testid="project-card"
                     data-project-id={project.id}
+                    data-focused={highlightId === project.id ? 'true' : undefined}
                   >
                     <button
                       className="owb-project-tile__main"

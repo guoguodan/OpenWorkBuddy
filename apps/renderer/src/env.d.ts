@@ -133,10 +133,11 @@ interface ArtifactInfoLike {
 }
 
 interface SearchHitInfo {
-  group: 'message' | 'artifact' | 'task'
+  group: 'message' | 'artifact' | 'task' | 'project'
   id: string
   conversationId: string
   conversationTitle: string
+  projectId?: string
   seq: number | null
   title: string
   snippet: string
@@ -145,7 +146,7 @@ interface SearchHitInfo {
 }
 
 interface SearchGroupInfo {
-  group: 'message' | 'artifact' | 'task'
+  group: 'message' | 'artifact' | 'task' | 'project'
   total: number
   items: SearchHitInfo[]
 }

@@ -121,12 +121,12 @@ try {
     return true
   })()`)
   await sleep(150)
-  await evaluate(`Array.from(document.querySelectorAll('button')).find((b) => b.textContent === '发送').click()`)
+  await evaluate(`document.querySelector('button[aria-label="发送"]').click()`)
   check(await waitFor(`document.body.innerText.includes('已读取') || document.body.innerText.includes('Quick') || document.body.innerText.includes('产品设计')`, 'first-reply'), 'first-run-finished', appErr.slice(-300))
   check(await waitFor(`!Array.from(document.querySelectorAll('button')).some((b) => b.textContent.includes('执行中'))`, 'idle'), 'first-run-idle')
 
-  // 打开全局搜索:侧栏搜索按钮
-  await evaluate(`document.querySelector('.owb-search-pill').click()`)
+  // 打开全局搜索:顶栏搜索按钮
+  await evaluate(`document.querySelector('button[aria-label="搜索任务"]').click()`)
   check(await waitFor(`document.querySelector('[data-testid="search-panel"]') !== null`, 'panel'), 'search-panel-opens')
 
   await evaluate(`(() => {

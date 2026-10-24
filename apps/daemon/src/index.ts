@@ -3024,7 +3024,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     emit({
       ...base,
       type: 'search.result',
-      ...search(dbHandle.raw, query)
+      ...search(dbHandle.raw, query, workspaceId)
     })
     return true
   }

@@ -175,11 +175,20 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [conversationId, setConversationId] = useState('')
+  /**
+   * 历史请求代次。启动时的 loadHistory 可能晚于用户首轮发送返回,
+   * 旧响应若仍无条件 setMessages 会把刚发送的消息覆盖掉。
+   * 每次主动切换/新建会话或开始流式输出都推进代次,只允许最新一次回填。
+   */
+  const historyEpoch = useRef(0)
+  /** 首轮启动回填必须让位给用户已经发出的消息;否则空历史会覆盖首轮回复。 */
+  const userStartedSend = useRef(false)
   const [memories, setMemories] = useState<MemoryItem[]>([])
   const [showMemory, setShowMemory] = useState(false)
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [panel, setPanel] = useState<'skills' | 'connectors' | null>(null)
   const [sheet, setSheet] = useState<Sheet>(null)
+  const [focusProjectId, setFocusProjectId] = useState<string | null>(null)
   const [connectionProvider, setConnectionProvider] = useState<ServiceProviderInfo>('mailbox')
   const [searchOpen, setSearchOpen] = useState(false)
   const [channels, setChannels] = useState<ChannelInfo[]>([])
@@ -252,7 +261,9 @@ export default function App() {
   }, [])
 
   const loadHistory = useCallback(async (id: string) => {
+    const epoch = ++historyEpoch.current
     const r = await window.openwb.conversation.history(id)
+    if (epoch !== historyEpoch.current || activeConversation.current !== id) return
     setArtifacts(r.artifacts ?? [])
     setMessages(
       r.messages
@@ -359,7 +370,7 @@ export default function App() {
               ? { id: target.expertId, name: target.expertName }
               : null
           )
-          await loadHistory(id)
+          if (!userStartedSend.current) await loadHistory(id)
         }
         await loadMemories()
         await loadChannels()
@@ -384,6 +395,7 @@ export default function App() {
     return window.openwb.conversation.onEvent((raw: unknown) => {
       const e = raw as AgentEvent
       if (e.type === 'text.start') {
+        historyEpoch.current++
         streaming.current = true
         setMessages((list) => [
           ...list,
@@ -538,6 +550,8 @@ export default function App() {
         if (e.usage && (e.usage.input || e.usage.output)) {
           note('usage', `本轮回合计费: 输入 ${e.usage.input ?? 0} / 输出 ${e.usage.output ?? 0} token (接口返回)`)
         }
+        // 实时流里的消息没有数据库序号,回填一次让搜索定位和消息操作都拿到稳定坐标。
+        void loadHistory(activeConversation.current).catch(() => undefined)
         void loadConversations(activeConversation.current || undefined).catch(() => undefined)
         void loadMemories().catch(() => undefined)
         void loadUnreadNotifications()
@@ -579,6 +593,8 @@ export default function App() {
     if ((!text && attachments.length === 0) || busy) return
     // 只有附件没有文字时也要给出可执行的指令,否则模型不知道要对文件做什么。
     const outgoing = text || '请阅读我添加的上下文文件，并说明你看到了什么。'
+    userStartedSend.current = true
+    historyEpoch.current++
     setBusy(true)
     setInput('')
     setTools([])
@@ -955,13 +971,21 @@ export default function App() {
   }
 
   const jumpToHit = async (hit: SearchHit) => {
+    if (hit.group === 'project' && hit.projectId) {
+      setFocusProjectId(hit.projectId)
+      setSheet('projects')
+      return
+    }
     if (!hit.conversationId) return
     if (hit.conversationId !== activeConversation.current) {
       if (busy) {
         note('system', '任务运行中,结束后再跳转到其他会话。')
         return
       }
-      await switchConversation(hit.conversationId)
+        await switchConversation(hit.conversationId)
+    } else if (!busy) {
+      // 同一会话里的实时消息可能还没带 seq;先与服务端对齐再定位。
+      await loadHistory(hit.conversationId)
     }
     if (hit.seq !== null) setFocusTarget({ seq: hit.seq, nonce: Date.now() })
   }
@@ -1009,6 +1033,7 @@ export default function App() {
 
   const handleMore = (entry: MoreEntry) => {
     if (entry === 'projects') {
+      setFocusProjectId(null)
       setSheet('projects')
       return
     }
@@ -1335,6 +1360,7 @@ export default function App() {
             />
           ) : sheet === 'projects' ? (
             <ProjectsPanel
+              focusProjectId={focusProjectId}
               onClose={() => setSheet(null)}
               onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
               onOpenTask={(id) => {

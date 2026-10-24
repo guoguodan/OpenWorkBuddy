@@ -2305,6 +2305,16 @@ input, textarea { font-family: inherit; }
   transition: background-color var(--owb-motion-fast), border-color var(--owb-motion-fast);
 }
 .owb-project-tile:hover { background: var(--owb-bg-hover); border-color: var(--owb-border-default); }
+.owb-project-tile--focus {
+  border-color: var(--owb-brand-8);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--owb-brand-8) 22%, transparent);
+  background: color-mix(in srgb, var(--owb-brand-8) 6%, transparent);
+  animation: owb-project-focus 1.8s ease-out;
+}
+@keyframes owb-project-focus {
+  0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--owb-brand-8) 34%, transparent); }
+  100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--owb-brand-8) 22%, transparent); }
+}
 .owb-project-tile__main {
   flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 10px;
   padding: 14px 8px 14px 14px; border: none; background: transparent;

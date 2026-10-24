@@ -197,6 +197,22 @@
 
 ## 7. 验收
 
+### 全局搜索(Ctrl+K)
+
+搜索一次覆盖四类实体,分组顺序固定,每组最多展示 5 条并保留完整命中总数:
+
+| 分组 | 检索字段 | 点击后行为 |
+|---|---|---|
+| 消息 | 消息正文(FTS5 + 中文 LIKE 兜底) | 切到所属任务并滚动高亮该条消息 |
+| 交付物 | 标题、路径 | 切到所属任务 |
+| 任务 | 任务标题 | 切到该任务 |
+| 项目 | 项目名称、简介、项目指令(仅当前工作区) | 打开项目面板,滚动到目标卡片并短暂高亮 1.8s |
+
+项目命中不伪造会话跳转:`SearchHit.projectId` 是唯一定位键,`conversationId` 为空。
+实时流里的消息在落库前没有 `seq`,因此同会话跳转会先同步一次历史,确保目标可定位。
+
+验收:`node tests/e2e/verify-search-projects.mjs`(13 项)与 `node tests/e2e/verify-p7-4-ui.mjs`(9 项)。
+
 ```powershell
 cd OpenWorkBuddy
 pnpm -r typecheck

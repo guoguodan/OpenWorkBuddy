@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 
-export type SearchGroup = 'message' | 'artifact' | 'task'
+export type SearchGroup = 'message' | 'artifact' | 'task' | 'project'
 
 /** 只依赖同步查询能力,单测可以传内存库 */
 export type RawQueryable = Database.Database
@@ -10,6 +10,8 @@ export interface SearchHit {
   id: string
   conversationId: string
   conversationTitle: string
+  /** 项目命中的定位键;其它分组为 undefined */
+  projectId?: string
   seq: number | null
   title: string
   snippet: string
@@ -50,7 +52,8 @@ function snippet(text: string, q: string): string {
  */
 export function search(
   raw: RawQueryable,
-  query: string
+  query: string,
+  workspaceId?: string
 ): SearchResult {
   const q = query.trim()
   if (q.length === 0) return { query: q, groups: [] }
@@ -58,13 +61,15 @@ export function search(
   const messageItems = searchMessages(raw, q)
   const artifactItems = searchArtifacts(raw, q)
   const taskItems = searchTasks(raw, q)
+  const projectItems = searchProjects(raw, q, workspaceId)
 
   return {
     query: q,
     groups: [
       { group: 'message', total: messageItems.total, items: messageItems.items },
       { group: 'artifact', total: artifactItems.total, items: artifactItems.items },
-      { group: 'task', total: taskItems.total, items: taskItems.items }
+      { group: 'task', total: taskItems.total, items: taskItems.items },
+      { group: 'project', total: projectItems.total, items: projectItems.items }
     ]
   }
 }
@@ -190,6 +195,50 @@ function searchTasks(
       createdAt: String(r.created_at ?? ''),
       score: 0
     }))
+  }
+}
+
+/**
+ * 项目命中:名称/描述/项目指令。
+ * 项目属于工作区,调用方给了 workspaceId 时必须隔离,避免跨工作区泄漏。
+ */
+function searchProjects(
+  raw: RawQueryable,
+  q: string,
+  workspaceId?: string
+) {
+  const like = `%${q.replace(/[%_]/g, (m) => `\\${m}`)}%`
+  const where = workspaceId ? 'p.workspace_id = ? AND ' : ''
+  const params = workspaceId ? [workspaceId, like, like, like] : [like, like, like]
+  const rows = raw
+    .prepare(
+      `SELECT p.id, p.name, p.description, p.instructions, p.created_at, p.updated_at
+       FROM project p
+       WHERE ${where}(p.name LIKE ? ESCAPE '\\'
+          OR p.description LIKE ? ESCAPE '\\'
+          OR p.instructions LIKE ? ESCAPE '\\')
+       ORDER BY p.updated_at DESC
+       LIMIT 50`
+    )
+    .all(...params) as Array<Record<string, unknown>>
+  return {
+    total: rows.length,
+    items: rows.slice(0, GROUP_LIMIT).map((r) => {
+      const description = String(r.description ?? '')
+      const instructions = String(r.instructions ?? '')
+      return {
+        group: 'project' as const,
+        id: String(r.id),
+        projectId: String(r.id),
+        conversationId: '',
+        conversationTitle: '',
+        seq: null,
+        title: String(r.name ?? ''),
+        snippet: description ? snippet(description, q) : snippet(instructions, q),
+        createdAt: String(r.created_at ?? ''),
+        score: 0
+      }
+    })
   }
 }
 
