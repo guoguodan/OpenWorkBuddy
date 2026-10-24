@@ -430,17 +430,38 @@ export default function App() {
         }
       } else if (e.type === 'conversation.reverted' || e.type === 'conversation.replayed') {
         // 重放/回退是破坏性操作,以 daemon 回传的数据库快照为准。
-        const snapshot = e as { messages?: unknown; artifacts?: unknown }
+        const snapshot = e as {
+          messages?: unknown
+          artifacts?: unknown
+          files?: {
+            applied?: boolean
+            reason?: string
+            touched?: number
+            restored?: number
+            deleted?: number
+          }
+        }
+        const files = snapshot.files
+        const fileNotice = (() => {
+          if (!files) return ''
+          if (!files.applied) return files.reason ? `文件未回退: ${files.reason}` : ''
+          if (!files.touched) return '文件无需改动。'
+          const parts = [`已恢复 ${files.restored ?? 0} 个文件`]
+          if (files.deleted) parts.push(`删除 ${files.deleted} 个新增文件`)
+          return `${parts.join(',')}。`
+        })()
         setTools([])
         setNotices([])
         applySnapshot(snapshot.messages, snapshot.artifacts)
         if (e.type === 'conversation.replayed') {
           streaming.current = true
           setBusy(true)
+          if (fileNotice) note(files?.applied ? 'info' : 'warn', fileNotice)
         } else {
           setBusy(false)
           streaming.current = false
           note('info', '已回退到此版本。')
+          if (fileNotice) note(files?.applied ? 'info' : 'warn', fileNotice)
         }
         void loadConversations(activeConversation.current || undefined).catch(() => undefined)
       } else if (e.type === 'done') {

@@ -154,6 +154,7 @@ import {
   type RiskAssessment
 } from '@openwb/security'
 import { ApprovalBridge, ApprovalUnavailableError } from './security/approval-bridge.js'
+import { CheckpointStore } from './checkpoint-store.js'
 
 const WORKSPACE = resolve(process.env.OPENWB_WORKSPACE ?? process.cwd())
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
@@ -286,6 +287,7 @@ const decoder = new FrameDecoder()
  */
 let fatal: string | null = null
 let dbHandle: ReturnType<typeof openDatabase> | null = null
+let checkpointStore: CheckpointStore | null = null
 let workspaceId = ''
 let activeConversationId = ''
 let stopSync: (() => void) | null = null
@@ -338,6 +340,11 @@ try {
   migrateOrThrow(dbHandle.raw, { dbPath: DB_PATH })
   const ws = ensureWorkspace(dbHandle.db, WORKSPACE)
   workspaceId = ws.id
+  checkpointStore = new CheckpointStore({
+    db: dbHandle.db,
+    workspaceRoot: WORKSPACE,
+    dataDir: DATA_DIR
+  })
   await ensureUserMemoryFile(DATA_DIR)
   await ensureWorkspaceGitignore(WORKSPACE)
   const recent = listConversations(dbHandle.db, ws.id)[0]
@@ -1824,7 +1831,41 @@ async function runMockInner(
   return finishMockRun()
 }
 
+/**
+ * 每轮开始时记录基线,结束时记录结果。
+ *
+ * 快照失败不能阻断对话:检查点只是"可回退"的增强能力,主流程仍应可用。
+ * 失败原因写入 stderr,恢复时会明确告诉用户没有文件检查点,而不是假装成功。
+ */
 async function runAgent(input: RunInput): Promise<'done' | 'failed' | 'interrupted'> {
+  let checkpointId: string | null = null
+  try {
+    if (checkpointStore && input.userMessageId) {
+      const row = getMessage(requireDb(), input.userMessageId)
+      if (row) {
+        const started = await checkpointStore.begin({
+          conversationId: input.conversationId,
+          userMessageId: input.userMessageId,
+          messageSeq: row.seq
+        })
+        checkpointId = started.id
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`[checkpoint] 基线快照失败: ${(err as Error).message}\n`)
+  }
+  try {
+    return await runAgentInner(input)
+  } finally {
+    if (checkpointId) {
+      await checkpointStore?.finish(checkpointId).catch((err: Error) => {
+        process.stderr.write(`[checkpoint] 结果快照失败: ${err.message}\n`)
+      })
+    }
+  }
+}
+
+async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'interrupted'> {
   const db = requireDb()
   const { text, mode, conversationId } = input
 
@@ -2820,6 +2861,29 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     }
 
     const replay = msg.cmd === 'conversation.replay'
+    // 先恢复工作区,再截断会话:恢复失败时不能先删掉消息,否则用户既失去历史
+    // 又得不到回滚后的文件。目标版本缺失检查点时只回退会话,并在事件里说明。
+    let files: { applied: boolean; reason?: string; touched: number; restored: number; deleted: number } = {
+      applied: false,
+      reason: '本轮没有文件检查点',
+      touched: 0,
+      restored: 0,
+      deleted: 0
+    }
+    if (checkpointStore) {
+      const targetCheckpoint = checkpointStore.byMessage(target.id)
+      const laterCheckpoints = targetCheckpoint
+        ? checkpointStore.afterSeq(target.conversationId, target.seq)
+        : []
+      try {
+        files = await checkpointStore.restore(
+          replay ? (targetCheckpoint?.before ?? null) : (targetCheckpoint?.after ?? null),
+          targetCheckpoint ? [targetCheckpoint, ...laterCheckpoints] : []
+        )
+      } catch (err) {
+        throw new Error(`恢复工作区文件失败,会话未改动: ${(err as Error).message}`)
+      }
+    }
     // 回退是"回到这个版本",目标轮本身必须保留;重放则是替换目标轮。
     // 两者都从下一轮用户消息开始截断,避免把目标轮的提问和答复误删。
     const cutoff = replay
@@ -2860,6 +2924,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       // 异步刷新若晚到就会把刚出现的助手消息清掉。
       messages: listMessages(db, target.conversationId),
       artifacts: listArtifactsByConversation(db, target.conversationId),
+      files,
       ...truncated
     })
 

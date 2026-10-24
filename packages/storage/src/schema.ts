@@ -124,6 +124,35 @@ export const artifact = sqliteTable(
   (t) => [index('idx_artifact_task').on(t.taskId), index('idx_artifact_conv').on(t.conversationId, t.createdAt)]
 )
 
+/**
+ * 每轮对话的文件检查点。
+ *
+ * before_json / after_json 是工作区清单快照(路径 + sha256 + 大小),文件内容
+ * 去重后存放在数据目录的 blob 里。回退恢复 after,重放恢复 before。
+ * user_message_id 外键级联:消息被截断后检查点跟随删除,不会留下无法归属的历史。
+ */
+export const fileCheckpoint = sqliteTable(
+  'file_checkpoint',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversation.id, { onDelete: 'cascade' }),
+    userMessageId: text('user_message_id')
+      .notNull()
+      .references(() => message.id, { onDelete: 'cascade' }),
+    messageSeq: integer('message_seq').notNull(),
+    beforeJson: text('before_json').notNull(),
+    afterJson: text('after_json'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull()
+  },
+  (t) => [
+    uniqueIndex('idx_file_checkpoint_msg').on(t.userMessageId),
+    index('idx_file_checkpoint_conv').on(t.conversationId, t.messageSeq)
+  ]
+)
+
 export const skill = sqliteTable(
   'skill',
   {
@@ -437,6 +466,7 @@ export const schema = {
   message,
   task,
   artifact,
+  fileCheckpoint,
   skill,
   plugin,
   automation,

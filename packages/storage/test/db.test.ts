@@ -20,6 +20,12 @@ import {
 } from '../src/conversations.js'
 import { createTask, transitionTask } from '../src/tasks.js'
 import { insertArtifacts } from '../src/artifacts.js'
+import {
+  beginFileCheckpoint,
+  finishFileCheckpoint,
+  getFileCheckpointByMessage,
+  listFileCheckpoints
+} from '../src/checkpoints.js'
 import { conversation, message, task, eventLog } from '../src/schema.js'
 import { artifact } from '../src/schema.js'
 import { eq } from 'drizzle-orm'
@@ -35,7 +41,8 @@ const TABLES = [
   'automation',
   'approval_grant',
   'memory_entry',
-  'event_log'
+  'event_log',
+  'file_checkpoint'
 ]
 
 let dir: string
@@ -352,6 +359,77 @@ describe('conversation and message', () => {
     expect(listMessages(db, conv.id)).toHaveLength(0)
     // 旧数据没有 user_message_id,不能按时间猜归属而误删。
     expect(db.select().from(task).where(eq(task.id, legacyTask)).all()).toHaveLength(1)
+    raw.close()
+  })
+})
+
+describe('file checkpoints', () => {
+  it('keeps one checkpoint per turn and is idempotent', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    const user = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: { text: '改文件' }
+    }).record
+
+    const first = beginFileCheckpoint(db, {
+      conversationId: conv.id,
+      userMessageId: user.id,
+      messageSeq: user.seq,
+      beforeJson: '{"entries":[]}'
+    })
+    const again = beginFileCheckpoint(db, {
+      conversationId: conv.id,
+      userMessageId: user.id,
+      messageSeq: user.seq,
+      beforeJson: '{"entries":[1]}'
+    })
+    expect(again).toBe(first)
+    expect(listFileCheckpoints(db, conv.id)).toHaveLength(1)
+    expect(getFileCheckpointByMessage(db, user.id)!.beforeJson).toBe('{"entries":[1]}')
+
+    finishFileCheckpoint(db, first, '{"entries":[2]}')
+    expect(getFileCheckpointByMessage(db, user.id)!.afterJson).toBe('{"entries":[2]}')
+    raw.close()
+  })
+
+  it('cascades checkpoint cleanup when its turn is truncated', () => {
+    const { db, raw } = openDatabase(dbPath)
+    migrateOrThrow(raw, { dbPath })
+    const ws = ensureWorkspace(db, dir)
+    const conv = createConversation(db, { workspaceId: ws.id, title: 't', modeId: 'craft' })
+    const firstUser = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: { text: '第一轮' }
+    }).record
+    const firstCp = beginFileCheckpoint(db, {
+      conversationId: conv.id,
+      userMessageId: firstUser.id,
+      messageSeq: firstUser.seq,
+      beforeJson: '{}'
+    })
+    finishFileCheckpoint(db, firstCp, '{}')
+    const secondUser = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: { text: '第二轮' }
+    }).record
+    const secondCp = beginFileCheckpoint(db, {
+      conversationId: conv.id,
+      userMessageId: secondUser.id,
+      messageSeq: secondUser.seq,
+      beforeJson: '{}'
+    })
+    finishFileCheckpoint(db, secondCp, '{}')
+
+    truncateConversationFrom(db, conv.id, secondUser.seq)
+    const left = listFileCheckpoints(db, conv.id)
+    expect(left.map((c) => c.id)).toEqual([firstCp])
+    expect(getFileCheckpointByMessage(db, secondUser.id)).toBeUndefined()
     raw.close()
   })
 })

@@ -178,7 +178,10 @@ try {
   check(warning.includes('不可恢复'), '确认层说明会删除后续内容', warning)
   await evaluate(`document.querySelector('[data-testid="revert-confirm"] .owb-confirm__cancel')?.click()`)
   check(await waitFor(evaluate, `!document.querySelector('[data-testid="revert-confirm"]')`), '取消关闭确认层')
-  check((await evaluate(countUserMessages)) === 3, '取消后消息数量不变')
+  {
+    const users = await evaluate(countUserMessages)
+    check(users === 3, '取消后消息数量不变', String(users))
+  }
 
   await evaluate(`document.querySelectorAll('.owb-msg--user [data-testid="message-revert"]')[1]?.click()`)
   check(await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="revert-confirm"]'))`), '再次打开回退确认')
@@ -187,6 +190,11 @@ try {
   check(reverted, '回退保留第二轮并删除其后内容', await evaluate(`document.body.innerText.slice(-200)`))
   await sleep(500)
   check((await evaluate(countAssistants)) === 2, '回退不重新生成助手回复')
+  {
+    // 文件检查点结果必须出现在界面上,不能只存数据库。
+    const body = await evaluate('document.body.innerText')
+    check(/文件未回退|文件无需改动|已恢复/.test(body), '回退结果说明文件是否恢复', body.slice(-200))
+  }
 
   // 重放第一轮:确认后重新生成,保留一条用户消息与一条新回复。
   await evaluate(`document.querySelectorAll('.owb-msg--user [data-testid="message-replay"]')[0]?.click()`)

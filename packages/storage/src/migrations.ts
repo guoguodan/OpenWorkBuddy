@@ -445,6 +445,26 @@ ALTER TABLE message ADD COLUMN meta_json TEXT;
 ALTER TABLE task ADD COLUMN user_message_id TEXT;
 CREATE INDEX idx_task_user_message ON task(user_message_id);
 `
+  },
+  {
+    version: 14,
+    name: 'file_checkpoint',
+    sql: `-- 回退到此版本不仅要撤销会话,还要撤销这一轮对工作区文件的改动。
+-- 清单快照只存路径与 sha256,内容按哈希去重存放在数据目录,避免每次复制整个工作区。
+-- user_message_id 级联删除:消息被截断后,检查点不能残留成孤儿历史。
+CREATE TABLE file_checkpoint (
+  id               TEXT PRIMARY KEY,
+  conversation_id  TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+  user_message_id  TEXT NOT NULL REFERENCES message(id) ON DELETE CASCADE,
+  message_seq      INTEGER NOT NULL,
+  before_json      TEXT NOT NULL,
+  after_json       TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_file_checkpoint_msg ON file_checkpoint(user_message_id);
+CREATE INDEX idx_file_checkpoint_conv ON file_checkpoint(conversation_id, message_seq);
+`
   }
 ]
 
