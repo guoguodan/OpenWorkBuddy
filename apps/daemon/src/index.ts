@@ -134,6 +134,14 @@ import {
 import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
 import { summarizeToolResult, toToolFailure } from './tool-summary.js'
 import { buildHistoryContext, historyNotice } from './history.js'
+import {
+  DEFAULT_MAX_STREAM_ATTEMPTS,
+  DEFAULT_RETRY_BASE_MS,
+  decideStreamRetry,
+  isRetryableStreamError,
+  retryDelayMs,
+  sleepWithAbort
+} from './retry.js'
 import { WorkflowService } from './workflows/service.js'
 import { flushPending, normalizeSyncUrl, startSyncLoop, SyncError } from './sync/client.js'
 import {
@@ -197,6 +205,16 @@ const TRACE_DIR = resolve(WORKSPACE, '.openwb/traces')
 const MOCK = process.env.OPENWB_MOCK === '1'
 const HOST_VERSION = process.env.OPENWB_HOST_VERSION ?? '0.0.1'
 const MAX_STEPS = 5
+const STREAM_MAX_ATTEMPTS_RAW = Number(process.env.OPENWB_STREAM_MAX_ATTEMPTS ?? DEFAULT_MAX_STREAM_ATTEMPTS)
+const STREAM_MAX_ATTEMPTS =
+  Number.isFinite(STREAM_MAX_ATTEMPTS_RAW) && STREAM_MAX_ATTEMPTS_RAW >= 1
+    ? Math.floor(STREAM_MAX_ATTEMPTS_RAW)
+    : DEFAULT_MAX_STREAM_ATTEMPTS
+const STREAM_RETRY_BASE_RAW = Number(process.env.OPENWB_STREAM_RETRY_BASE_MS ?? DEFAULT_RETRY_BASE_MS)
+const STREAM_RETRY_BASE_MS =
+  Number.isFinite(STREAM_RETRY_BASE_RAW) && STREAM_RETRY_BASE_RAW >= 0
+    ? STREAM_RETRY_BASE_RAW
+    : DEFAULT_RETRY_BASE_MS
 const MODEL_NAME = process.env.OPENWB_MODEL ?? 'unknown'
 const SYNC_URL = process.env.OPENWB_SYNC_URL?.trim() ?? ''
 const SYNC_TOKEN = process.env.OPENWB_SYNC_TOKEN?.trim() || undefined
@@ -2006,47 +2024,97 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
         lastNames = names
       }
 
-      const result = streamText({
-        model,
-        system: prepared.system,
-        messages,
-        tools,
-        maxSteps: 1,
-        abortSignal: signal
-      })
-
-      for await (const part of result.fullStream) {
-        if (signal.aborted) throw new RunCancelledError()
-        if (part.type === 'text-delta') {
-          reply += part.textDelta
-          emit({ type: 'delta', text: part.textDelta })
-        } else if (part.type === 'tool-call') {
-          toolCalls++
-          emit({ type: 'tool.started', callId: part.toolCallId, name: part.toolName })
-        } else if (part.type === 'tool-result') {
-          const { ok, summary } = summarizeToolResult(part.toolName, part.result)
-          emit({ type: 'tool.finished', callId: part.toolCallId, ok, summary })
-          if (part.toolName === 'present_files' && ok) delivered++
-        } else if (part.type === 'error') {
-          emit({
-            type: 'error',
-            code: 'STREAM_ERROR',
-            message: part.error instanceof Error ? part.error.message : String(part.error),
-            retryable: true
+      // 一个"步"可能因为网关抖动失败。只要这一步还没吐出任何文本、也没有发起
+      // 工具调用,就整体重来是安全的;一旦有可见输出就必须停下,否则会重复回答,
+      // 更糟的是把已经执行过的写文件/删文件工具再跑一遍。
+      let stepUsage: { promptTokens?: number; completionTokens?: number } | null = null
+      let stepResponseMessages: CoreMessage[] | null = null
+      let stepToolResultCount = 0
+      for (let attempt = 0; attempt < STREAM_MAX_ATTEMPTS; attempt++) {
+        let producedOutput = false
+        try {
+          const attemptResult = streamText({
+            model,
+            system: prepared.system,
+            messages,
+            tools,
+            maxSteps: 1,
+            // 重试由本层统一负责:SDK 内建的静默重试不会发事件,
+            // 用户只会看到界面卡住,而且两层重试会成倍放大请求次数。
+            maxRetries: 0,
+            abortSignal: signal
           })
+
+          for await (const part of attemptResult.fullStream) {
+            if (signal.aborted) throw new RunCancelledError()
+            if (part.type === 'text-delta') {
+              producedOutput = true
+              reply += part.textDelta
+              emit({ type: 'delta', text: part.textDelta })
+            } else if (part.type === 'tool-call') {
+              producedOutput = true
+              toolCalls++
+              emit({ type: 'tool.started', callId: part.toolCallId, name: part.toolName })
+            } else if (part.type === 'tool-result') {
+              const { ok, summary } = summarizeToolResult(part.toolName, part.result)
+              emit({ type: 'tool.finished', callId: part.toolCallId, ok, summary })
+              if (part.toolName === 'present_files' && ok) delivered++
+            } else if (part.type === 'error') {
+              throw part.error instanceof Error ? part.error : new Error(String(part.error))
+            }
+          }
+
+          // usage/response/toolResults 也要在重试保护内读取:部分网关在流结束
+          // 之后才暴露错误,提前跳出重试会让这些失败直接落到用户头上。
+          stepUsage = (await attemptResult.usage) ?? null
+          const response = await attemptResult.response
+          stepResponseMessages = response.messages as CoreMessage[]
+          stepToolResultCount = (await attemptResult.toolResults).length
+          if (attempt > 0) emit({ type: 'retry.recovered', attempt })
+          break
+        } catch (err) {
+          if (isRunCancelled(err, signal)) throw new RunCancelledError()
+          const decision = decideStreamRetry({
+            attempt,
+            producedOutput,
+            aborted: signal.aborted,
+            error: err,
+            maxAttempts: STREAM_MAX_ATTEMPTS
+          })
+          if (!decision.retry) {
+            if (!isRetryableStreamError(err) || producedOutput) throw err
+            // 重试次数用尽:交给外层统一按 AGENT_FAILED 上报,避免同一失败弹两次。
+            throw err
+          }
+          const delayMs = retryDelayMs(attempt, STREAM_RETRY_BASE_MS)
+          emit({
+            type: 'retry.scheduled',
+            attempt: attempt + 1,
+            delayMs,
+            reason: decision.reason
+          })
+          process.stderr.write(
+            `[retry] 第 ${attempt + 1} 次失败,${delayMs}ms 后重试: ${decision.reason}\n`
+          )
+          try {
+            await sleepWithAbort(delayMs, signal)
+          } catch {
+            throw new RunCancelledError()
+          }
         }
       }
 
-      const usage = await result.usage
+      if (!stepResponseMessages) throw new Error('模型请求重试后仍未取得响应')
+      if (signal.aborted) throw new RunCancelledError()
+
       // 部分网关(含中转)在流式结束时不回 usage,或回 null/NaN。
       // NaN 会被 better-sqlite3 绑成 NULL,直接撞 token_in 的 NOT NULL 约束。
-      const inTokens = Number(usage?.promptTokens)
-      const outTokens = Number(usage?.completionTokens)
+      const inTokens = Number(stepUsage?.promptTokens)
+      const outTokens = Number(stepUsage?.completionTokens)
       if (Number.isFinite(inTokens)) totalInput += inTokens
       if (Number.isFinite(outTokens)) totalOutput += outTokens
 
-      const response = await result.response
-      messages.push(...(response.messages as CoreMessage[]))
+      messages.push(...stepResponseMessages)
 
       const active = skills.activeSkill()
       if (active && active.name !== activeSkill) {
@@ -2061,8 +2129,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
         )
       }
 
-      const toolResults = await result.toolResults
-      if (toolResults.length === 0) break
+      if (stepToolResultCount === 0) break
     }
 
     if (signal.aborted) throw new RunCancelledError()

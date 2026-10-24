@@ -65,6 +65,9 @@ type AgentEvent = {
   paths?: string[]
   injected?: number
   bytes?: number
+  attempt?: number
+  delayMs?: number
+  reason?: string
 }
 
 interface SystemLine {
@@ -389,6 +392,15 @@ export default function App() {
         setTools((list) =>
           list.map((x) => (x.callId === e.callId ? { ...x, ok: e.ok ?? false, summary: e.summary ?? '' } : x))
         )
+      } else if (e.type === 'retry.scheduled') {
+        // 重试期间仍处于同一个"流式回复"里,不能把 streaming 置 false:
+        // 否则重试成功后的增量会被丢弃,界面只看到半截答案。
+        const delayMs = Math.max(0, e.delayMs ?? 0)
+        const wait = delayMs >= 1000 ? `${(delayMs / 1000).toFixed(1)} 秒` : `${delayMs} 毫秒`
+        const reason = e.reason ? ` · ${e.reason.slice(0, 120)}` : ''
+        note('warn', `连接中断,${wait}后自动重试(第 ${e.attempt ?? 1} 次)${reason}`)
+      } else if (e.type === 'retry.recovered') {
+        note('info', '连接已恢复,继续生成。')
       } else if (e.type === 'ready' && e.workspace) {
         setWorkspacePath(e.workspace)
       } else if (e.type === 'artifact.created' && e.artifact) {
