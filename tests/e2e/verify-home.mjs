@@ -150,8 +150,12 @@ try {
   )
   check(activeScene === '办公', 'default-scene-working', activeScene)
 
+  // 真实首页只有标题与场景切换,没有副标题。
   const heroSubtitle = await evaluate(`document.querySelector('.owb-welcome__hero p')?.textContent?.trim() ?? ''`)
-  check(heroSubtitle === '你的职场超能力', 'hero-subtitle-working', heroSubtitle)
+  check(heroSubtitle === '', 'hero-has-no-subtitle', heroSubtitle)
+
+  const mascotShown = await evaluate(`Boolean(document.querySelector('.owb-welcome__mascot'))`)
+  check(mascotShown, 'home-mascot-rendered')
 
   const capabilities = await evaluate(
     `Array.from(document.querySelectorAll('.owb-capability')).map((b) => b.textContent.trim())`
@@ -240,11 +244,9 @@ try {
   const codingCaps = await evaluate(
     `Array.from(document.querySelectorAll('.owb-capability')).map((b) => b.textContent.trim())`
   )
-  const codingSubtitle = await evaluate(`document.querySelector('.owb-welcome__hero p')?.textContent?.trim() ?? ''`)
   const codingSuggestions = await evaluate(
     `Array.from(document.querySelectorAll('.owb-suggestion')).map((b) => b.textContent.trim())`
   )
-  check(codingSubtitle === '你的开发超能力', 'hero-subtitle-coding', codingSubtitle)
   check(
     codingCaps.includes('代码审查') && codingCaps.join('|') !== workingCaps.join('|'),
     'capabilities-per-scene',
@@ -273,8 +275,6 @@ try {
   const designCaps = await evaluate(
     `Array.from(document.querySelectorAll('.owb-capability')).map((b) => b.textContent.trim())`
   )
-  const designSubtitle = await evaluate(`document.querySelector('.owb-welcome__hero p')?.textContent?.trim() ?? ''`)
-  check(designSubtitle === '你的设计超能力', 'hero-subtitle-design', designSubtitle)
   check(designCaps.includes('页面设计'), 'capabilities-design', JSON.stringify(designCaps))
 
   await evaluate(`document.querySelector('.owb-scene-tab[data-scene="working"]').click()`)
@@ -308,6 +308,21 @@ try {
     navText.replace(/\n/g, ' | ')
   )
   check(sidebarText.includes('做任务赢积分好礼') && sidebarText.includes('立即前往'), 'sidebar-promo-card')
+
+  // 侧栏不展示技能计数徽标;发现应用是带箭头的描边胶囊。
+  const navBadge = await evaluate(`Boolean(document.querySelector('.owb-nav-count'))`)
+  check(!navBadge, 'sidebar-no-skill-count-badge')
+  const discoverShape = await evaluate(`(() => {
+    const b = document.querySelector('.owb-discover')
+    if (!b) return null
+    const s = getComputedStyle(b)
+    return JSON.stringify({ border: s.borderTopWidth, radius: s.borderTopLeftRadius, arrows: b.querySelectorAll('svg').length })
+  })()`)
+  check(
+    discoverShape !== null && !discoverShape.includes('"border":"0px"') && discoverShape.includes('"arrows":2'),
+    'sidebar-discover-pill',
+    String(discoverShape)
+  )
 
   // 权限菜单:可打开、三项、切换后持久化。
   await evaluate(`(() => {

@@ -12,6 +12,7 @@ import {
   IconSearch,
   IconSparkle
 } from './Icons'
+import mascot from '../assets/mascot-new.png'
 
 export type SceneId = 'working' | 'coding' | 'design'
 
@@ -38,7 +39,6 @@ interface SceneConfig {
   label: string
   icon: typeof IconBriefcase
   subtitle: string
-  heroSubtitle: string
   capabilities: Capability[]
   suggestionGroups: Suggestion[][]
 }
@@ -48,7 +48,6 @@ const SCENES: Record<SceneId, SceneConfig> = {
     label: '办公',
     icon: IconBriefcase,
     subtitle: '文档、表格、汇报，直接交付可用的成果',
-    heroSubtitle: '你的职场超能力',
     capabilities: [
       { label: '文档', icon: IconFile, prompt: '帮我写一份结构完整、可直接汇报的工作文档' },
       { label: '金融服务', icon: IconSparkle, prompt: '帮我整理一份金融业务分析，梳理关键指标与风险点' },
@@ -83,7 +82,6 @@ const SCENES: Record<SceneId, SceneConfig> = {
     label: '开发',
     icon: IconCode,
     subtitle: '读代码、改实现、跑测试，按工程规范推进',
-    heroSubtitle: '你的开发超能力',
     capabilities: [
       { label: '代码审查', icon: IconSearch, prompt: '审查这段代码，指出正确性、安全性和可维护性问题' },
       { label: '修复缺陷', icon: IconCode, prompt: '复现并修复这个问题，说明根因和改动范围' },
@@ -118,7 +116,6 @@ const SCENES: Record<SceneId, SceneConfig> = {
     label: '设计',
     icon: IconPalette,
     subtitle: '梳理信息层级，产出页面结构与视觉方案',
-    heroSubtitle: '你的设计超能力',
     capabilities: [
       { label: '页面设计', icon: IconPalette, prompt: '为这个功能设计一个清晰的页面结构与信息层级' },
       { label: '交互梳理', icon: IconMonitor, prompt: '梳理这个流程的交互步骤，指出容易卡住的环节' },
@@ -185,7 +182,6 @@ export function WelcomeView({ scene, busy, children, onSceneChange, onQuickActio
       <div className="owb-welcome__body">
         <div className="owb-welcome__hero">
           <h1>WorkBuddy, 我帮你</h1>
-          <p>{config.heroSubtitle}</p>
         </div>
 
         <div className="owb-scene-tabs" role="tablist" aria-label="场景切换">
@@ -225,7 +221,10 @@ export function WelcomeView({ scene, busy, children, onSceneChange, onQuickActio
           ))}
         </div>
 
-        {children}
+        <div className="owb-welcome__composer">
+          <img className="owb-welcome__mascot" src={mascot} alt="" aria-hidden="true" />
+          {children}
+        </div>
 
         <div className="owb-suggestions" aria-label="推荐问题">
           {suggestions.map((item) => (

@@ -624,11 +624,6 @@ export default function App() {
           activeId={conversationId}
           busy={busy}
           collapsed={collapsed}
-          skillCount={skills.length}
-          channelCount={channels.length}
-          workspaceLabel={workspaceLabel}
-          permissionLabel={settings.permissionMode === 'readOnly' ? '只读' : settings.permissionMode === 'fullAccess' ? '完全访问' : '默认权限'}
-          more={null}
           onToggleCollapse={() => setCollapsed((v) => !v)}
           onNew={() => void newConversation()}
           onSelect={(id) => void switchConversation(id)}
@@ -637,7 +632,9 @@ export default function App() {
           onOpenSkills={() => setPanel('skills')}
           onOpenAutomation={() => setSheet('automation')}
           onOpenLibrary={() => setSheet('library')}
-          onOpenApprovals={() => void openGrants().catch((err: Error) => note('system', `授权列表加载失败: ${err.message}`))}
+          onOpenMessages={() => note('info', '消息中心正在加载')}
+          onOpenActivity={() => note('info', '积分活动需要登录账号后参与')}
+          onOpenSupport={() => note('info', '客服入口需要登录账号后使用')}
           onOpenMore={handleMore}
           onOpenAccount={() => setSheet('settings')}
         />

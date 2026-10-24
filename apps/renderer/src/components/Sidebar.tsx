@@ -5,12 +5,14 @@ import {
   IconBriefcase,
   IconBulb,
   IconChat,
+  IconChevron,
   IconClock,
   IconGrid,
   IconMail,
   IconPlus,
   IconTool
 } from './Icons'
+import brandIcon from '../assets/brand-icon.svg'
 
 export interface ConversationSummary {
   id: string
@@ -36,11 +38,6 @@ interface SidebarProps {
   activeId: string
   busy: boolean
   collapsed: boolean
-  skillCount: number
-  channelCount: number
-  workspaceLabel: string
-  permissionLabel: string
-  more: MoreEntry | null
   onToggleCollapse: () => void
   onNew: () => void
   onSelect: (id: string) => void
@@ -49,7 +46,9 @@ interface SidebarProps {
   onOpenSkills: () => void
   onOpenAutomation: () => void
   onOpenLibrary: () => void
-  onOpenApprovals: () => void
+  onOpenMessages: () => void
+  onOpenActivity: () => void
+  onOpenSupport: () => void
   onOpenMore: (entry: MoreEntry) => void
   onOpenAccount: () => void
 }
@@ -82,8 +81,6 @@ export function Sidebar({
   activeId,
   busy,
   collapsed,
-  skillCount,
-  channelCount,
   onToggleCollapse,
   onNew,
   onSelect,
@@ -92,7 +89,9 @@ export function Sidebar({
   onOpenSkills,
   onOpenAutomation,
   onOpenLibrary,
-  onOpenApprovals,
+  onOpenMessages,
+  onOpenActivity,
+  onOpenSupport,
   onOpenMore,
   onOpenAccount
 }: SidebarProps) {
@@ -119,7 +118,7 @@ export function Sidebar({
     <aside className={`owb-sidebar${collapsed ? ' owb-sidebar--collapsed' : ''}`} data-testid="sidebar">
       <div className="owb-sidebar__brand">
         <button className="owb-brand-mark" onClick={onToggleCollapse} title={collapsed ? '展开侧边栏' : '收起侧边栏'} aria-label="切换侧边栏">
-          <span className="owb-brand-mark__glyph">W</span>
+          <img src={brandIcon} alt="" aria-hidden="true" />
         </button>
         <div className="owb-brand-text">
           <div className="owb-brand-title">OpenWorkBuddy</div>
@@ -128,6 +127,7 @@ export function Sidebar({
         <button className="owb-discover" onClick={onOpenSkills} title="发现应用">
           <IconGrid size={14} />
           <span>发现应用</span>
+          <IconChevron size={12} />
         </button>
       </div>
 
@@ -144,7 +144,6 @@ export function Sidebar({
         <button className="owb-nav-item" onClick={onOpenSkills} data-testid="open-skills">
           <IconTool size={17} />
           <span className="owb-nav-item__label">专家·技能·连接器</span>
-          {skillCount > 0 ? <span className="owb-nav-count">{skillCount}</span> : null}
         </button>
         <button className="owb-nav-item" onClick={onOpenAutomation} data-testid="open-automation">
           <IconClock size={17} />
@@ -231,7 +230,7 @@ export function Sidebar({
       <div className="owb-promo">
         <div className="owb-promo__title">做任务赢积分好礼</div>
         <div className="owb-promo__sub">连签抽取 Buddy 周边</div>
-        <button className="owb-promo__cta" onClick={onOpenApprovals}>立即前往</button>
+        <button className="owb-promo__cta" onClick={onOpenActivity}>立即前往</button>
       </div>
 
       <div className="owb-sidebar__footer">
@@ -240,15 +239,14 @@ export function Sidebar({
           <span className="owb-account__name">坐房顶吹风的蜗牛先生</span>
         </button>
         <div className="owb-account__actions">
-          <button className="owb-icon-btn" title="通知" aria-label="通知" onClick={onOpenApprovals}>
+          <button className="owb-icon-btn" title="通知" aria-label="通知" onClick={onOpenMessages}>
             <IconBell size={17} />
           </button>
-          <button className="owb-icon-btn" title="客服" aria-label="客服" onClick={onOpenColleagues}>
+          <button className="owb-icon-btn" title="客服" aria-label="客服" onClick={onOpenSupport}>
             <IconChat size={17} />
           </button>
         </div>
       </div>
-      {channelCount > 0 ? <span className="owb-sidebar__channel-count" aria-hidden="true" /> : null}
     </aside>
   )
 }

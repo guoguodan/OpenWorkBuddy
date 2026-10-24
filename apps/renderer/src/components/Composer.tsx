@@ -6,6 +6,7 @@ import {
   IconFile,
   IconFolder,
   IconMic,
+  IconModel,
   IconStop,
   IconTool,
   IconX
@@ -444,6 +445,7 @@ export function Composer({
 
           <div className="owb-composer__right">
             <span className="owb-composer__model" title="当前模型">
+              <IconModel size={15} className="owb-composer__model-icon" />
               <IconChevron size={12} />
               {modelLabel}
             </span>

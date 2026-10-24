@@ -80,6 +80,15 @@ export function IconGrid({ size = 18, className }: IconProps) {
   return <svg {...base(size)} className={className}><rect x="4" y="4" width="6.5" height="6.5" rx="1.6" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6" /></svg>
 }
 
+export function IconModel({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className}>
+      <path d="M12 3.5 20 8v8l-8 4.5L4 16V8l8-4.5Z" />
+      <path d="M4 8l8 4.5L20 8M12 12.5V20.5" />
+    </svg>
+  )
+}
+
 export function IconBell({ size = 18, className }: IconProps) {
   return <svg {...base(size)} className={className}><path d="M18 16H6l1.4-2.2V9.8A4.6 4.6 0 0 1 12 5.2a4.6 4.6 0 0 1 4.6 4.6v4L18 16Z" /><path d="M10 19a2 2 0 0 0 4 0" /></svg>
 }
