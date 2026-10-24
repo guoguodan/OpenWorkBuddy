@@ -1013,12 +1013,18 @@ function startDaemon() {
   // daemon 以 Electron 的 Node 运行时启动,但入口必须是普通文件:asar 内的
   // 原生模块与子进程脚本无法被 require/import 正确解析。
   const entry =
-    process.env.OPENWB_DAEMON_ENTRY ??
-    (app.isPackaged ? path.join(process.resourcesPath, 'daemon', 'dist', 'index.js') : undefined)
+    process.env.OPENWB_DAEMON_ENTRY
+      ? // 环境变量可能是相对仓库根的路径(根脚本就是这么传的),而 Electron 的
+        // cwd 是 apps/desktop,直接 path.resolve 会拼错目录。统一按仓库根解析,
+        // 绝对路径不受影响。
+        path.resolve(resolveBundleRoot(), process.env.OPENWB_DAEMON_ENTRY)
+      : app.isPackaged
+        ? path.join(process.resourcesPath, 'daemon', 'dist', 'index.js')
+        : undefined
   if (!entry) throw new Error('缺少 OPENWB_DAEMON_ENTRY,daemon 未构建')
   const bundleRoot = resolveBundleRoot()
   const cwd = app.isPackaged ? path.dirname(entry) : resolveWorkspace()
-  daemon = spawn(process.execPath, [path.resolve(entry)], {
+  daemon = spawn(process.execPath, [entry], {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
