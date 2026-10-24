@@ -338,11 +338,18 @@ export const colleague = sqliteTable(
     avatar: text('avatar').notNull().default('assistant'),
     skillNames: text('skill_names').notNull().default('[]'),
     connectorNames: text('connector_names').notNull().default('[]'),
+    channelIds: text('channel_ids').notNull().default('[]'),
+    status: text('status', { enum: ['active', 'paused'] }).notNull().default('active'),
+    visibility: text('visibility', { enum: ['personal', 'project', 'public'] })
+      .notNull()
+      .default('personal'),
+    memoryEnabled: integer('memory_enabled').notNull().default(1),
+    pinnedAt: text('pinned_at'),
     modeId: text('mode_id').notNull().default('craft'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull()
   },
-  (t) => [index('idx_colleague_ws').on(t.workspaceId, t.createdAt)]
+  (t) => [index('idx_colleague_ws').on(t.workspaceId, t.pinnedAt, t.createdAt)]
 )
 
 export const schema = {

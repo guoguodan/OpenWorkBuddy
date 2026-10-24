@@ -66,6 +66,7 @@ import {
   createColleague,
   updateColleague,
   deleteColleague,
+  assertColleagueAssignable,
   createNotification,
   listNotifications,
   markNotificationRead,
@@ -801,10 +802,19 @@ function buildTools(mode: ModePolicy, allowedNames: string[], run?: RunToolConte
   return result
 }
 
-function effectiveTools(mode: ModePolicy): string[] {
+function effectiveTools(mode: ModePolicy, colleague?: { connectorNames: string[] } | null): string[] {
   const base = modeTools(mode)
-  if (base.length === 0 || skills.list().length === 0) return base
-  return [...skills.narrow(base), 'load_skill'].sort()
+  // 一旦助理参与运行,连接器就是显式白名单:未绑定任何连接器 = 看不到第三方工具。
+  const narrowedBase =
+    colleague
+      ? base.filter((name) => {
+          if (!isPluginToolName(name)) return true
+          const pluginName = name.split('__')[0] ?? ''
+          return colleague.connectorNames.includes(pluginName)
+        })
+      : base
+  if (narrowedBase.length === 0 || skills.list().length === 0) return narrowedBase
+  return [...skills.narrow(narrowedBase), 'load_skill'].sort()
 }
 
 function requireDb() {
@@ -1059,11 +1069,12 @@ async function runMock(
   prepared: { system: string; modeTools: string[]; assembled: AssembledPrompt }
 ): Promise<'done'> {
   const db = requireDb()
+  const colleague = input.colleagueId ? getColleague(db, input.colleagueId) : undefined
   const taskId = createTask(db, { conversationId: input.conversationId, title: input.text.slice(0, 80) || '未命名任务' })
   transitionTask(db, taskId, 'running')
   appendEvent(db, input.conversationId, 'run.started', { taskId, mode: input.mode.id })
   emit({ type: 'text.start' })
-  emit({ type: 'tools.available', names: modeTools(input.mode) })
+  emit({ type: 'tools.available', names: effectiveTools(input.mode, colleague ?? null) })
   const callId = 'mock-call-1'
   let reply = ''
 
@@ -1107,7 +1118,7 @@ async function runMock(
       content: { text: reply },
       model: 'mock'
     })
-    const mockTrace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+    const mockTrace = buildTrace(input.mode.id, prepared.assembled, effectiveTools(input.mode, colleague ?? null))
     await writeTrace(TRACE_DIR, mockTrace)
     transitionTask(db, taskId, 'done', { resultRef: mockTrace.outputSha256.slice(0, 16) })
     notifyTaskFinished({ conversationId: input.conversationId, taskId, status: 'done', title: input.text.slice(0, 80) || '未命名任务' })
@@ -1324,10 +1335,10 @@ async function runMock(
     model: 'mock'
   })
   // mock 也要产出 trace:P2 的"提示词稳定性"验收靠它比对 sha256
-  const trace = buildTrace(input.mode.id, prepared.assembled, modeTools(input.mode))
+  const trace = buildTrace(input.mode.id, prepared.assembled, effectiveTools(input.mode, colleague ?? null))
   const file = await writeTrace(TRACE_DIR, trace)
   process.stderr.write(
-    `[trace] ${input.mode.id} sha256=${trace.outputSha256.slice(0, 12)} tools=[${modeTools(input.mode).join(',')}] skill=- -> ${file}\n`
+    `[trace] ${input.mode.id} sha256=${trace.outputSha256.slice(0, 12)} tools=[${effectiveTools(input.mode, colleague ?? null).join(',')}] skill=- -> ${file}\n`
   )
 
   transitionTask(db, taskId, 'done', { resultRef: trace.outputSha256.slice(0, 16) })
@@ -1346,15 +1357,28 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
 
   // 每一轮都从干净状态开始:上一轮模型自加载的技能不能悄悄影响新任务。
   skills.reset()
+  const colleague = input.colleagueId ? getColleague(db, input.colleagueId) : undefined
+  if (input.colleagueId && (!colleague || colleague.workspaceId !== workspaceId)) {
+    emit({ type: 'error', code: 'COLLEAGUE_NOT_FOUND', message: '助理不存在或不属于当前工作区', retryable: false })
+    return 'failed'
+  }
+  if (colleague?.status === 'paused') {
+    emit({ type: 'error', code: 'COLLEAGUE_PAUSED', message: `助理「${colleague.name}」已暂停,恢复后才能继续执行任务`, retryable: false })
+    return 'failed'
+  }
+  // 助理声明了技能时,本轮索引、load_skill 与工具收窄都只在这个集合内。
+  skills.setAllowed(colleague && colleague.skillNames.length > 0 ? colleague.skillNames : null)
 
   emit({ type: 'mode.selected', modeId: mode.id, displayName: mode.displayName })
 
-  const injected = await buildInjection({
-    db,
-    dataDir: DATA_DIR,
-    workspaceId,
-    ...(text ? { query: text } : {})
-  })
+  const injected = colleague?.memoryEnabled === false
+    ? { text: '', blocks: [], truncatedTotal: 0 }
+    : await buildInjection({
+        db,
+        dataDir: DATA_DIR,
+        workspaceId,
+        ...(text ? { query: text } : {})
+      })
   emit({
     type: 'memory.injected',
     blocks: injected.blocks.map((b) => ({
@@ -1415,14 +1439,14 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
 
   try {
     emit({ type: 'text.start' })
-    const initialTools = effectiveTools(mode)
+    const initialTools = effectiveTools(mode, colleague ?? null)
     emit({ type: 'tools.available', names: initialTools })
 
     const messages: CoreMessage[] = [{ role: 'user', content: text }]
     let lastNames = initialTools
 
     for (let step = 0; step < MAX_STEPS; step++) {
-      const names = effectiveTools(mode)
+      const names = effectiveTools(mode, colleague ?? null)
       const tools = buildTools(mode, names, { taskId, conversationId, wroteFiles })
 
       if (JSON.stringify(names) !== JSON.stringify(lastNames)) {
@@ -1522,7 +1546,7 @@ async function runAgent(input: RunInput): Promise<'done' | 'failed'> {
       }
     }
 
-    const finalNames = effectiveTools(mode)
+    const finalNames = effectiveTools(mode, colleague ?? null)
     const trace = buildTrace(mode.id, prepared.assembled, finalNames, activeSkill)
     const file = await writeTrace(TRACE_DIR, trace)
     process.stderr.write(
@@ -1722,6 +1746,15 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       ...(Array.isArray(msg.connectorNames)
         ? { connectorNames: msg.connectorNames.filter((x): x is string => typeof x === 'string') }
         : {}),
+      ...(Array.isArray(msg.channelIds)
+        ? { channelIds: msg.channelIds.filter((x): x is string => typeof x === 'string') }
+        : {}),
+      ...(msg.status === 'active' || msg.status === 'paused' ? { status: msg.status } : {}),
+      ...(msg.visibility === 'personal' || msg.visibility === 'project' || msg.visibility === 'public'
+        ? { visibility: msg.visibility }
+        : {}),
+      ...(typeof msg.memoryEnabled === 'boolean' ? { memoryEnabled: msg.memoryEnabled } : {}),
+      ...(typeof msg.pinned === 'boolean' ? { pinned: msg.pinned } : {}),
       ...(typeof msg.modeId === 'string' ? { modeId: msg.modeId } : {})
     } satisfies ColleagueInput)
     emit({ ...base, type: 'colleagues.created', colleague })
@@ -1740,6 +1773,15 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       ...(Array.isArray(msg.connectorNames)
         ? { connectorNames: msg.connectorNames.filter((x): x is string => typeof x === 'string') }
         : {}),
+      ...(Array.isArray(msg.channelIds)
+        ? { channelIds: msg.channelIds.filter((x): x is string => typeof x === 'string') }
+        : {}),
+      ...(msg.status === 'active' || msg.status === 'paused' ? { status: msg.status } : {}),
+      ...(msg.visibility === 'personal' || msg.visibility === 'project' || msg.visibility === 'public'
+        ? { visibility: msg.visibility }
+        : {}),
+      ...(typeof msg.memoryEnabled === 'boolean' ? { memoryEnabled: msg.memoryEnabled } : {}),
+      ...(typeof msg.pinned === 'boolean' ? { pinned: msg.pinned } : {}),
       ...(typeof msg.modeId === 'string' ? { modeId: msg.modeId } : {})
     })
     if (!colleague) throw new Error('助理不存在')
@@ -2000,8 +2042,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     const colleagueId =
       typeof msg.colleagueId === 'string' && msg.colleagueId.trim() ? msg.colleagueId.trim() : null
     if (colleagueId) {
-      const colleague = getColleague(db, colleagueId)
-      if (!colleague || colleague.workspaceId !== workspaceId) throw new Error('助理不存在')
+      assertColleagueAssignable(db, workspaceId, colleagueId, channelId)
     }
     const conv = createConversation(db, {
       workspaceId,
@@ -2349,6 +2390,11 @@ async function handleFrame(value: unknown) {
     : undefined
 
   const db = requireDb()
+  const existingConversation = getConversation(db, conversationId)
+  const effectiveColleagueId = colleagueId ?? existingConversation?.colleagueId ?? undefined
+  if (effectiveColleagueId) {
+    assertColleagueAssignable(db, workspaceId, effectiveColleagueId, existingConversation?.channelId ?? null)
+  }
   const saved = appendMessage(db, {
     conversationId,
     role: 'user',
@@ -2374,7 +2420,7 @@ async function handleFrame(value: unknown) {
     conversationId,
     ...(clientRequestId ? { clientRequestId } : {}),
     ...(skill ? { skill } : {}),
-    ...(colleagueId ? { colleagueId } : {}),
+    ...(effectiveColleagueId ? { colleagueId: effectiveColleagueId } : {}),
     ...(scene ? { scene } : {}),
     ...(contextPaths && contextPaths.length > 0 ? { contextPaths } : {})
   })

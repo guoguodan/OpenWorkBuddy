@@ -156,7 +156,17 @@ interface ColleagueInfo {
   avatar: string
   skillNames: string[]
   connectorNames: string[]
+  channelIds: string[]
+  status: 'active' | 'paused'
+  visibility: 'personal' | 'project' | 'public'
+  memoryEnabled: boolean
+  pinnedAt: string | null
   modeId: string
+  stats: {
+    conversationCount: number
+    tokenUsage: number
+    lastActiveAt: string | null
+  }
   createdAt: string
   updatedAt: string
 }
@@ -169,6 +179,11 @@ interface ColleagueInputInfo {
   avatar?: string
   skillNames?: string[]
   connectorNames?: string[]
+  channelIds?: string[]
+  status?: 'active' | 'paused'
+  visibility?: 'personal' | 'project' | 'public'
+  memoryEnabled?: boolean
+  pinned?: boolean
   modeId?: string
 }
 

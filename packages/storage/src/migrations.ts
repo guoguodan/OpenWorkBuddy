@@ -324,6 +324,28 @@ ALTER TABLE conversation ADD COLUMN colleague_id TEXT REFERENCES colleague(id) O
 ALTER TABLE conversation ADD COLUMN pinned_at TEXT;
 CREATE INDEX idx_conversation_pinned ON conversation(workspace_id, pinned_at);
 `
+  },
+  {
+    version: 7,
+    name: 'colleague_profile_and_availability',
+    sql: `-- 助理完整档案:可用状态、可见范围、置顶、记忆开关与频道绑定。
+-- 这些字段都直接参与运行时判定,不是纯展示:
+--   paused        -> 新建会话/发送消息/定时任务都必须拒绝
+--   skill_names   -> 收窄本轮可见技能与 load_skill 白名单
+--   connector_names -> 收窄插件工具
+--   channel_ids   -> 允许在哪些团队频道中被召唤
+--   memory_enabled -> 关闭后本轮不再注入长期记忆
+ALTER TABLE colleague ADD COLUMN channel_ids TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE colleague ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
+  CHECK (status IN ('active','paused'));
+ALTER TABLE colleague ADD COLUMN visibility TEXT NOT NULL DEFAULT 'personal'
+  CHECK (visibility IN ('personal','project','public'));
+ALTER TABLE colleague ADD COLUMN memory_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE colleague ADD COLUMN pinned_at TEXT;
+
+DROP INDEX IF EXISTS idx_colleague_ws;
+CREATE INDEX idx_colleague_ws ON colleague(workspace_id, pinned_at, created_at);
+`
   }
 ]
 

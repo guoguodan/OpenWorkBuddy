@@ -46,6 +46,7 @@ export class SkillRuntime {
   private entries: SkillIndexEntry[] = []
   private problemList: SkillIssue[] = []
   private active: ActiveSkill | null = null
+  private allowedNames: string[] | null = null
 
   constructor(private readonly roots: SkillRoot[]) {}
 
@@ -57,7 +58,8 @@ export class SkillRuntime {
   }
 
   list(): SkillIndexEntry[] {
-    return [...this.entries]
+    if (!this.allowedNames) return [...this.entries]
+    return this.entries.filter((entry) => this.allowedNames!.includes(entry.name))
   }
 
   issues(): SkillIssue[] {
@@ -65,12 +67,13 @@ export class SkillRuntime {
   }
 
   find(name: string): SkillIndexEntry | undefined {
-    return this.entries.find((e) => e.name === name)
+    return this.entries.find((e) => e.name === name && (!this.allowedNames || this.allowedNames.includes(e.name)))
   }
 
   /** 只有 name + description,正文按需加载 */
   indexText(): string {
-    return renderSkillIndex(this.entries)
+    // 索引也必须遵循助理白名单;否则模型会看到一个"可加载"但 load 时被拒绝的技能。
+    return renderSkillIndex(this.list())
   }
 
   activeSkill(): ActiveSkill | null {
@@ -79,6 +82,12 @@ export class SkillRuntime {
 
   reset(): void {
     this.active = null
+    this.allowedNames = null
+  }
+
+  /** 助理绑定的技能白名单:null 表示不限制(沿用全局索引)。 */
+  setAllowed(names: string[] | null): void {
+    this.allowedNames = names === null ? null : [...new Set(names.filter((name) => name.length > 0))]
   }
 
   async load(name: string): Promise<{ name: string; body: string; allowedTools?: string[] }> {
