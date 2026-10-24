@@ -133,6 +133,7 @@ import {
 } from '@openwb/plugins'
 import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
 import { summarizeToolResult, toToolFailure } from './tool-summary.js'
+import { buildHistoryContext, historyNotice } from './history.js'
 import { WorkflowService } from './workflows/service.js'
 import { flushPending, normalizeSyncUrl, startSyncLoop, SyncError } from './sync/client.js'
 import {
@@ -1980,7 +1981,20 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
     const initialTools = effectiveTools(mode, colleague ?? null)
     emit({ type: 'tools.available', names: initialTools })
 
-    const messages: CoreMessage[] = [{ role: 'user', content: text }]
+    // 同一个会话要带上之前的问答,否则"继续/再改一下"这类追问完全失效。
+    // 历史只取文本,并在超预算时明确告诉模型有内容被省略。
+    const history = buildHistoryContext(listMessages(db, conversationId), {
+      ...(input.userMessageId ? { currentUserMessageId: input.userMessageId } : {})
+    })
+    const messages: CoreMessage[] = [
+      ...(history.messages as CoreMessage[]),
+      { role: 'user', content: text }
+    ]
+    const notice = historyNotice(history.dropped)
+    if (notice) {
+      emit({ type: 'context.notice', text: notice })
+      prepared.system += `\n\n# 上下文提示\n${notice}`
+    }
     let lastNames = initialTools
 
     for (let step = 0; step < MAX_STEPS; step++) {
