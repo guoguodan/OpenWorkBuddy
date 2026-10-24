@@ -1793,6 +1793,42 @@ input, textarea { font-family: inherit; }
 .owb-composer__model-text { flex-shrink: 0; }
 .owb-composer__model-chevron { flex-shrink: 0; color: var(--owb-text-tertiary); }
 .owb-composer__icon { width: 30px; height: 30px; }
+.owb-composer__icon--loading { cursor: default; pointer-events: none; color: var(--owb-brand-7); }
+.owb-composer__box--recording { border-color: #40d1b3 !important; box-shadow: 0 0 0 3px rgba(64, 209, 179, 0.14); }
+
+/* 语音录制态:与真实产品一致,工具栏位置直接给计时与停止/取消,不弹独立对话框。 */
+.owb-voice {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 6px 0 10px;
+  border-radius: var(--owb-radius-full);
+  background: rgba(64, 209, 179, 0.16);
+  color: #0f9d80;
+}
+.owb-voice__dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #40d1b3;
+  animation: owb-voice-pulse 1.2s ease-in-out infinite;
+}
+.owb-voice__timer {
+  font-size: 12px; font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+}
+.owb-voice__action {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 10px; border: none; cursor: pointer;
+  border-radius: var(--owb-radius-full);
+  background: #40d1b3; color: #063b31; font-size: 12px; font-weight: 500;
+}
+.owb-voice__action:hover { filter: brightness(0.96); }
+.owb-voice__action--muted { background: transparent; color: inherit; }
+.owb-voice__action--muted:hover { background: rgba(64, 209, 179, 0.18); filter: none; }
+.owb-voice__spinner {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid var(--owb-border-default);
+  border-top-color: var(--owb-brand-7);
+  animation: owb-voice-spin 0.8s linear infinite;
+}
+@keyframes owb-voice-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+@keyframes owb-voice-spin { to { transform: rotate(360deg) } }
 .owb-composer__send {
   width: 34px; height: 34px; border: none; cursor: pointer;
   border-radius: var(--owb-radius-full); color: #fff; background: var(--owb-brand-8);

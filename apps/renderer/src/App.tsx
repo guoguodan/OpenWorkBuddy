@@ -1421,6 +1421,7 @@ export default function App() {
       onPickPermission={(next) => void changePermission(next)}
       onPickModel={(next) => void changeModel(next)}
       onPickReasoningEffort={(next) => void changeReasoningEffort(next)}
+      onVoiceError={(message) => note('warn', message)}
       onOpenWorkspace={() => void openWorkspace()}
       onListFiles={async () => {
         const r = await window.openwb.workspace.files({ limit: 400, maxDepth: 4 })

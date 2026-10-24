@@ -368,6 +368,13 @@ interface Window {
       remove: (conversationId: string) => Promise<{ conversationId: string }>
       onEvent: (cb: (e: unknown) => void) => () => void
     }
+    voice: {
+      transcribe: (input: { data: string; mimeType: string; durationMs?: number }) => Promise<{
+        text: string
+        model: string | null
+        mocked: boolean
+      }>
+    }
     memory: {
       list: (scope?: string) => Promise<{ items: MemoryItemInfo[] }>
       remove: (id: string) => Promise<{ id: string }>

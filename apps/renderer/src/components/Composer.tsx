@@ -13,6 +13,7 @@ import {
   IconTool,
   IconX
 } from './Icons'
+import { useVoiceInput, VOICE_TEXT } from './useVoiceInput'
 
 export type PermissionMode = 'default' | 'fullAccess' | 'readOnly'
 
@@ -55,6 +56,7 @@ interface ComposerProps {
   onPickPermission: (mode: PermissionMode) => void
   onPickModel: (name: string) => void
   onPickReasoningEffort: (effort: ReasoningEffort | null) => void
+  onVoiceError: (message: string) => void
   onOpenModelMenu?: () => void
   onOpenWorkspace: () => void
   onListFiles: () => Promise<ComposerAttachment[]>
@@ -148,6 +150,7 @@ export function Composer({
   onPickPermission,
   onPickModel,
   onPickReasoningEffort,
+  onVoiceError,
   onOpenModelMenu,
   onOpenWorkspace,
   onListFiles,
@@ -170,6 +173,101 @@ export function Composer({
   const pendingRef = useRef<{ kind: 'file' | 'skill'; start: number } | null>(null)
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
+  const valueRef = useRef(value)
+  valueRef.current = value
+
+  /**
+   * 把识别文本插到当前光标处,不覆盖用户已经输入的内容。
+   * 语音和键盘可能同时存在,所以中英文之间也不强行加空格以外的分隔。
+   */
+  const insertVoiceText = (text: string) => {
+    const node = ref.current
+    const current = valueRef.current
+    const start = node?.selectionStart ?? current.length
+    const end = node?.selectionEnd ?? start
+    const before = current.slice(0, start)
+    const after = current.slice(end)
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+    const needsTrailingSpace = after.length > 0 && !/^\s/.test(after)
+    const inserted = `${needsLeadingSpace ? ' ' : ''}${text}${needsTrailingSpace ? ' ' : ''}`
+    const next = `${before}${inserted}${after}`
+    onChange(next)
+    requestAnimationFrame(() => {
+      const target = ref.current
+      if (!target) return
+      const pos = before.length + inserted.length
+      target.focus()
+      target.setSelectionRange(pos, pos)
+    })
+  }
+
+  const voice = useVoiceInput({
+    disabled: busy,
+    onText: insertVoiceText,
+    onError: onVoiceError
+  })
+
+  // 真实产品支持"点击或长按 ALT"。长按阈值避免误吞普通的 Alt 组合键。
+  // 监听只注册一次:录音一开始 state 就会变,若把 voice 放进依赖,
+  // effect 重建会把"本次长按已启动"的标记清掉,松开 ALT 便收不到 stop。
+  const voiceRef = useRef(voice)
+  voiceRef.current = voice
+  const busyRef = useRef(busy)
+  busyRef.current = busy
+  const holdTimerRef = useRef<number | null>(null)
+  const heldRef = useRef(false)
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt' || event.repeat || event.ctrlKey || event.metaKey || event.shiftKey) return
+      const current = voiceRef.current
+      if (current.state !== 'idle' || busyRef.current) return
+      // ALT 是全局快捷键:焦点在别处也应能录音。仅当用户正在另一个输入框里
+      // 按 Alt 组合键时才让位,避免抢占其他编辑行为。
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      const editable =
+        (tag === 'input' || tag === 'textarea' || target?.isContentEditable === true) &&
+        target !== ref.current &&
+        !rootRef.current?.contains(target)
+      if (editable) return
+      if (holdTimerRef.current !== null || heldRef.current) return
+      holdTimerRef.current = window.setTimeout(() => {
+        holdTimerRef.current = null
+        heldRef.current = true
+        void voiceRef.current.start()
+      }, 450)
+    }
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt') return
+      if (holdTimerRef.current !== null) {
+        window.clearTimeout(holdTimerRef.current)
+        holdTimerRef.current = null
+      }
+      if (heldRef.current) {
+        heldRef.current = false
+        voiceRef.current.stop()
+      }
+    }
+    const onCancel = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || voiceRef.current.state !== 'recording') return
+      event.preventDefault()
+      heldRef.current = false
+      voiceRef.current.cancel()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('keyup', onKeyUp)
+    document.addEventListener('keydown', onCancel)
+    return () => {
+      if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('keyup', onKeyUp)
+      document.removeEventListener('keydown', onCancel)
+    }
+  }, [])
+
+  const voiceSeconds = Math.floor(voice.elapsedMs / 1000)
+  const voiceTimer = `${String(Math.floor(voiceSeconds / 60)).padStart(2, '0')}:${String(voiceSeconds % 60).padStart(2, '0')}`
 
   useEffect(() => {
     if (autoFocus) ref.current?.focus()
@@ -417,7 +515,7 @@ export function Composer({
           </div>
         </div>
       ) : null}
-      <div className="owb-composer__box">
+      <div className={`owb-composer__box${voice.state === 'recording' ? ' owb-composer__box--recording' : ''}`}>
         {menu === 'file' ? (
           <div className="owb-composer__picker" role="listbox" aria-label="添加文件作为回答背景" data-testid="composer-picker">
             <div className="owb-composer__picker-head">
@@ -691,9 +789,50 @@ export function Composer({
                 </div>
               </div>
             ) : null}
-            <button type="button" className="owb-icon-btn owb-composer__icon" title="语音输入" aria-label="语音输入">
-              <IconMic size={17} />
-            </button>
+            {voice.state === 'recording' ? (
+              <div className="owb-voice" data-testid="voice-recording" aria-live="polite">
+                <span className="owb-voice__dot" aria-hidden="true" />
+                <span className="owb-voice__timer" data-testid="voice-timer">{voiceTimer}</span>
+                <button
+                  type="button"
+                  className="owb-voice__action"
+                  onClick={voice.stop}
+                  title={VOICE_TEXT.stop}
+                  aria-label={VOICE_TEXT.stop}
+                  data-testid="voice-stop"
+                >
+                  <IconStop size={13} />
+                  {VOICE_TEXT.stop}
+                </button>
+                <button
+                  type="button"
+                  className="owb-voice__action owb-voice__action--muted"
+                  onClick={voice.cancel}
+                  title={VOICE_TEXT.cancel}
+                  aria-label={VOICE_TEXT.cancel}
+                  data-testid="voice-cancel"
+                >
+                  {VOICE_TEXT.cancel}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={`owb-icon-btn owb-composer__icon${voice.state === 'processing' ? ' owb-composer__icon--loading' : ''}`}
+                title={VOICE_TEXT.hint}
+                aria-label={voice.state === 'processing' ? VOICE_TEXT.processing : VOICE_TEXT.start}
+                data-testid="voice-trigger"
+                data-state={voice.state}
+                disabled={busy || voice.state === 'processing'}
+                onClick={voice.toggle}
+              >
+                {voice.state === 'processing' ? (
+                  <span className="owb-voice__spinner" aria-hidden="true" />
+                ) : (
+                  <IconMic size={17} />
+                )}
+              </button>
+            )}
             {busy ? (
               <button
                 type="button"

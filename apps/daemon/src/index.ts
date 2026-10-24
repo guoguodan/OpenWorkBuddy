@@ -14,6 +14,7 @@ import {
 } from 'ai'
 import { z } from 'zod'
 import { listRemoteModels, modelFor, reasoningProviderOptions, resolveModelName } from './model.js'
+import { transcribeAudio, VOICE_MESSAGES } from './transcribe.js'
 import { probeServiceEndpoint } from './service-probe.js'
 import { budgetExceededMessage, evaluateTokenBudget } from './budget.js'
 import {
@@ -2665,6 +2666,29 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       current: resolveModelName(getWorkspaceSettings(db, workspaceId).model),
       ...(result.error ? { error: result.error } : {})
     })
+    return true
+  }
+
+  // 语音转写:音频字节从渲染层经主进程转发,daemon 是唯一接触网关密钥的地方。
+  if (msg.cmd === 'voice.transcribe') {
+    try {
+      const result = await transcribeAudio({ data: msg.data, mimeType: msg.mimeType })
+      emit({
+        ...base,
+        type: 'voice.transcribe',
+        text: result.text,
+        model: result.model,
+        mocked: result.mocked
+      })
+    } catch (err) {
+      emit({
+        ...base,
+        type: 'error',
+        code: (err as { code?: string }).code ?? 'ASR_FAILED',
+        message: (err as Error).message || VOICE_MESSAGES.failed,
+        retryable: true
+      })
+    }
     return true
   }
 

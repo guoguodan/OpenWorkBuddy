@@ -57,6 +57,10 @@ contextBridge.exposeInMainWorld('openwb', {
       return () => ipcRenderer.removeListener('agent.event', handler)
     }
   },
+  voice: {
+    transcribe: (input: { data: string; mimeType: string; durationMs?: number }) =>
+      ipcRenderer.invoke('voice.transcribe', input)
+  },
   automation: {
     list: () => ipcRenderer.invoke('automation.list'),
     create: (input: unknown) => ipcRenderer.invoke('automation.create', input),

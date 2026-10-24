@@ -820,6 +820,42 @@ ipcMain.handle('conversation.cancel', async (_e, conversationId?: string) => {
   return { ok: true }
 })
 
+/**
+ * 语音转写。
+ *
+ * 音频以 base64 字符串跨 IPC 传递:ArrayBuffer 在部分 Electron 版本里
+ * 会退化成对象,主进程很难可靠校验。这里先卡长度再做格式校验,
+ * 避免超限负载进入帧协议(8MB)导致整个 daemon 管道被迫断开。
+ */
+ipcMain.handle(
+  'voice.transcribe',
+  async (_e, input: { data?: unknown; mimeType?: unknown; durationMs?: unknown }) => {
+    await daemonReady
+    if (!input || typeof input.data !== 'string' || input.data.length === 0) {
+      throw new Error('录音数据无效，请重试。')
+    }
+    // 4MB 原始音频的 base64 上限;比 daemon 的严格校验略宽,由 daemon 最终裁决。
+    if (input.data.length > 5_600_000) throw new Error('录音过长，请缩短后重试。')
+    if (typeof input.mimeType !== 'string' || !input.mimeType.trim()) {
+      throw new Error('录音数据无效，请重试。')
+    }
+    if (input.durationMs !== undefined && typeof input.durationMs !== 'number') {
+      throw new Error('录音数据无效，请重试。')
+    }
+    const result = await request<{ text?: unknown; model?: unknown; mocked?: unknown }>(
+      {
+        cmd: 'voice.transcribe',
+        data: input.data,
+        mimeType: input.mimeType,
+        ...(typeof input.durationMs === 'number' ? { durationMs: input.durationMs } : {})
+      },
+      70_000
+    )
+    if (typeof result.text !== 'string') throw new Error('语音识别失败，请重试。')
+    return { text: result.text, model: result.model ?? null, mocked: result.mocked === true }
+  }
+)
+
 // 重放会真正调用模型,不能走 request():否则主进程会等 10 秒超时,
 // 而 daemon 仍在生成。像 conversation.send 一样写入帧,结果以事件回推。
 for (const command of ['conversation.replay', 'conversation.revert'] as const) {
@@ -933,6 +969,16 @@ function createWindow() {
       sandbox: true
     }
   })
+  /**
+   * 语音输入只需要麦克风。
+   * 默认 Electron 不弹系统授权框,直接 getUserMedia 会以 NotAllowedError 失败,
+   * 界面只能显示"权限被拒绝"——那不是用户真的拒绝,而是应用没处理请求。
+   * 其余权限(摄像头/位置等)继续按默认拒绝,避免顺带放大权限面。
+   */
+  win.webContents.session.setPermissionRequestHandler((_contents, permission, callback) => {
+    callback(permission === 'media')
+  })
+  win.webContents.session.setPermissionCheckHandler((_contents, permission) => permission === 'media')
   // 页面内已经有完整的中文菜单栏;移除 Electron 默认菜单,避免出现两套按钮。
   Menu.setApplicationMenu(null)
   win.setMenuBarVisibility(false)
