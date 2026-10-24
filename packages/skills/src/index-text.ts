@@ -7,7 +7,13 @@ import type { SkillIndexEntry } from './skills.js'
 export function renderSkillIndex(entries: SkillIndexEntry[]): string {
   if (entries.length === 0) return ''
 
-  const lines = entries.map((e) => `- ${e.name}: ${e.description}`)
+  const lines = entries.map((e) => {
+    const hints: string[] = []
+    if (e.triggers && e.triggers.length > 0) hints.push(`触发域: ${e.triggers.join(', ')}`)
+    if (e.requires && e.requires.length > 0) hints.push(`依赖: ${e.requires.join(', ')}`)
+    if (e.scripts && e.scripts.length > 0) hints.push(`脚本: ${e.scripts.join(', ')}`)
+    return `- ${e.name}: ${e.description}${hints.length > 0 ? `(${hints.join('; ')})` : ''}`
+  })
   return [
     '# 可用技能',
     '',

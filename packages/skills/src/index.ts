@@ -1,10 +1,18 @@
 export { parseFrontmatter, FrontmatterError } from './frontmatter.js'
 export type { ParsedDocument } from './frontmatter.js'
-export { SkillFrontmatterSchema, parseAllowedTools } from './schema.js'
+export {
+  SkillFrontmatterSchema,
+  parseAllowedTools,
+  parseScriptNames,
+  parseSkillList,
+  validateSkillName
+} from './schema.js'
 export type { SkillFrontmatter } from './schema.js'
 export {
   discoverSkills,
+  detectTriggerConflicts,
   loadSkill,
+  missingDependencies,
   narrowTools,
   validateSkillDir,
   scanSkillDir,
@@ -17,6 +25,8 @@ export type {
   SkillIndexEntry,
   SkillManifest,
   SkillIssue,
-  DiscoverResult
+  DiscoverResult,
+  SkillTriggerConflict
 } from './skills.js'
 export { renderSkillIndex } from './index-text.js'
+export { resolveSkillScript, runSkillScript, type SkillScriptResult } from './scripts.js'

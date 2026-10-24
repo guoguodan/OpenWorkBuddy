@@ -17,6 +17,19 @@ export interface HubSkill {
   description: string
   scope: string
   enabled: boolean
+  requires?: string[]
+  triggers?: string[]
+  priority?: number
+  scripts?: string[]
+  missingDependencies?: string[]
+  disabledDependencies?: string[]
+}
+
+export interface SkillConflict {
+  trigger: string
+  skills: string[]
+  winner: string | null
+  reason: string
 }
 
 type HubTab = 'experts' | 'skills' | 'connectors'
@@ -81,6 +94,8 @@ export function SkillsHubPanel({
   const [connectorTab, setConnectorTab] = useState<ConnectorTab>('official')
   const [query, setQuery] = useState('')
   const [skills, setSkills] = useState<HubSkill[]>([])
+  const [skillConflicts, setSkillConflicts] = useState<SkillConflict[]>([])
+  const [skillIssues, setSkillIssues] = useState<Array<{ path: string; reason: string }>>([])
   const [plugins, setPlugins] = useState<PluginSnapshotInfo[]>([])
   const [pinned, setPinned] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -100,9 +115,17 @@ export function SkillsHubPanel({
         name: skill.name,
         description: skill.description,
         scope: skill.scope,
-        enabled: skill.enabled !== false
+        enabled: skill.enabled !== false,
+        ...(skill.requires ? { requires: skill.requires } : {}),
+        ...(skill.triggers ? { triggers: skill.triggers } : {}),
+        ...(skill.priority !== undefined ? { priority: skill.priority } : {}),
+        ...(skill.scripts ? { scripts: skill.scripts } : {}),
+        ...(skill.missingDependencies ? { missingDependencies: skill.missingDependencies } : {}),
+        ...(skill.disabledDependencies ? { disabledDependencies: skill.disabledDependencies } : {})
       }))
       setSkills(next)
+      setSkillConflicts(skillResult.conflicts ?? [])
+      setSkillIssues(skillResult.issues ?? [])
       onSkillsChanged(next)
       setPlugins(pluginResult.plugins)
       setPinned(settingsResult.settings.pinnedSkills ?? [])
@@ -145,7 +168,13 @@ export function SkillsHubPanel({
         name: item.name,
         description: item.description,
         scope: item.scope,
-        enabled: item.enabled !== false
+        enabled: item.enabled !== false,
+        ...(item.requires ? { requires: item.requires } : {}),
+        ...(item.triggers ? { triggers: item.triggers } : {}),
+        ...(item.priority !== undefined ? { priority: item.priority } : {}),
+        ...(item.scripts ? { scripts: item.scripts } : {}),
+        ...(item.missingDependencies ? { missingDependencies: item.missingDependencies } : {}),
+        ...(item.disabledDependencies ? { disabledDependencies: item.disabledDependencies } : {})
       }))
       setSkills(next)
       onSkillsChanged(next)
@@ -366,7 +395,31 @@ export function SkillsHubPanel({
                 <span>{query ? '换个关键词试试' : '上传本地技能文件夹,或通过 AI 对话快速创建一个专属技能'}</span>
               </div>
             ) : (
-              <div className="owb-hub__grid">
+              <>
+                {skillConflicts.length > 0 || skillIssues.length > 0 ? (
+                  <div className="owb-hub__diagnostics" data-testid="skill-diagnostics">
+                    {skillConflicts.map((conflict) => (
+                      <p key={`conflict-${conflict.trigger}`} className="owb-hub__diagnostic">
+                        <strong>触发域冲突「{conflict.trigger}」</strong>
+                        <span>
+                          {conflict.reason}。候选:{conflict.skills.join(' / ')}
+                          {conflict.winner
+                            ? `;当前自动路由到 ${conflict.winner}`
+                            : ';请关闭其中一个技能或为其设置不同的 priority'}
+                        </span>
+                      </p>
+                    ))}
+                    {skillIssues
+                      .filter((issue) => !issue.reason.includes('不存在或不可读'))
+                      .map((issue, index) => (
+                        <p key={`issue-${issue.path}-${index}`} className="owb-hub__diagnostic owb-hub__diagnostic--warn">
+                          <strong>{issue.path}</strong>
+                          <span>{issue.reason}</span>
+                        </p>
+                      ))}
+                  </div>
+                ) : null}
+                <div className="owb-hub__grid">
                 {installedSkills.map((skill) => (
                   <article
                     key={skill.name}
@@ -381,8 +434,21 @@ export function SkillsHubPanel({
                         <div className="owb-hub__name-row">
                           <span className="owb-hub__name">{skill.name}</span>
                           <span className="owb-hub__badge">{scopeLabel(skill.scope)}</span>
+                          {skill.triggers?.length ? (
+                            <span className="owb-hub__badge">{`触发域 ${skill.triggers.join(', ')}`}</span>
+                          ) : null}
                         </div>
                         <p className="owb-hub__desc">{skill.description || '暂无描述'}</p>
+                        {(skill.missingDependencies?.length ?? 0) > 0 ? (
+                          <p className="owb-hub__desc owb-hub__desc--warn">
+                            缺少依赖: {skill.missingDependencies!.join(', ')};安装后再加载
+                          </p>
+                        ) : null}
+                        {(skill.disabledDependencies?.length ?? 0) > 0 ? (
+                          <p className="owb-hub__desc owb-hub__desc--warn">
+                            依赖已关闭: {skill.disabledDependencies!.join(', ')}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                     <div className="owb-hub__card-foot">
@@ -420,7 +486,8 @@ export function SkillsHubPanel({
                     </div>
                   </article>
                 ))}
-              </div>
+                </div>
+              </>
             )}
           </>
         ) : tab === 'connectors' ? (

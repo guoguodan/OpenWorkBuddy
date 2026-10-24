@@ -1,7 +1,13 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { parseFrontmatter, FrontmatterError } from './frontmatter.js'
-import { parseAllowedTools, SkillFrontmatterSchema, type SkillFrontmatter } from './schema.js'
+import {
+  parseAllowedTools,
+  parseScriptNames,
+  parseSkillList,
+  SkillFrontmatterSchema,
+  type SkillFrontmatter
+} from './schema.js'
 
 export type SkillScope = 'user' | 'project'
 
@@ -18,6 +24,14 @@ export interface SkillIndexEntry {
   /** 技能目录绝对路径 */
   dir: string
   scope: SkillScope
+  /** 依赖技能名;加载前必须已安装且未关闭 */
+  requires?: string[]
+  /** 触发域:多个技能声明同一域时按 priority 路由或提示用户 */
+  triggers?: string[]
+  /** 数值越大越优先;缺省视为 0 */
+  priority?: number
+  /** 允许执行的脚本文件名(位于 scripts/ 下) */
+  scripts?: string[]
 }
 
 export interface SkillManifest extends SkillIndexEntry {
@@ -36,6 +50,16 @@ export interface SkillIssue {
 export interface DiscoverResult {
   entries: SkillIndexEntry[]
   issues: SkillIssue[]
+  conflicts: SkillTriggerConflict[]
+}
+
+export interface SkillTriggerConflict {
+  trigger: string
+  /** 同一触发域下的技能,按优先级从高到低 */
+  skills: string[]
+  /** 能按唯一最高优先级自动路由时的胜者;平局时为 null */
+  winner: string | null
+  reason: string
 }
 
 export const MAX_SKILL_BYTES = 5 * 1024 * 1024
@@ -174,12 +198,19 @@ export async function discoverSkills(roots: SkillRoot[]): Promise<DiscoverResult
         // 索引阶段也做一次完整扫描:被污染的技能不应出现在模型可见的索引里
         await scanSkillDir(dir)
         const { fm } = await readSkillFile(mdPath)
+        const requires = parseSkillList(fm.requires)
+        const triggers = parseSkillList(fm.triggers)
+        const scripts = parseScriptNames(fm.scripts)
         const entry: SkillIndexEntry = {
           name: fm.name,
           description: fm.description,
           path: mdPath,
           dir,
-          scope: root.scope
+          scope: root.scope,
+          ...(requires ? { requires } : {}),
+          ...(triggers ? { triggers } : {}),
+          ...(fm.priority !== undefined ? { priority: fm.priority } : {}),
+          ...(scripts ? { scripts } : {})
         }
         const existing = found.get(entry.name)
         if (existing && existing.scope === 'project' && entry.scope === 'user') continue
@@ -191,17 +222,24 @@ export async function discoverSkills(roots: SkillRoot[]): Promise<DiscoverResult
   }
 
   const entries = [...found.values()].sort((a, b) => a.name.localeCompare(b.name))
-  return { entries, issues }
+  return { entries, issues, conflicts: detectTriggerConflicts(entries) }
 }
 
 /** 读取正文并按需收窄工具;调用前应已通过 discover 校验 */
 export async function loadSkill(entry: SkillIndexEntry): Promise<SkillManifest> {
   const { fm, body } = await readSkillFile(entry.path)
   const allowedTools = parseAllowedTools(fm['allowed-tools'])
+  const requires = parseSkillList(fm.requires)
+  const triggers = parseSkillList(fm.triggers)
+  const scripts = parseScriptNames(fm.scripts)
   return {
     ...entry,
     body,
     ...(allowedTools ? { allowedTools } : {}),
+    ...(requires ? { requires } : {}),
+    ...(triggers ? { triggers } : {}),
+    ...(fm.priority !== undefined ? { priority: fm.priority } : {}),
+    ...(scripts ? { scripts } : {}),
     ...(fm.version ? { version: fm.version } : {})
   }
 }
@@ -216,11 +254,27 @@ export function narrowTools(modeAllowed: string[], skillAllowed?: string[]): str
   return skillAllowed.filter((name) => set.has(name)).sort()
 }
 
-export async function validateSkillDir(dir: string): Promise<SkillManifest> {
+export async function validateSkillDir(
+  dir: string,
+  options: { availableSkills?: string[] } = {}
+): Promise<SkillManifest> {
   await scanSkillDir(dir)
   const mdPath = join(dir, 'SKILL.md')
   const { fm, body } = await readSkillFile(mdPath)
   const allowedTools = parseAllowedTools(fm['allowed-tools'])
+  const requires = parseSkillList(fm.requires)
+  if (requires && options.availableSkills) {
+    const available = new Set(options.availableSkills)
+    const missing = requires.filter((name) => !available.has(name))
+    if (missing.length > 0) {
+      throw new SkillError(
+        mdPath,
+        `缺少依赖技能 [${missing.join(', ')}]。请先安装这些技能,或从 requires 中移除对应条目。`
+      )
+    }
+  }
+  const triggers = parseSkillList(fm.triggers)
+  const scripts = parseScriptNames(fm.scripts)
   return {
     name: fm.name,
     description: fm.description,
@@ -229,6 +283,60 @@ export async function validateSkillDir(dir: string): Promise<SkillManifest> {
     scope: 'project',
     body,
     ...(allowedTools ? { allowedTools } : {}),
+    ...(requires ? { requires } : {}),
+    ...(triggers ? { triggers } : {}),
+    ...(fm.priority !== undefined ? { priority: fm.priority } : {}),
+    ...(scripts ? { scripts } : {}),
     ...(fm.version ? { version: fm.version } : {})
   }
+}
+
+/** 同一触发域被多个技能声明时,按唯一的最高 priority 选出胜者;平局要求用户选择。 */
+export function detectTriggerConflicts(entries: SkillIndexEntry[]): SkillTriggerConflict[] {
+  const byTrigger = new Map<string, SkillIndexEntry[]>()
+  for (const entry of entries) {
+    for (const trigger of entry.triggers ?? []) {
+      const list = byTrigger.get(trigger) ?? []
+      list.push(entry)
+      byTrigger.set(trigger, list)
+    }
+  }
+
+  const conflicts: SkillTriggerConflict[] = []
+  for (const [trigger, list] of [...byTrigger.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (list.length < 2) continue
+    const sorted = [...list].sort(
+      (a, b) => (b.priority ?? 0) - (a.priority ?? 0) || a.name.localeCompare(b.name)
+    )
+    const top = sorted[0]!.priority ?? 0
+    const topSkills = sorted.filter((entry) => (entry.priority ?? 0) === top)
+    const winner = topSkills.length === 1 ? topSkills[0]!.name : null
+    conflicts.push({
+      trigger,
+      skills: sorted.map((entry) => entry.name),
+      winner,
+      reason:
+        winner !== null
+          ? `都声明了触发域「${trigger}」;${winner} 的 priority 最高(${top}),将自动路由到它`
+          : `都声明了触发域「${trigger}」且优先级相同(${top}),需要用户选择使用哪个技能`
+    })
+  }
+  return conflicts
+}
+
+/** 依赖检查:返回缺失与被关闭的依赖,供安装阶段与运行时共同使用。 */
+export function missingDependencies(
+  entry: SkillIndexEntry,
+  entries: SkillIndexEntry[],
+  disabled: string[] = []
+): { missing: string[]; disabled: string[] } {
+  const byName = new Map(entries.map((item) => [item.name, item]))
+  const off = new Set(disabled)
+  const missing: string[] = []
+  const disabledDeps: string[] = []
+  for (const name of entry.requires ?? []) {
+    if (!byName.has(name)) missing.push(name)
+    else if (off.has(name)) disabledDeps.push(name)
+  }
+  return { missing, disabled: disabledDeps }
 }

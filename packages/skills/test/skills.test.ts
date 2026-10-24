@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   discoverSkills,
+  detectTriggerConflicts,
   loadSkill,
+  runSkillScript,
   narrowTools,
   parseFrontmatter,
   validateSkillDir,
@@ -157,5 +159,155 @@ describe('renderSkillIndex', () => {
 
   it('没有技能时返回空字符串', () => {
     expect(renderSkillIndex([])).toBe('')
+  })
+})
+
+describe('技能依赖与触发域', () => {
+  it('发现结果暴露 requires/triggers/scripts/priority', async () => {
+    const root = join(base, 'meta')
+    await makeSkill(
+      root,
+      'writer',
+      [
+        'name: writer',
+        'description: 写作',
+        'requires: base',
+        'triggers: docs, reports',
+        'priority: 10',
+        'scripts: build.js'
+      ],
+      'body'
+    )
+    const { entries } = await discoverSkills([{ path: root, scope: 'project' }])
+    expect(entries[0]!.requires).toEqual(['base'])
+    expect(entries[0]!.triggers).toEqual(['docs', 'reports'])
+    expect(entries[0]!.priority).toBe(10)
+    expect(entries[0]!.scripts).toEqual(['build.js'])
+  })
+
+  it('同域唯一最高优先级自动胜出', async () => {
+    const root = join(base, 'conflict-win')
+    await makeSkill(root, 'fast', ['name: fast', 'description: 快', 'triggers: docs', 'priority: 5'], 'a')
+    await makeSkill(root, 'slow', ['name: slow', 'description: 慢', 'triggers: docs', 'priority: 1'], 'b')
+    const { entries, conflicts } = await discoverSkills([{ path: root, scope: 'project' }])
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]!.trigger).toBe('docs')
+    expect(conflicts[0]!.skills).toEqual(['fast', 'slow'])
+    expect(conflicts[0]!.winner).toBe('fast')
+
+    const manual = detectTriggerConflicts(entries)
+    expect(manual[0]!.reason).toContain('priority')
+  })
+
+  it('同域同优先级不静默选择', async () => {
+    const root = join(base, 'conflict-tie')
+    await makeSkill(root, 'alpha', ['name: alpha', 'description: A', 'triggers: docs'], 'a')
+    await makeSkill(root, 'beta', ['name: beta', 'description: B', 'triggers: docs'], 'b')
+    const { conflicts } = await discoverSkills([{ path: root, scope: 'project' }])
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]!.winner).toBeNull()
+    expect(conflicts[0]!.reason).toContain('需要用户选择')
+  })
+
+  it('不同触发域不产生冲突', async () => {
+    const root = join(base, 'no-conflict')
+    await makeSkill(root, 'alpha', ['name: alpha', 'description: A', 'triggers: docs'], 'a')
+    await makeSkill(root, 'beta', ['name: beta', 'description: B', 'triggers: code'], 'b')
+    const { conflicts } = await discoverSkills([{ path: root, scope: 'project' }])
+    expect(conflicts).toEqual([])
+  })
+
+  it('validate 阶段缺失依赖给出修复建议', async () => {
+    const root = join(base, 'missing-dep')
+    const dir = await makeSkill(
+      root,
+      'child',
+      ['name: child', 'description: 子技能', 'requires: nonexistent'],
+      'body'
+    )
+    await expect(validateSkillDir(dir, { availableSkills: [] })).rejects.toThrow(/缺少依赖技能.*nonexistent/)
+  })
+
+  it('依赖已全部安装时 validate 通过', async () => {
+    const root = join(base, 'dep-ok')
+    const dir = await makeSkill(
+      root,
+      'child',
+      ['name: child', 'description: 子技能', 'requires: base'],
+      'body'
+    )
+    const manifest = await validateSkillDir(dir, { availableSkills: ['base'] })
+    expect(manifest.requires).toEqual(['base'])
+  })
+})
+
+describe('技能脚本', () => {
+  it('执行声明脚本并传入参数,剥离凭据环境变量', async () => {
+    const root = join(base, 'scripts-ok')
+    const dir = await makeSkill(
+      root,
+      'runner',
+      ['name: runner', 'description: 运行脚本', 'scripts: probe.js'],
+      'body'
+    )
+    await mkdir(join(dir, 'scripts'), { recursive: true })
+    await writeFile(
+      join(dir, 'scripts', 'probe.js'),
+      [
+        "process.stdout.write(JSON.stringify({",
+        '  args: process.argv.slice(2),',
+        '  token: process.env.OPENWB_TEST_TOKEN ?? null,',
+        '  workspace: process.env.OPENWB_WORKSPACE',
+        '}))'
+      ].join('\n'),
+      'utf8'
+    )
+    process.env.OPENWB_TEST_TOKEN = 'must-not-leak'
+    try {
+      const { entries } = await discoverSkills([{ path: root, scope: 'project' }])
+      const result = await runSkillScript(entries[0]!, {
+        script: 'probe.js',
+        args: ['--name', 'demo'],
+        workspaceRoot: base
+      })
+      expect(result.code).toBe(0)
+      const parsed = JSON.parse(result.stdout)
+      expect(parsed.args).toEqual(['--name', 'demo'])
+      expect(parsed.token).toBeNull()
+      expect(parsed.workspace).toBe(base)
+    } finally {
+      delete process.env.OPENWB_TEST_TOKEN
+    }
+  })
+
+  it('拒绝未声明的脚本', async () => {
+    const root = join(base, 'scripts-undeclared')
+    const dir = await makeSkill(root, 'runner', ['name: runner', 'description: 无脚本'], 'body')
+    await mkdir(join(dir, 'scripts'), { recursive: true })
+    await writeFile(join(dir, 'scripts', 'probe.js'), 'process.exit(0)\n', 'utf8')
+    const { entries } = await discoverSkills([{ path: root, scope: 'project' }])
+    await expect(runSkillScript(entries[0]!, { script: 'probe.js', workspaceRoot: base })).rejects.toThrow(
+      /没有声明可执行脚本/
+    )
+  })
+
+  it('拒绝路径穿越与 .bat 脚本', async () => {
+    const root = join(base, 'scripts-traversal')
+    const dir = await makeSkill(
+      root,
+      'runner',
+      ['name: runner', 'description: 脚本', 'scripts: ok.js, evil.bat'],
+      'body'
+    )
+    await mkdir(join(dir, 'scripts'), { recursive: true })
+    await writeFile(join(dir, 'scripts', 'ok.js'), 'process.exit(0)\n', 'utf8')
+    await writeFile(join(dir, 'scripts', 'evil.bat'), 'echo bad\n', 'utf8')
+    const { entries } = await discoverSkills([{ path: root, scope: 'project' }])
+    await expect(
+      runSkillScript(entries[0]!, { script: '../SKILL.md', workspaceRoot: base })
+    ).rejects.toThrow(/未在 SKILL.md 的 scripts 中声明/)
+    await expect(runSkillScript(entries[0]!, { script: 'evil.bat', workspaceRoot: base })).rejects.toThrow(
+      /不允许 \.bat/
+    )
   })
 })

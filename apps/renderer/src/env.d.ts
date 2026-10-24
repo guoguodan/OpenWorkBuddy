@@ -301,12 +301,36 @@ interface Window {
     }
     skills: {
       list: () => Promise<{
-        skills: Array<{ name: string; description: string; scope: string; enabled: boolean }>
+        skills: Array<{
+          name: string
+          description: string
+          scope: string
+          enabled: boolean
+          requires?: string[]
+          triggers?: string[]
+          priority?: number
+          scripts?: string[]
+          missingDependencies?: string[]
+          disabledDependencies?: string[]
+        }>
         issues: Array<{ path: string; reason: string }>
+        conflicts: Array<{ trigger: string; skills: string[]; winner: string | null; reason: string }>
       }>
       setEnabled: (input: { name: string; enabled: boolean }) => Promise<{
-        skills: Array<{ name: string; description: string; scope: string; enabled: boolean }>
+        skills: Array<{
+          name: string
+          description: string
+          scope: string
+          enabled: boolean
+          requires?: string[]
+          triggers?: string[]
+          priority?: number
+          scripts?: string[]
+          missingDependencies?: string[]
+          disabledDependencies?: string[]
+        }>
         issues: Array<{ path: string; reason: string }>
+        conflicts: Array<{ trigger: string; skills: string[]; winner: string | null; reason: string }>
       }>
       pin: (input: { name: string; pinned: boolean }) => Promise<{ settings: { pinnedSkills: string[] } }>
       uninstall: (name: string) => Promise<{ removed: string; path: string }>

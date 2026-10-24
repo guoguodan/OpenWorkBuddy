@@ -147,6 +147,7 @@ import {
   PluginInstallError
 } from '@openwb/plugins'
 import { SkillRuntime, defaultSkillRoots } from './skills/runtime.js'
+import type { SkillStatusEntry } from './skills/runtime.js'
 import { summarizeToolResult, toToolFailure } from './tool-summary.js'
 import {
   DEFAULT_HISTORY_LIMITS,
@@ -492,6 +493,22 @@ function modeAllowsTool(mode: ModePolicy, name: string): boolean {
   return mode.id === PLUGIN_TOOL_MODE && isPluginToolName(name)
 }
 
+/** 技能列表的统一视图:设置页与助理选择器都从这里取,避免两处字段漂移。 */
+function skillStatusView(skill: SkillStatusEntry) {
+  return {
+    name: skill.name,
+    description: skill.description,
+    scope: skill.scope,
+    enabled: skill.enabled,
+    ...(skill.requires ? { requires: skill.requires } : {}),
+    ...(skill.triggers ? { triggers: skill.triggers } : {}),
+    ...(skill.priority !== undefined ? { priority: skill.priority } : {}),
+    ...(skill.scripts ? { scripts: skill.scripts } : {}),
+    ...(skill.missingDependencies ? { missingDependencies: skill.missingDependencies } : {}),
+    ...(skill.disabledDependencies ? { disabledDependencies: skill.disabledDependencies } : {})
+  }
+}
+
 /**
  * 当前工作区的权限档位。每次判定都现读,避免界面切了档位而工具闸门还拿着旧值。
  *
@@ -509,6 +526,7 @@ function currentPermissionMode(): PermissionMode {
 const READ_ONLY_FORBIDDEN_TOOLS = new Set([
   'write_file',
   'shell',
+  'run_skill_script',
   'delete_files',
   'move_files',
   'present_files'
@@ -575,7 +593,7 @@ function userSkillsRoot(): string {
 const loadSkillTool = {
   name: 'load_skill',
   description:
-    '按名称加载技能说明。只有在任务确实属于某个技能范围时才调用;返回值是技能正文,加载后本会话可用工具会被收窄到该技能的 allowed-tools。',
+    '按名称加载技能说明。只有在任务确实属于某个技能范围时才调用;依赖技能会一并加载。返回值是技能正文,加载后本会话可用工具会被收窄到技能链的 allowed-tools。',
   parameters: z.object({
     name: z.string().min(1).describe('技能名,必须是技能索引中列出的名称')
   }),
@@ -585,6 +603,24 @@ const loadSkillTool = {
     return loaded.body
   }
 }
+
+const runSkillScriptTool: ToolDescriptor<
+  { script: string; args?: string[] | undefined },
+  { code: number | null; stdout: string; stderr: string; durationMs: number }
+> = {
+  name: 'run_skill_script',
+  description:
+    '执行当前已加载技能声明过的脚本(scripts/ 下的文件名)。脚本在受限环境运行:不经过 shell、剥离凭据环境变量、30 秒超时,工作目录为当前工作区。',
+  parameters: z.object({
+    script: z.string().min(1).describe('脚本文件名,必须在技能 frontmatter 的 scripts 中声明'),
+    args: z.array(z.string()).max(32).optional().describe('原样传给脚本的参数数组')
+  }),
+  effects: { writesFilesystem: true, accessesNetwork: true, mayIncurCost: false },
+  async execute({ script, args = [] }, ctx) {
+    return await skills.runScript(script, args, ctx.workspaceRoot, ctx.signal)
+  }
+}
+registry.register(runSkillScriptTool)
 
 let modes: Map<string, ModePolicy>
 try {
@@ -990,6 +1026,31 @@ function buildTools(mode: ModePolicy, allowedNames: string[], run?: RunToolConte
     })
   }
 
+  if (allowed.has('run_skill_script')) {
+    result.run_skill_script = tool({
+      description: runSkillScriptTool.description,
+      parameters: runSkillScriptTool.parameters,
+      execute: async (input, options) => {
+        try {
+          return await executeGated(
+            'run_skill_script',
+            input,
+            mode,
+            run?.conversationId ?? activeConversationId,
+            {
+              ...(run ? { taskId: run.taskId, wroteFiles: run.wroteFiles } : {}),
+              ...(run?.signal ? { signal: run.signal } : {}),
+              ...(options?.toolCallId ? { callId: options.toolCallId } : {})
+            }
+          )
+        } catch (err) {
+          if (run?.signal?.aborted || err instanceof RunCancelledError) throw err
+          return toToolFailure(err)
+        }
+      }
+    })
+  }
+
   return result
 }
 
@@ -1005,7 +1066,11 @@ function effectiveTools(mode: ModePolicy, colleague?: { connectorNames: string[]
         })
       : base
   if (narrowedBase.length === 0 || skills.list().length === 0) return narrowedBase
-  return [...skills.narrow(narrowedBase), 'load_skill'].sort()
+  const active = skills.activeSkill()
+  // 脚本工具只在当前技能确实声明了脚本、且模式本身具备执行能力时出现;
+  // 它不是技能收窄前的基础工具,避免未加载技能时暴露无意义的执行入口。
+  const scriptTool = active?.scripts?.length && modeAllowsTool(mode, 'shell') ? ['run_skill_script'] : []
+  return [...skills.narrow(narrowedBase), 'load_skill', ...scriptTool].sort()
 }
 
 function requireDb() {
@@ -3037,14 +3102,16 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     emit({
       ...base,
       type: 'skills.list',
-      skills: skills.statusList().map((s) => ({
-        name: s.name,
-        description: s.description,
-        scope: s.scope,
-        enabled: s.enabled
-      })),
-      issues: skills.issues()
+      skills: skills.statusList().map(skillStatusView),
+      issues: skills.issues(),
+      conflicts: skills.conflicts()
     })
+    return true
+  }
+
+  if (msg.cmd === 'skills.resolveTrigger') {
+    if (typeof msg.trigger !== 'string' || !msg.trigger.trim()) throw new Error('缺少触发域')
+    emit({ ...base, type: 'skills.trigger', result: skills.resolveTrigger(msg.trigger.trim()) })
     return true
   }
 
@@ -3064,13 +3131,9 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     emit({
       ...base,
       type: 'skills.list',
-      skills: skills.statusList().map((s) => ({
-        name: s.name,
-        description: s.description,
-        scope: s.scope,
-        enabled: s.enabled
-      })),
-      issues: skills.issues()
+      skills: skills.statusList().map(skillStatusView),
+      issues: skills.issues(),
+      conflicts: skills.conflicts()
     })
     return true
   }
@@ -3098,13 +3161,9 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     emit({
       ...base,
       type: 'skills.list',
-      skills: skills.statusList().map((s) => ({
-        name: s.name,
-        description: s.description,
-        scope: s.scope,
-        enabled: s.enabled
-      })),
+      skills: skills.statusList().map(skillStatusView),
       issues: skills.issues(),
+      conflicts: skills.conflicts(),
       removed: name,
       path: entry.dir
     })
@@ -3114,7 +3173,10 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
   if (msg.cmd === 'skills.import') {
     if (typeof msg.sourceDir !== 'string' || !msg.sourceDir.trim()) throw new Error('缺少技能目录')
     const source = resolve(msg.sourceDir)
-    const manifest = await validateSkillDir(source)
+    // 依赖必须在当前已安装集合里;导入后再复制会留下一个永远加载失败的技能。
+    const manifest = await validateSkillDir(source, {
+      availableSkills: skills.statusList().filter((item) => item.enabled).map((item) => item.name)
+    })
     const root = userSkillsRoot()
     const target = resolve(root, manifest.name)
     if (skills.entryOf(manifest.name)) {
@@ -3128,13 +3190,9 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     emit({
       ...base,
       type: 'skills.list',
-      skills: skills.statusList().map((s) => ({
-        name: s.name,
-        description: s.description,
-        scope: s.scope,
-        enabled: s.enabled
-      })),
+      skills: skills.statusList().map(skillStatusView),
       issues: skills.issues(),
+      conflicts: skills.conflicts(),
       imported: manifest.name,
       path: target
     })
@@ -4049,6 +4107,7 @@ emit({
   conversationId: activeConversationId,
   modes: orderedModes().map((m) => ({ id: m.id, displayName: m.displayName })),
   skills: skills.list().map((s) => ({ name: s.name, description: s.description })),
+  skillConflicts: skills.conflicts(),
   plugins: pluginStatusList()
 })
 

@@ -269,6 +269,134 @@ try {
   )
   const reActivated = on.events.find((e) => e.type === 'skill.activated')
   check(reActivated?.name === 'demo-skill', 'reenabled-skill-loads-again', JSON.stringify(reActivated ?? null))
+
+  // 8. 依赖技能:子技能加载时先注入依赖正文,工具取交集
+  await mkdir(join(skillsDir, 'base-skill'), { recursive: true })
+  await writeFile(
+    join(skillsDir, 'base-skill', 'SKILL.md'),
+    [
+      '---',
+      'name: base-skill',
+      'description: 依赖的基础技能',
+      'allowed-tools: read_file, grep',
+      '---',
+      '',
+      'BASE-SKILL-MARKER'
+    ].join('\n'),
+    'utf8'
+  )
+  await mkdir(join(skillsDir, 'child-skill'), { recursive: true })
+  await writeFile(
+    join(skillsDir, 'child-skill', 'SKILL.md'),
+    [
+      '---',
+      'name: child-skill',
+      'description: 依赖 base-skill 的子技能',
+      'requires: base-skill',
+      'triggers: demo-docs',
+      'allowed-tools: read_file, write_file',
+      '---',
+      '',
+      'CHILD-SKILL-MARKER'
+    ].join('\n'),
+    'utf8'
+  )
+
+  const depRun = await runCommands(
+    { workspace: wb, skillsDir, text: '', mode: 'craft' },
+    [{ text: '加载 child-skill', mode: 'craft', skill: 'child-skill' }]
+  )
+  const depActivated = depRun.events.find((e) => e.type === 'skill.activated')
+  check(depActivated?.name === 'child-skill', 'child-skill-loaded-with-dependency', JSON.stringify(depActivated ?? null))
+  const depTools = depRun.events.filter((e) => e.type === 'tools.available').at(-1)?.names ?? []
+  check(depTools.includes('read_file'), 'dependency-chain-keeps-intersection', JSON.stringify(depTools))
+  check(!depTools.includes('write_file'), 'dependency-chain-narrows-tools', JSON.stringify(depTools))
+
+  // 9. 缺失依赖:列表可见但明确标记,加载被拒绝
+  await mkdir(join(skillsDir, 'orphan-skill'), { recursive: true })
+  await writeFile(
+    join(skillsDir, 'orphan-skill', 'SKILL.md'),
+    [
+      '---',
+      'name: orphan-skill',
+      'description: 缺少依赖的技能',
+      'requires: does-not-exist',
+      '---',
+      '',
+      'ORPHAN-MARKER'
+    ].join('\n'),
+    'utf8'
+  )
+  const orphan = await runCommands(
+    { workspace: wb, skillsDir, text: '', mode: 'craft' },
+    [{ cmd: 'skills.list' }, { text: '加载 orphan-skill', mode: 'craft', skill: 'orphan-skill' }]
+  )
+  const orphanList = orphan.events.filter((e) => e.type === 'skills.list').at(-1)
+  const orphanEntry = orphanList?.skills?.find((s) => s.name === 'orphan-skill')
+  check(
+    orphanEntry?.missingDependencies?.includes('does-not-exist'),
+    'missing-dependency-reported',
+    JSON.stringify(orphanEntry ?? null)
+  )
+  const orphanError = orphan.events.find((e) => e.type === 'error' && e.code === 'CONTEXT_FAILED')
+  check(
+    String(orphanError?.message ?? '').includes('does-not-exist'),
+    'missing-dependency-load-refused',
+    JSON.stringify(orphan.events.filter((e) => e.type === 'error'))
+  )
+
+  // 10. 触发域冲突:报告候选与胜者,平局时要求选择
+  await mkdir(join(skillsDir, 'route-a'), { recursive: true })
+  await mkdir(join(skillsDir, 'route-b'), { recursive: true })
+  await writeFile(
+    join(skillsDir, 'route-a', 'SKILL.md'),
+    ['---', 'name: route-a', 'description: 路由 A', 'triggers: shared-doc', 'priority: 9', '---', '', 'A'].join('\n'),
+    'utf8'
+  )
+  await writeFile(
+    join(skillsDir, 'route-b', 'SKILL.md'),
+    ['---', 'name: route-b', 'description: 路由 B', 'triggers: shared-doc', 'priority: 2', '---', '', 'B'].join('\n'),
+    'utf8'
+  )
+  const routed = await runCommands(
+    { workspace: wb, skillsDir, text: '', mode: 'craft' },
+    [{ cmd: 'skills.list' }, { cmd: 'skills.resolveTrigger', trigger: 'shared-doc' }]
+  )
+  const routeList = routed.events.filter((e) => e.type === 'skills.list').at(-1)
+  const conflict = routeList?.conflicts?.find((item) => item.trigger === 'shared-doc')
+  check(conflict?.winner === 'route-a', 'trigger-conflict-winner', JSON.stringify(conflict ?? null))
+  const resolved = routed.events.find((e) => e.type === 'skills.trigger')
+  check(resolved?.result?.skill === 'route-a', 'trigger-resolve-command', JSON.stringify(resolved ?? null))
+
+  // 11. 脚本执行:声明的脚本可运行,未声明的被拒绝
+  await mkdir(join(skillsDir, 'child-skill', 'scripts'), { recursive: true })
+  await writeFile(
+    join(skillsDir, 'child-skill', 'scripts', 'hello.js'),
+    'process.stdout.write(`hello ${process.argv[2] ?? ""} ${process.env.OPENWB_SECRET ?? "no-secret"}`)\n',
+    'utf8'
+  )
+  await writeFile(
+    join(skillsDir, 'child-skill', 'SKILL.md'),
+    [
+      '---',
+      'name: child-skill',
+      'description: 依赖 base-skill 的子技能',
+      'requires: base-skill',
+      'triggers: demo-docs',
+      'allowed-tools: read_file, write_file',
+      'scripts: hello.js',
+      '---',
+      '',
+      'CHILD-SKILL-MARKER'
+    ].join('\n'),
+    'utf8'
+  )
+  const scriptRun = await runCommands(
+    { workspace: wb, skillsDir, text: '', mode: 'craft' },
+    [{ text: '加载 child-skill', mode: 'craft', skill: 'child-skill' }]
+  )
+  const scriptTools = scriptRun.events.filter((e) => e.type === 'tools.available').at(-1)?.names ?? []
+  check(scriptTools.includes('run_skill_script'), 'script-tool-exposed', JSON.stringify(scriptTools))
 } finally {
   await rm(base, { recursive: true, force: true })
 }
