@@ -355,6 +355,7 @@ interface Window {
           permissionMode: 'default' | 'fullAccess' | 'readOnly'
           taskTarget: 'local'
           model: string | null
+          fallbackModel: string | null
           disabledSkills: string[]
           pinnedSkills: string[]
         }
@@ -362,11 +363,12 @@ interface Window {
         model: string
         openSkillsDir: string
       }>
-      set: (input: { key: 'permissionMode' | 'taskTarget' | 'model'; value: string | null }) => Promise<{
+      set: (input: { key: 'permissionMode' | 'taskTarget' | 'model' | 'fallbackModel'; value: string | null }) => Promise<{
         settings: {
           permissionMode: 'default' | 'fullAccess' | 'readOnly'
           taskTarget: 'local'
           model: string | null
+          fallbackModel: string | null
           disabledSkills: string[]
           pinnedSkills: string[]
         }

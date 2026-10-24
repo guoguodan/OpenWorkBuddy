@@ -13,6 +13,7 @@ export const SETTING_KEYS = [
   'permissionMode',
   'taskTarget',
   'model',
+  'fallbackModel',
   'disabledSkills',
   'pinnedSkills'
 ] as const
@@ -24,6 +25,8 @@ export interface WorkspaceSettings {
   permissionMode: PermissionMode
   taskTarget: 'local'
   model: string | null
+  /** 主模型连续失败且尚未产生输出时使用的备用模型;为空表示不启用降级。 */
+  fallbackModel: string | null
   /** 已关闭自动触发的技能名;仅存显式关闭项,默认开启不落库。 */
   disabledSkills: string[]
   /** 已置顶技能名;排序只影响展示,不影响运行。 */
@@ -34,6 +37,7 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   permissionMode: 'default',
   taskTarget: 'local',
   model: null,
+  fallbackModel: null,
   disabledSkills: [],
   pinnedSkills: []
 }
@@ -68,6 +72,7 @@ export function getWorkspaceSettings(db: AppDatabase, workspaceId: string): Work
     permissionMode,
     taskTarget: 'local',
     model: map.get('model') ?? null,
+    fallbackModel: map.get('fallbackModel') ?? null,
     disabledSkills: parseNameList(map.get('disabledSkills'), true),
     pinnedSkills: parseNameList(map.get('pinnedSkills'))
   }

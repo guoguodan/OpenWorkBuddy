@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  decideModelFallback,
   decideStreamRetry,
   isRetryableStreamError,
   retryDelayMs,
@@ -100,6 +101,50 @@ describe('retryDelayMs', () => {
     expect(retryDelayMs(0, 400)).toBe(400)
     expect(retryDelayMs(1, 400)).toBe(800)
     expect(retryDelayMs(2, 400)).toBe(1600)
+  })
+})
+
+describe('decideModelFallback', () => {
+  const base = {
+    primaryModel: 'primary-model',
+    fallbackModel: 'backup-model',
+    producedOutput: false,
+    aborted: false,
+    error: apiError('overloaded', 503)
+  }
+
+  it('switches only after the primary retry budget is exhausted', () => {
+    expect(decideModelFallback({ ...base, attempt: 0, alreadyFallenBack: false, maxAttempts: 3 }).fallback).toBe(false)
+    expect(decideModelFallback({ ...base, attempt: 1, alreadyFallenBack: false, maxAttempts: 3 }).fallback).toBe(false)
+    expect(decideModelFallback({ ...base, attempt: 2, alreadyFallenBack: false, maxAttempts: 3 }).fallback).toBe(true)
+  })
+
+  it('does not switch when no fallback model is configured', () => {
+    expect(decideModelFallback({ ...base, fallbackModel: null, attempt: 2, alreadyFallenBack: false }).fallback).toBe(false)
+    expect(decideModelFallback({ ...base, fallbackModel: '  ', attempt: 2, alreadyFallenBack: false }).fallback).toBe(false)
+  })
+
+  it('does not switch to the same model', () => {
+    expect(
+      decideModelFallback({ ...base, fallbackModel: 'primary-model', attempt: 2, alreadyFallenBack: false }).fallback
+    ).toBe(false)
+  })
+
+  it('never switches after output, abort, or an earlier fallback', () => {
+    expect(decideModelFallback({ ...base, producedOutput: true, attempt: 2, alreadyFallenBack: false }).fallback).toBe(false)
+    expect(decideModelFallback({ ...base, aborted: true, attempt: 2, alreadyFallenBack: false }).fallback).toBe(false)
+    expect(decideModelFallback({ ...base, attempt: 2, alreadyFallenBack: true }).fallback).toBe(false)
+  })
+
+  it('does not switch on permanent client or auth errors', () => {
+    expect(
+      decideModelFallback({
+        ...base,
+        error: apiError('Incorrect API key provided', 401),
+        attempt: 2,
+        alreadyFallenBack: false
+      }).fallback
+    ).toBe(false)
   })
 })
 

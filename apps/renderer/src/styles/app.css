@@ -1589,6 +1589,16 @@ input, textarea { font-family: inherit; }
   background: var(--owb-bg-secondary); border: 1px solid var(--owb-border-subtle);
   border-radius: var(--owb-radius-md); color: var(--owb-text-secondary);
 }
+.owb-fallback-row { display: flex; align-items: center; gap: 6px; width: 100%; }
+.owb-fallback-row input {
+  flex: 1; min-width: 0; height: 30px; padding: 0 10px; font-size: 12px;
+  background: var(--owb-bg-secondary); border: 1px solid var(--owb-border-subtle);
+  border-radius: var(--owb-radius-md); color: var(--owb-text-primary); outline: none;
+}
+.owb-fallback-row input:focus { border-color: var(--owb-border-focus); }
+.owb-fallback-row input::placeholder { color: var(--owb-text-tertiary); }
+.owb-fallback-row .owb-sheet__action { height: 30px; flex-shrink: 0; }
+.owb-settings-hint { font-size: 11px; line-height: 1.5; color: var(--owb-text-tertiary); }
 
 /* ---- 卡片/徽标/头像 ---- */
 .owb-card-list { display: flex; flex-direction: column; gap: 8px; }

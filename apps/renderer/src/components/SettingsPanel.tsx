@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { IconBrain, IconFolder, IconSparkle, IconUsers, IconX } from './Icons'
 import type { PermissionMode } from './Composer'
 
@@ -6,6 +6,7 @@ export interface WorkspaceSettingsInfo {
   permissionMode: PermissionMode
   taskTarget: 'local'
   model: string | null
+  fallbackModel: string | null
   disabledSkills?: string[]
   pinnedSkills?: string[]
   openSkillsDir?: string
@@ -22,6 +23,9 @@ interface SettingsPanelProps {
   onOpenChannels: () => void
   onOpenGrants: () => void
   onPermissionChange: (mode: PermissionMode) => Promise<void>
+  /** 备用模型候选与主模型一致,来自网关真实清单。 */
+  fallbackModelDraft?: string | null
+  onFallbackModelChange: (name: string | null) => Promise<void>
   onClose: () => void
 }
 
@@ -52,9 +56,28 @@ export function SettingsPanel({
   onOpenChannels,
   onOpenGrants,
   onPermissionChange,
+  fallbackModelDraft,
+  onFallbackModelChange,
   onClose
 }: SettingsPanelProps) {
   const [saving, setSaving] = useState<PermissionMode | null>(null)
+  const [fallbackDraft, setFallbackDraft] = useState('')
+  const [fallbackSaving, setFallbackSaving] = useState(false)
+
+  useEffect(() => {
+    setFallbackDraft(settings.fallbackModel ?? '')
+  }, [settings.fallbackModel])
+
+  const currentFallback = (fallbackModelDraft ?? settings.fallbackModel ?? '').trim()
+  const saveFallback = async (value: string | null) => {
+    if (fallbackSaving) return
+    setFallbackSaving(true)
+    try {
+      await onFallbackModelChange(value)
+    } finally {
+      setFallbackSaving(false)
+    }
+  }
 
   return (
     <section className="owb-sheet" role="dialog" aria-modal="true" aria-label="设置">
@@ -101,6 +124,45 @@ export function SettingsPanel({
           <div className="owb-kv">
             <span>模型</span>
             <span>{model || '(未配置)'}</span>
+          </div>
+          <div className="owb-kv owb-kv--stack">
+            <span>备用模型</span>
+            <div className="owb-fallback-row">
+              <input
+                value={fallbackDraft}
+                onChange={(event) => setFallbackDraft(event.target.value)}
+                placeholder="主模型连续失败时使用;留空则不降级"
+                aria-label="备用模型"
+                data-testid="fallback-model-input"
+                disabled={fallbackSaving}
+              />
+              <button
+                type="button"
+                className="owb-sheet__action"
+                disabled={fallbackSaving || fallbackDraft.trim() === currentFallback}
+                onClick={() => void saveFallback(fallbackDraft.trim() || null)}
+                data-testid="fallback-model-save"
+              >
+                {fallbackSaving ? '保存中…' : '保存'}
+              </button>
+              {currentFallback ? (
+                <button
+                  type="button"
+                  className="owb-sheet__action"
+                  disabled={fallbackSaving}
+                  data-testid="fallback-model-clear"
+                  onClick={() => {
+                    setFallbackDraft('')
+                    void saveFallback(null)
+                  }}
+                >
+                  清除
+                </button>
+              ) : null}
+            </div>
+            <span className="owb-settings-hint">
+              仅当主模型重试耗尽、且本步尚未产生任何输出时切换;已开始的回复不会中途换模型。
+            </span>
           </div>
           <div className="owb-kv">
             <span>任务位置</span>

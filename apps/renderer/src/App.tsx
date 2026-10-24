@@ -71,6 +71,8 @@ type AgentEvent = {
   coveredMessages?: number
   coveredSeq?: number
   fallback?: boolean
+  from?: string
+  to?: string
 }
 
 interface SystemLine {
@@ -207,7 +209,8 @@ export default function App() {
   const [settings, setSettings] = useState<WorkspaceSettingsInfo>({
     permissionMode: 'default',
     taskTarget: 'local',
-    model: null
+    model: null,
+    fallbackModel: null
   })
   const [modelLabel, setModelLabel] = useState('')
   const [modelOptions, setModelOptions] = useState<string[]>([])
@@ -461,6 +464,10 @@ export default function App() {
         note('warn', `连接中断,${wait}后自动重试(第 ${e.attempt ?? 1} 次)${reason}`)
       } else if (e.type === 'retry.recovered') {
         note('info', '连接已恢复,继续生成。')
+      } else if (e.type === 'model.fallback') {
+        note('warn', `主模型「${e.from ?? ''}」不可用,已切换到备用模型「${e.to ?? ''}」继续生成。`)
+      } else if (e.type === 'model.fallback.recovered') {
+        note('info', `备用模型「${e.to ?? ''}」已恢复生成。`)
       } else if (e.type === 'ready' && e.workspace) {
         setWorkspacePath(e.workspace)
       } else if (e.type === 'artifact.created' && e.artifact) {
@@ -1012,6 +1019,17 @@ export default function App() {
     }
   }
 
+  const changeFallbackModel = async (name: string | null) => {
+    const value = name?.trim() || null
+    try {
+      const r = await window.openwb.settings.set({ key: 'fallbackModel', value })
+      setSettings(r.settings)
+      note('info', value ? `备用模型已设为: ${value}` : '已关闭备用模型降级')
+    } catch (err) {
+      note('system', `保存备用模型失败: ${(err as Error).message}`)
+    }
+  }
+
   /**
    * 模型候选来自网关 /v1/models,不再写死常见模型名。
    * 失败时保留当前模型与自定义输入,并把原因交给菜单显示。
@@ -1319,6 +1337,7 @@ export default function App() {
                 void openGrants().catch((err: Error) => note('system', `授权列表加载失败: ${err.message}`))
               }}
               onPermissionChange={changePermission}
+              onFallbackModelChange={changeFallbackModel}
               onClose={() => setSheet(null)}
             />
           ) : sheet === 'automation' ? (

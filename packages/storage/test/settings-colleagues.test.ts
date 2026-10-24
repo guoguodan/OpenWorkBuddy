@@ -48,12 +48,14 @@ describe('workspace settings', () => {
   it('persists permission mode and model, and upserts in place', () => {
     setWorkspaceSetting(handle.db, workspaceId, 'permissionMode', 'readOnly')
     setWorkspaceSetting(handle.db, workspaceId, 'model', 'demo-model')
+    setWorkspaceSetting(handle.db, workspaceId, 'fallbackModel', 'backup-model')
     setWorkspaceSetting(handle.db, workspaceId, 'permissionMode', 'fullAccess')
     const settings = getWorkspaceSettings(handle.db, workspaceId)
     expect(settings.permissionMode).toBe('fullAccess')
     expect(settings.model).toBe('demo-model')
+    expect(settings.fallbackModel).toBe('backup-model')
     const count = handle.raw.prepare('SELECT COUNT(*) AS n FROM workspace_setting').get() as { n: number }
-    expect(count.n).toBe(2)
+    expect(count.n).toBe(3)
   })
 
   it('treats an unknown stored value as the safe default', () => {
@@ -65,6 +67,15 @@ describe('workspace settings', () => {
     setWorkspaceSetting(handle.db, workspaceId, 'model', 'demo-model')
     setWorkspaceSetting(handle.db, workspaceId, 'model', null)
     expect(getWorkspaceSettings(handle.db, workspaceId).model).toBeNull()
+  })
+
+  it('clears the fallback model without touching the primary model', () => {
+    setWorkspaceSetting(handle.db, workspaceId, 'model', 'demo-model')
+    setWorkspaceSetting(handle.db, workspaceId, 'fallbackModel', 'backup-model')
+    setWorkspaceSetting(handle.db, workspaceId, 'fallbackModel', null)
+    const settings = getWorkspaceSettings(handle.db, workspaceId)
+    expect(settings.fallbackModel).toBeNull()
+    expect(settings.model).toBe('demo-model')
   })
 
   it('persists disabled skills as a deduplicated sorted set', () => {

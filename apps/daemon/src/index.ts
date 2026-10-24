@@ -153,6 +153,7 @@ import {
 import {
   DEFAULT_MAX_STREAM_ATTEMPTS,
   DEFAULT_RETRY_BASE_MS,
+  decideModelFallback,
   decideStreamRetry,
   isRetryableStreamError,
   retryDelayMs,
@@ -2126,8 +2127,15 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
 
   // 模型在一轮开始时确定:中途改设置不能改变已经发出的请求,
   // 否则同一条回复可能前半段来自 A、后半段来自 B,日志也无法解释。
-  const selectedModel = resolveModelName(getWorkspaceSettings(db, workspaceId).model)
-  const activeModel = modelFor(selectedModel)
+  const workspaceSettings = getWorkspaceSettings(db, workspaceId)
+  const selectedModel = resolveModelName(workspaceSettings.model)
+  const configuredFallback = workspaceSettings.fallbackModel?.trim() ?? ''
+  const fallbackModel = configuredFallback ? resolveModelName(configuredFallback) : null
+  // 备用模型与主模型相同等于没有备用,不占用一次模型轮次。
+  const effectiveFallback = fallbackModel && fallbackModel !== selectedModel ? fallbackModel : null
+  let usedModel = selectedModel
+  let activeModel = modelFor(usedModel)
+  let fallbackUsed = false
 
   // 从这里开始才是可取消的模型运行。准备阶段(记忆、提示词)很快,
   // 提前注册反而会让"停止"落在还没开始的请求上。
@@ -2187,81 +2195,120 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
       let stepUsage: { promptTokens?: number; completionTokens?: number } | null = null
       let stepResponseMessages: CoreMessage[] | null = null
       let stepToolResultCount = 0
-      for (let attempt = 0; attempt < STREAM_MAX_ATTEMPTS; attempt++) {
-        let producedOutput = false
-        try {
-          const attemptResult = streamText({
-            model: activeModel,
-            system: prepared.system,
-            messages,
-            tools,
-            maxSteps: 1,
-            // 重试由本层统一负责:SDK 内建的静默重试不会发事件,
-            // 用户只会看到界面卡住,而且两层重试会成倍放大请求次数。
-            maxRetries: 0,
-            abortSignal: signal
-          })
-
-          for await (const part of attemptResult.fullStream) {
-            if (signal.aborted) throw new RunCancelledError()
-            if (part.type === 'text-delta') {
-              producedOutput = true
-              reply += part.textDelta
-              emit({ type: 'delta', text: part.textDelta })
-            } else if (part.type === 'tool-call') {
-              producedOutput = true
-              toolCalls++
-              emit({ type: 'tool.started', callId: part.toolCallId, name: part.toolName })
-            } else if (part.type === 'tool-result') {
-              const { ok, summary } = summarizeToolResult(part.toolName, part.result)
-              emit({ type: 'tool.finished', callId: part.toolCallId, ok, summary })
-              if (part.toolName === 'present_files' && ok) delivered++
-            } else if (part.type === 'error') {
-              throw part.error instanceof Error ? part.error : new Error(String(part.error))
-            }
-          }
-
-          // usage/response/toolResults 也要在重试保护内读取:部分网关在流结束
-          // 之后才暴露错误,提前跳出重试会让这些失败直接落到用户头上。
-          stepUsage = (await attemptResult.usage) ?? null
-          const response = await attemptResult.response
-          stepResponseMessages = response.messages as CoreMessage[]
-          stepToolResultCount = (await attemptResult.toolResults).length
-          if (attempt > 0) emit({ type: 'retry.recovered', attempt })
-          break
-        } catch (err) {
-          if (isRunCancelled(err, signal)) throw new RunCancelledError()
-          const decision = decideStreamRetry({
-            attempt,
-            producedOutput,
-            aborted: signal.aborted,
-            error: err,
-            maxAttempts: STREAM_MAX_ATTEMPTS
-          })
-          if (!decision.retry) {
-            if (!isRetryableStreamError(err) || producedOutput) throw err
-            // 重试次数用尽:交给外层统一按 AGENT_FAILED 上报,避免同一失败弹两次。
-            throw err
-          }
-          const delayMs = retryDelayMs(attempt, STREAM_RETRY_BASE_MS)
-          emit({
-            type: 'retry.scheduled',
-            attempt: attempt + 1,
-            delayMs,
-            reason: decision.reason
-          })
-          process.stderr.write(
-            `[retry] 第 ${attempt + 1} 次失败,${delayMs}ms 后重试: ${decision.reason}\n`
-          )
+      let lastFailure: unknown = null
+      // 主模型先按原有预算重试;只有重试耗尽且本步尚未产生任何输出时,
+      // 才允许切换到备用模型。切换后本轮后续步骤继续使用备用模型,
+      // 避免同一条回复在两个模型之间来回跳。
+      const modelRounds = fallbackUsed ? 1 : effectiveFallback ? 2 : 1
+      stepRequest: for (let round = 0; round < modelRounds; round++) {
+        if (round === 1) {
+          usedModel = effectiveFallback!
+          activeModel = modelFor(usedModel)
+        }
+        for (let attempt = 0; attempt < STREAM_MAX_ATTEMPTS; attempt++) {
+          let producedOutput = false
           try {
-            await sleepWithAbort(delayMs, signal)
-          } catch {
-            throw new RunCancelledError()
+            const attemptResult = streamText({
+              model: activeModel,
+              system: prepared.system,
+              messages,
+              tools,
+              maxSteps: 1,
+              // 重试由本层统一负责:SDK 内建的静默重试不会发事件,
+              // 用户只会看到界面卡住,而且两层重试会成倍放大请求次数。
+              maxRetries: 0,
+              abortSignal: signal
+            })
+
+            for await (const part of attemptResult.fullStream) {
+              if (signal.aborted) throw new RunCancelledError()
+              if (part.type === 'text-delta') {
+                producedOutput = true
+                reply += part.textDelta
+                emit({ type: 'delta', text: part.textDelta })
+              } else if (part.type === 'tool-call') {
+                producedOutput = true
+                toolCalls++
+                emit({ type: 'tool.started', callId: part.toolCallId, name: part.toolName })
+              } else if (part.type === 'tool-result') {
+                const { ok, summary } = summarizeToolResult(part.toolName, part.result)
+                emit({ type: 'tool.finished', callId: part.toolCallId, ok, summary })
+                if (part.toolName === 'present_files' && ok) delivered++
+              } else if (part.type === 'error') {
+                throw part.error instanceof Error ? part.error : new Error(String(part.error))
+              }
+            }
+
+            // usage/response/toolResults 也要在重试保护内读取:部分网关在流结束
+            // 之后才暴露错误,提前跳出重试会让这些失败直接落到用户头上。
+            stepUsage = (await attemptResult.usage) ?? null
+            const response = await attemptResult.response
+            stepResponseMessages = response.messages as CoreMessage[]
+            stepToolResultCount = (await attemptResult.toolResults).length
+            if (attempt > 0) emit({ type: 'retry.recovered', attempt, model: usedModel })
+            if (round === 1) emit({ type: 'model.fallback.recovered', from: selectedModel, to: usedModel })
+            break stepRequest
+          } catch (err) {
+            if (isRunCancelled(err, signal)) throw new RunCancelledError()
+            lastFailure = err
+            const decision = decideStreamRetry({
+              attempt,
+              producedOutput,
+              aborted: signal.aborted,
+              error: err,
+              maxAttempts: STREAM_MAX_ATTEMPTS
+            })
+            if (!decision.retry) {
+              // 有可见输出或工具调用时切换模型会重复回答/重复副作用,必须直接失败。
+              if (!isRetryableStreamError(err) || producedOutput) throw err
+              const fallbackDecision = decideModelFallback({
+                attempt,
+                maxAttempts: STREAM_MAX_ATTEMPTS,
+                producedOutput,
+                aborted: signal.aborted,
+                error: err,
+                primaryModel: usedModel,
+                fallbackModel: effectiveFallback,
+                alreadyFallenBack: fallbackUsed
+              })
+              if (!fallbackDecision.fallback) throw err
+              usedModel = effectiveFallback!
+              activeModel = modelFor(usedModel)
+              fallbackUsed = true
+              emit({
+                type: 'model.fallback',
+                from: selectedModel,
+                to: usedModel,
+                reason: fallbackDecision.reason
+              })
+              process.stderr.write(
+                `[fallback] ${selectedModel} 重试耗尽,切换到备用模型 ${usedModel}: ${fallbackDecision.reason}\n`
+              )
+              // 退出主模型的重试循环,由下一轮使用备用模型重新执行本步。
+              break
+            }
+            const delayMs = retryDelayMs(attempt, STREAM_RETRY_BASE_MS)
+            emit({
+              type: 'retry.scheduled',
+              attempt: attempt + 1,
+              delayMs,
+              reason: decision.reason
+            })
+            process.stderr.write(
+              `[retry] 第 ${attempt + 1} 次失败,${delayMs}ms 后重试: ${decision.reason}\n`
+            )
+            try {
+              await sleepWithAbort(delayMs, signal)
+            } catch {
+              throw new RunCancelledError()
+            }
           }
         }
       }
 
-      if (!stepResponseMessages) throw new Error('模型请求重试后仍未取得响应')
+      if (!stepResponseMessages) {
+        throw lastFailure instanceof Error ? lastFailure : new Error('模型请求重试后仍未取得响应')
+      }
       if (signal.aborted) throw new RunCancelledError()
 
       // 部分网关(含中转)在流式结束时不回 usage,或回 null/NaN。
@@ -2338,7 +2385,8 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
       activeSkill,
       project?.id,
       prepared.system,
-      injectedSections(input, project)
+      injectedSections(input, project),
+      usedModel
     )
     const file = await writeTrace(TRACE_DIR, trace)
     process.stderr.write(
@@ -2349,7 +2397,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
       conversationId,
       role: 'assistant',
       content: { text: reply },
-      ...(activeSkill ? { model: `${selectedModel}#${activeSkill}` } : { model: selectedModel }),
+      ...(activeSkill ? { model: `${usedModel}#${activeSkill}` } : { model: usedModel }),
       tokenIn: totalInput,
       tokenOut: totalOutput
     })
@@ -2391,7 +2439,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
         role: 'assistant',
         content: { text: reply },
         status: 'interrupted',
-        ...(activeSkill ? { model: `${selectedModel}#${activeSkill}` } : { model: selectedModel }),
+        ...(activeSkill ? { model: `${usedModel}#${activeSkill}` } : { model: usedModel }),
         tokenIn: totalInput,
         tokenOut: totalOutput
       })
@@ -2543,17 +2591,17 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
 
   if (msg.cmd === 'settings.set') {
     const key = msg.key
-    if (key !== 'permissionMode' && key !== 'taskTarget' && key !== 'model') {
+    if (key !== 'permissionMode' && key !== 'taskTarget' && key !== 'model' && key !== 'fallbackModel') {
       throw new Error('未知设置项')
     }
     if (key === 'permissionMode' && msg.value !== 'default' && msg.value !== 'fullAccess' && msg.value !== 'readOnly') {
       throw new Error('permissionMode 必须是 default / fullAccess / readOnly')
     }
-    if (key === 'model' && msg.value !== null && typeof msg.value !== 'string') {
-      throw new Error('model 必须是字符串或 null')
+    if ((key === 'model' || key === 'fallbackModel') && msg.value !== null && typeof msg.value !== 'string') {
+      throw new Error(`${key} 必须是字符串或 null`)
     }
-    if (key === 'model' && typeof msg.value === 'string' && msg.value.includes('\n')) {
-      throw new Error('model 不能包含换行')
+    if ((key === 'model' || key === 'fallbackModel') && typeof msg.value === 'string' && msg.value.includes('\n')) {
+      throw new Error(`${key} 不能包含换行`)
     }
     const value = msg.value === null ? null : typeof msg.value === 'string' ? msg.value : String(msg.value)
     const settings = setWorkspaceSetting(db, workspaceId, key as SettingKey, value)
@@ -2561,7 +2609,10 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       ...base,
       type: 'settings.updated',
       settings,
-      ...(key === 'model' ? { model: resolveModelName(settings.model) } : {})
+      ...(key === 'model' ? { model: resolveModelName(settings.model) } : {}),
+      ...(key === 'fallbackModel'
+        ? { fallbackModel: settings.fallbackModel ? resolveModelName(settings.fallbackModel) : null }
+        : {})
     })
     return true
   }

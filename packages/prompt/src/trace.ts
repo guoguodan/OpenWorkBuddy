@@ -25,6 +25,8 @@ export interface PromptTrace {
   systemBytes?: number
   /** 本轮注入 system 的上下文段落名(只记类型,不落原文,避免泄漏记忆与文件内容) */
   injected?: string[]
+  /** 本轮实际完成(或最终失败)的模型名;发生降级时记录备用模型。 */
+  model?: string
 }
 
 export function buildTrace(
@@ -34,7 +36,8 @@ export function buildTrace(
   skill?: string,
   projectId?: string,
   systemText?: string,
-  injected?: string[]
+  injected?: string[],
+  model?: string
 ): PromptTrace {
   return {
     modeId,
@@ -51,7 +54,8 @@ export function buildTrace(
           systemBytes: Buffer.byteLength(systemText, 'utf8')
         }
       : {}),
-    ...(injected && injected.length > 0 ? { injected } : {})
+    ...(injected && injected.length > 0 ? { injected } : {}),
+    ...(model ? { model } : {})
   }
 }
 

@@ -89,6 +89,46 @@ export function decideStreamRetry(input: StreamRetryInput): StreamRetryDecision 
   return { retry: true, reason }
 }
 
+export interface ModelFallbackInput {
+  /** 刚刚失败的主模型尝试序号,从 0 开始。 */
+  attempt: number
+  maxAttempts?: number
+  /** 该步是否已经向用户输出文本或发起工具调用。 */
+  producedOutput: boolean
+  aborted: boolean
+  error: unknown
+  primaryModel: string
+  fallbackModel?: string | null
+  /** 本步是否已经切换过一次;只允许降级一次,避免在多个坏模型间来回试。 */
+  alreadyFallenBack: boolean
+}
+
+export interface ModelFallbackDecision {
+  fallback: boolean
+  reason: string
+}
+
+/**
+ * 判断是否应该在主模型重试耗尽后切换备用模型。
+ *
+ * 与同模型重试共用同一组安全边界:一旦出现过可见输出或工具调用,切换模型
+ * 会让同一条回复前后来自不同模型,甚至重复执行有副作用的工具,因此绝不降级。
+ * 鉴权、参数错误换模型也不会变好,同样不降级。
+ */
+export function decideModelFallback(input: ModelFallbackInput): ModelFallbackDecision {
+  const maxAttempts = Math.max(1, input.maxAttempts ?? DEFAULT_MAX_STREAM_ATTEMPTS)
+  const reason = messageOf(input.error).slice(0, 300)
+  const fallback = input.fallbackModel?.trim() ?? ''
+  if (input.aborted) return { fallback: false, reason: '用户已停止' }
+  if (input.producedOutput) return { fallback: false, reason }
+  if (input.alreadyFallenBack) return { fallback: false, reason }
+  if (!fallback || fallback === input.primaryModel) return { fallback: false, reason }
+  if (!isRetryableStreamError(input.error)) return { fallback: false, reason }
+  // 主模型还有剩余重试次数时先重试主模型,避免一次抖动就换模型。
+  if (input.attempt + 1 < maxAttempts) return { fallback: false, reason }
+  return { fallback: true, reason }
+}
+
 export function retryDelayMs(attempt: number, baseMs = DEFAULT_RETRY_BASE_MS): number {
   const base = Number.isFinite(baseMs) && baseMs >= 0 ? baseMs : DEFAULT_RETRY_BASE_MS
   return Math.round(base * Math.pow(2, Math.max(0, attempt)))
