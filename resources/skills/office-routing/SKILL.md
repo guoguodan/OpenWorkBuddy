@@ -1,7 +1,7 @@
 ---
 name: office-routing
 description: 判断 docx/xlsx/pptx 类需求应拆成哪些步骤、产出什么文件
-allowed-tools: read_file, glob, grep, present_files
+allowed-tools: read_file, glob, grep, write_file, shell, present_files, create_presentation
 version: 0.1.0
 ---
 
@@ -21,9 +21,12 @@ version: 0.1.0
 
 | 任务 | 首选 | 备选 |
 |---|---|---|
+| 生成 pptx | `create_presentation`,一次传入逐页标题与要点 | 无 |
 | 批量生成 docx | 模板 + 变量替换 | 逐段拼装 OOXML |
 | 结构化表格 | xlsx 库直接写单元格 | 先写 CSV 再转换 |
 | 汇报材料 | 先出大纲,再逐页填内容 | 一次性生成完整 deck |
+
+**演示文稿只有一条正确路径**:调用 `create_presentation`。不要用 `shell` 起 python、不要自己拼 OOXML、不要只把大纲写进 Markdown 就当作已交付。用户说"整理成可下载的 PPT"时,必须产出真实的 `.pptx` 文件。
 
 ## 3. 交付前自检
 
@@ -31,3 +34,8 @@ version: 0.1.0
 - 文件名不以点开头,不含空格与中文标点。
 - 数值列不含千分位字符串。
 - 用 `present_files` 收尾,让用户能直接点开。
+
+## 4. 不要替用户放弃
+
+只要当前模式允许写文件,就应当直接把文件做出来,而不是回答"我没有写入权限"。
+只有在明确缺少必要输入(例如原始数据文件不存在)时,才向用户提问。

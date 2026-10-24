@@ -1,4 +1,4 @@
-﻿id: expert
+id: expert
 displayName: 专家
 description: 以指定专家身份只读分析
 toolPolicy:
@@ -7,6 +7,7 @@ toolPolicy:
     - glob
     - grep
     - present_files
+    - create_presentation
   deny:
     - write_file
     - shell

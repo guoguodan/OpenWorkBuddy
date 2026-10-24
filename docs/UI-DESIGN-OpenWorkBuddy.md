@@ -372,4 +372,42 @@ node tests/e2e/verify-modes-ui.mjs
 - [ ] 长消息滚动时输入框固定在底部
 - [ ] 工具调用与状态条不挤压消息正文
 - [ ] 代码块横向滚动不撑破容器
+---
 
+## 9. Office 产物生成
+
+真实产品里"做一份 PPT"是一个必须真的产出文件的动作。OpenWorkBuddy 早期把这类请求交给模型自由发挥,模型要么只写 Markdown 大纲,要么尝试调用本机 python-pptx;一旦命中 `office-routing` 技能,该技能把工具收窄成只读,模型就会回答"我没有写入权限"。这里把链路固定成两条规则。
+
+### 9.1 生成路径
+
+| 项 | 做法 |
+|---|---|
+| 工具 | `create_presentation`:入参只有文件名、封面标题、副标题与逐页要点 |
+| 结构 | 宿主生成 PresentationML,不经过模型拼 XML |
+| 版式 | 第一页为封面(标题 + 副标题 + 可选要点),其余为标题 + 要点页 |
+| 页数 | 与传入 `slides` 一一对应,不会额外追加封面页 |
+| 分页上限 | 60 页,每页最多 12 条要点,单条 400 字 |
+| 换行 | 段落级自动换行,长文本按 `normAutofit` 收缩 |
+| 字体 | Microsoft YaHei,缺失时由 Office 回退 |
+| 输出 | 固定时间戳与压缩级别,相同输入产出逐字节一致的文件 |
+| 安全 | 路径必须位于工作区内;扩展名必须是 `.pptx`;XML 特殊字符与控制字符全部转义 |
+
+### 9.2 交付闭环
+
+`create_presentation` 只负责落盘,交付仍由 `present_files` 完成。两者都在 `craft` / `expert` / `plan` 模式白名单内,但 `ask` 与 `quick` 不开放——前者是只读问答,后者不调用工具。
+
+写文件是"必须先把文件做出来"的动作,因此 `office-routing` 技能声明里保留 `write_file`、`shell`、`create_presentation` 与 `present_files`。技能的 `allowed-tools` 只用来禁用它自己做不到的事(例如代码审查),不能把宿主本来允许的写入能力砍掉。
+
+### 9.3 验收
+
+`node tests/e2e/verify-office-flow.mjs`(15 项):
+
+- 技能激活后 `allowedTools` 仍包含 `write_file` / `create_presentation` / `present_files`
+- 技能激活后的工具清单仍可写
+- 产物含 `[Content_Types].xml`、`presentation.xml` 与全部 slide 部件
+- 页数与输入一致,正文进入对应幻灯片
+- 运行结束后经 `present_files` 产生带 `sha256` 的交付物
+
+`packages/tools/test/pptx.test.ts`(8 项)覆盖 ZIP 结构、关系文件完整性、XML 转义、确定性输出、第一页要点不丢失与不追加多余封面。
+
+真实链路实测:`5 页 RAG 技术汇报` → `create_presentation` 11.4KB → `present_files` 交付卡片,产物被 python-pptx 正确读出 5 页。

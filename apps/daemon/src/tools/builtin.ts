@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, sep, dirname } from 'node:path'
 import { z } from 'zod'
-import type { ArtifactDraft, ToolDescriptor, ToolContext } from '@openwb/tools'
+import { buildDeck, type ArtifactDraft, type ToolDescriptor, type ToolContext } from '@openwb/tools'
 import {
   MAX_DESTRUCTIVE_BATCH,
   SecurityError,
@@ -349,6 +349,68 @@ export const presentFilesTool: ToolDescriptor<PresentInput, { presented: number 
   }
 }
 
+const slideBulletParams = z.object({
+  text: z.string().min(1).max(400),
+  level: z.union([z.literal(1), z.literal(2)]).optional()
+})
+
+const slideParams = z.object({
+  title: z.string().min(1).max(200),
+  bullets: z.array(slideBulletParams).max(12).optional()
+})
+
+const presentationParams = z.object({
+  path: z.string().describe('相对工作区根目录的 .pptx 路径,例如 report.pptx'),
+  title: z.string().min(1).max(200).describe('封面主标题'),
+  subtitle: z.string().max(240).optional().describe('封面副标题'),
+  slides: z
+    .array(slideParams)
+    .min(1)
+    .max(60)
+    .describe('幻灯片顺序。第一页渲染为封面,正文版式从第二页开始')
+})
+
+/**
+ * 直接产出 .pptx。
+ *
+ * 让模型自己写 Python 或拼 OOXML 的失败率很高,用户机器也未必装了
+ * python-pptx。这里把"生成合法演示文稿"收敛成一次确定性调用:
+ * 参数只有标题、要点与文件名,产物结构由宿主保证。
+ */
+export const createPresentationTool: ToolDescriptor<
+  z.infer<typeof presentationParams>,
+  { path: string; bytes: number; slides: number }
+> = {
+  name: 'create_presentation',
+  description:
+    '生成 .pptx 演示文稿并写入工作区。传入逐页标题与要点即可,不要自己拼接 OOXML 或调用 python-pptx。' +
+    '生成后必须再调用 present_files 交付,否则用户拿不到文件。',
+  parameters: presentationParams,
+  effects: { writesFilesystem: true, accessesNetwork: false, mayIncurCost: false },
+  async execute({ path, title, subtitle, slides }, ctx: ToolContext) {
+    const rel = path.trim()
+    if (!rel.toLowerCase().endsWith('.pptx')) throw new Error('演示文稿路径必须以 .pptx 结尾')
+    const abs = await resolveInsideWorkspace(ctx.workspaceRoot, rel)
+    const deck = buildDeck({
+      title,
+      ...(subtitle ? { subtitle } : {}),
+      slides: slides.map((slide) => ({
+        title: slide.title,
+        ...(slide.bullets && slide.bullets.length > 0
+          ? {
+              bullets: slide.bullets.map((bullet) => ({
+                text: bullet.text,
+                ...(bullet.level === 2 ? { level: 2 as const } : {})
+              }))
+            }
+          : {})
+      }))
+    })
+    await mkdir(dirname(abs), { recursive: true })
+    await writeFile(abs, deck.buffer)
+    return { path: rel, bytes: deck.buffer.length, slides: deck.slideCount }
+  }
+}
 export function builtinTools(): Array<ToolDescriptor<any, any>> {
   return [
     readFileTool,
@@ -356,6 +418,7 @@ export function builtinTools(): Array<ToolDescriptor<any, any>> {
     globTool,
     grepTool,
     shellTool,
+    createPresentationTool,
     presentFilesTool,
     deleteFilesTool,
     moveFilesTool

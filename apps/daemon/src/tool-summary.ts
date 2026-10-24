@@ -39,7 +39,13 @@ export function toToolFailure(err: unknown): ToolFailure {
 export function summarizeToolResult(name: string, result: unknown): { ok: boolean; summary: string } {
   if (isToolFailure(result)) return { ok: false, summary: result.error }
   if (name === 'load_skill') return { ok: true, summary: '技能已加载' }
-
+  if (name === 'create_presentation' && result && typeof result === 'object') {
+    const r = result as { path?: string; bytes?: number; slides?: number }
+    return {
+      ok: true,
+      summary: `已生成 ${r.slides ?? 0} 页 · ${r.path ?? ''}${r.bytes ? ` · ${(r.bytes / 1024).toFixed(1)}KB` : ''}`
+    }
+  }
   if (name === 'shell' && result && typeof result === 'object') {
     const r = result as { code?: number | null; stdout?: string; stderr?: string }
     const output = (r.stdout || r.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(0, 2).join(' / ')

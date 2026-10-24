@@ -1,4 +1,4 @@
-﻿id: craft
+id: craft
 displayName: 默认
 description: 全功能 Agent,可读写文件并执行命令
 toolPolicy:
@@ -9,6 +9,7 @@ toolPolicy:
     - grep
     - shell
     - present_files
+    - create_presentation
     - delete_files
     - move_files
   deny: []
