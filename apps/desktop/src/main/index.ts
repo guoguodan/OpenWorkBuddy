@@ -284,6 +284,12 @@ ipcMain.handle('colleagues.delete', async (_e, id: string) => {
   return request<{ id: string; removed: boolean }>({ cmd: 'colleagues.delete', id })
 })
 
+ipcMain.handle('colleagues.tasks', async (_e, id: string) => {
+  await daemonReady
+  if (typeof id !== 'string' || !id) throw new Error('非法助理 ID')
+  return request<{ colleagueId: string; tasks: unknown[] }>({ cmd: 'colleagues.tasks', id })
+})
+
 ipcMain.handle('projects.list', async () => {
   await daemonReady
   return request<{ projects: unknown[] }>({ cmd: 'projects.list' })

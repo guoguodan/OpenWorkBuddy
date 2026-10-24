@@ -175,4 +175,47 @@ describe('colleague repository', () => {
     expect(stats?.tokenUsage).toBe(150)
     expect(stats?.lastActiveAt).toBeTruthy()
   })
+
+  it('counts running, failed and completed tasks without inflating token usage', () => {
+    const colleague = createColleague(handle.db, { workspaceId, name: '任务统计助理' })
+    const otherColleague = createColleague(handle.db, { workspaceId, name: '另一位助理' })
+    const conv = createConversation(handle.db, {
+      workspaceId,
+      title: '任务统计会话',
+      modeId: 'craft',
+      colleagueId: colleague.id
+    })
+    const otherConv = createConversation(handle.db, {
+      workspaceId,
+      title: '其他会话',
+      modeId: 'craft',
+      colleagueId: otherColleague.id
+    })
+    appendMessage(handle.db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: { text: '回复' },
+      tokenIn: 10,
+      tokenOut: 5
+    })
+    const at = new Date().toISOString()
+    const insertTask = handle.raw.prepare(
+      'INSERT INTO task (id, conversation_id, title, status, attempt, created_at) VALUES (?, ?, ?, ?, 0, ?)'
+    )
+    insertTask.run('task-running', conv.id, '运行中', 'running', at)
+    insertTask.run('task-failed', conv.id, '失败', 'failed', at)
+    insertTask.run('task-done-1', conv.id, '完成一', 'done', at)
+    insertTask.run('task-done-2', conv.id, '完成二', 'done', at)
+    insertTask.run('task-other', otherConv.id, '别的助理', 'running', at)
+
+    const stats = getColleague(handle.db, colleague.id)?.stats
+    expect(stats).toMatchObject({
+      conversationCount: 1,
+      tokenUsage: 15,
+      runningTasks: 1,
+      failedTasks: 1,
+      completedTasks: 2
+    })
+    expect(getColleague(handle.db, otherColleague.id)?.stats.runningTasks).toBe(1)
+  })
 })

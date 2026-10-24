@@ -1,7 +1,7 @@
 import { and, desc, eq, sql } from 'drizzle-orm'
 import type { AppDatabase } from './client.js'
 import { nowIso, ulid } from './ids.js'
-import { colleague, conversation, message } from './schema.js'
+import { colleague, conversation, message, task } from './schema.js'
 
 export type ColleagueStatus = 'active' | 'paused'
 export type ColleagueVisibility = 'personal' | 'project' | 'public'
@@ -10,6 +10,9 @@ export interface ColleagueStats {
   conversationCount: number
   tokenUsage: number
   lastActiveAt: string | null
+  runningTasks: number
+  failedTasks: number
+  completedTasks: number
 }
 
 export interface ColleagueRecord {
@@ -71,7 +74,10 @@ function statsFor(db: AppDatabase, colleagueId: string): ColleagueStats {
     .select({
       conversations: sql<number>`count(distinct ${conversation.id})`,
       tokens: sql<number>`coalesce(sum(${message.tokenIn} + ${message.tokenOut}), 0)`,
-      lastActiveAt: sql<string | null>`max(${conversation.updatedAt})`
+      lastActiveAt: sql<string | null>`max(${conversation.updatedAt})`,
+      runningTasks: sql<number>`(select count(*) from ${task} where ${task.conversationId} in (select id from ${conversation} where colleague_id = ${colleagueId}) and ${task.status} = 'running')`,
+      failedTasks: sql<number>`(select count(*) from ${task} where ${task.conversationId} in (select id from ${conversation} where colleague_id = ${colleagueId}) and ${task.status} = 'failed')`,
+      completedTasks: sql<number>`(select count(*) from ${task} where ${task.conversationId} in (select id from ${conversation} where colleague_id = ${colleagueId}) and ${task.status} = 'done')`
     })
     .from(conversation)
     .leftJoin(message, eq(message.conversationId, conversation.id))
@@ -80,7 +86,10 @@ function statsFor(db: AppDatabase, colleagueId: string): ColleagueStats {
   return {
     conversationCount: Number(row?.conversations ?? 0),
     tokenUsage: Number(row?.tokens ?? 0),
-    lastActiveAt: row?.lastActiveAt ?? null
+    lastActiveAt: row?.lastActiveAt ?? null,
+    runningTasks: Number(row?.runningTasks ?? 0),
+    failedTasks: Number(row?.failedTasks ?? 0),
+    completedTasks: Number(row?.completedTasks ?? 0)
   }
 }
 
@@ -142,7 +151,10 @@ export function createColleague(db: AppDatabase, input: ColleagueInput): Colleag
   return mapRow(row as typeof colleague.$inferSelect, {
     conversationCount: 0,
     tokenUsage: 0,
-    lastActiveAt: null
+    lastActiveAt: null,
+    runningTasks: 0,
+    failedTasks: 0,
+    completedTasks: 0
   })
 }
 

@@ -75,7 +75,8 @@ contextBridge.exposeInMainWorld('openwb', {
     list: () => ipcRenderer.invoke('colleagues.list'),
     create: (input: unknown) => ipcRenderer.invoke('colleagues.create', input),
     update: (input: unknown) => ipcRenderer.invoke('colleagues.update', input),
-    remove: (id: string) => ipcRenderer.invoke('colleagues.delete', id)
+    remove: (id: string) => ipcRenderer.invoke('colleagues.delete', id),
+    tasks: (id: string) => ipcRenderer.invoke('colleagues.tasks', id)
   },
   projects: {
     list: () => ipcRenderer.invoke('projects.list'),

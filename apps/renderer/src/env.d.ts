@@ -176,6 +176,9 @@ interface ColleagueInfo {
     conversationCount: number
     tokenUsage: number
     lastActiveAt: string | null
+    runningTasks: number
+    failedTasks: number
+    completedTasks: number
   }
   createdAt: string
   updatedAt: string
@@ -338,6 +341,17 @@ interface Window {
       create: (input: ColleagueInputInfo) => Promise<{ colleague: ColleagueInfo }>
       update: (input: Partial<ColleagueInputInfo> & { id: string }) => Promise<{ colleague: ColleagueInfo }>
       remove: (id: string) => Promise<{ id: string; removed: boolean }>
+      tasks: (id: string) => Promise<{
+        colleagueId: string
+        tasks: Array<{
+          id: string
+          title: string
+          source: 'personal' | 'channel' | 'project'
+          status: 'inProgress' | 'idle' | 'completed' | 'failed'
+          createdAt: string
+          updatedAt: string
+        }>
+      }>
     }
     projects: {
       list: () => Promise<{ projects: ProjectInfo[] }>

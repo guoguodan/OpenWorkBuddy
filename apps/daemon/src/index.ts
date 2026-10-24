@@ -1908,6 +1908,39 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     return true
   }
 
+  if (msg.cmd === 'colleagues.tasks') {
+    if (typeof msg.id !== 'string' || !msg.id) throw new Error('缺少助理 ID')
+    // 任务列表来自真实会话与 task 行:运行中优先,其次有失败/待执行的会话算进行中,
+    // 其余按最后活动时间判定为已完成或空闲。渲染层不再猜测执行状态。
+    const tasks = listConversationSummaries(db, workspaceId)
+      .filter((c) => c.colleagueId === msg.id)
+      .map((c) => {
+        const source: 'personal' | 'channel' | 'project' = c.projectId
+          ? 'project'
+          : c.channelId
+            ? 'channel'
+            : 'personal'
+        const status: 'inProgress' | 'idle' | 'completed' | 'failed' =
+          c.running > 0 || c.pending > 0
+            ? 'inProgress'
+            : c.failed > 0
+              ? 'failed'
+              : c.taskTotal > 0 && c.done === c.taskTotal
+                ? 'completed'
+                : 'idle'
+        return {
+          id: c.id,
+          title: c.title,
+          source,
+          status,
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt
+        }
+      })
+    emit({ ...base, type: 'colleagues.tasks', colleagueId: msg.id, tasks })
+    return true
+  }
+
   if (msg.cmd === 'approval.ready') {
     // UI 明确声明"我能收审批":在此之前任何风险调用都必须拒绝,而不是默默排队。
     approvalBridge.markReady()
