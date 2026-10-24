@@ -331,14 +331,6 @@ try {
   await fillField('project-name', '企业级 AI 工作台')
   await evaluate(`(() => {
     const form = document.querySelector('[data-testid="project-form"]')
-    const inputs = Array.from(form.querySelectorAll('input'))
-    const desc = inputs.find((i) => i.placeholder.includes('一句话说明'))
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-    setter.call(desc, '把竞品分析沉淀成可执行方案')
-    desc.dispatchEvent(new Event('input', { bubbles: true }))
-  })()`)
-  await evaluate(`(() => {
-    const form = document.querySelector('[data-testid="project-form"]')
     const ta = form.querySelector('textarea')
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
     setter.call(ta, '先对照竞品再给取舍;结论必须带依据。')
@@ -357,23 +349,29 @@ try {
 
   // 置顶
   await evaluate(`(() => {
-    const card = document.querySelector('[data-testid="project-card"]')
-    Array.from(card.querySelectorAll('button')).find((b) => (b.getAttribute('aria-label') ?? '').includes('置顶')).click()
+    document.querySelector('[data-testid="project-more"]').click()
+  })()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="project-menu"]'))`)
+  await evaluate(`(() => {
+    Array.from(document.querySelectorAll('[data-testid="project-menu"] button')).find((b) => b.textContent.trim() === '置顶').click()
   })()`)
   const pinned = await waitFor(
     evaluate,
-    `document.querySelector('[data-testid="project-card"]')?.innerText.includes('置顶')`
+    `document.querySelector('[data-testid="project-card"]')?.innerText.includes('已置顶')`
   )
   check(pinned, 'project-pinned')
 
-  // 编辑
+  // 重命名
   await evaluate(`(() => {
-    const card = document.querySelector('[data-testid="project-card"]')
-    Array.from(card.querySelectorAll('button')).find((b) => b.textContent.includes('编辑')).click()
+    document.querySelector('[data-testid="project-more"]').click()
   })()`)
-  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="project-form"]'))`)
-  await fillField('project-name', '企业级 AI 工作台 Pro')
-  await evaluate(`document.querySelector('[data-testid="project-save"]').click()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="project-menu"]'))`)
+  await evaluate(`(() => {
+    Array.from(document.querySelectorAll('[data-testid="project-menu"] button')).find((b) => b.textContent.trim() === '重命名').click()
+  })()`)
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="project-rename-input"]'))`)
+  await fillField('project-rename-input', '企业级 AI 工作台 Pro')
+  await evaluate(`document.querySelector('[data-testid="project-rename-save"]').click()`)
   const renamed = await waitFor(
     evaluate,
     `document.querySelector('[data-testid="project-card"]')?.innerText.includes('企业级 AI 工作台 Pro')`
@@ -381,20 +379,17 @@ try {
   check(renamed, 'project-edited')
 
   // 项目内新建任务
-  await evaluate(`document.querySelector('[data-testid="project-new-task"]').click()`)
+  await evaluate(`document.querySelector('.owb-project-tile__main').click()`)
   await waitFor(evaluate, `!document.querySelector('[data-testid="project-card"]')`)
-  const taskTitle = await evaluate(`document.body.innerText.includes('与项目「企业级 AI 工作台 Pro」协作')`)
+  const taskTitle = await evaluate(`(async () => {
+    const list = await window.openwb.conversation.list()
+    return list.conversations.some((c) => c.title.includes('企业级 AI 工作台 Pro'))
+  })()`)
   check(taskTitle, 'project-task-created')
 
-  // 项目任务归属
+  // 项目任务归属与计数
   await openMore('项目')
   await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="project-card"]'))`)
-  await evaluate(`document.querySelector('[data-testid="project-toggle-tasks"]').click()`)
-  const taskShown = await waitFor(
-    evaluate,
-    `Boolean(document.querySelector('[data-testid="project-task"]'))`
-  )
-  check(taskShown, 'project-task-listed')
   const taskCount = await evaluate(
     `document.querySelector('[data-testid="project-card"]')?.innerText.match(/(\\d+) 个任务/)?.[1] ?? ''`
   )

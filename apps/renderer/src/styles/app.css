@@ -1780,23 +1780,136 @@ input, textarea { font-family: inherit; }
 .owb-colleague-meta { display: flex; flex-wrap: wrap; gap: 10px; }
 
 /* ---- 项目 ---- */
-.owb-project-card { gap: 10px; }
-.owb-project-card__actions { justify-content: flex-end; }
-.owb-project-refresh { align-self: flex-start; }
-.owb-project-tasks {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 8px; border-radius: var(--owb-radius-lg);
-  background: var(--owb-bg-primary); border: 1px solid var(--owb-border-subtle);
+.owb-projects { width: min(980px, calc(100vw - 48px)); }
+.owb-projects .owb-sheet__header { padding-bottom: 14px; }
+.owb-projects .owb-sheet__header h2 { font-size: 18px; font-weight: 620; letter-spacing: -0.02em; }
+.owb-projects .owb-sheet__header p { font-size: 12px; }
+.owb-projects__new { height: 32px; border-radius: var(--owb-radius-lg); }
+.owb-projects .owb-sheet__body { padding: 18px 24px 24px; gap: 14px; }
+.owb-projects__toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
-.owb-project-task {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 6px 8px; border: none; border-radius: var(--owb-radius-md);
-  background: transparent; color: var(--owb-text-primary);
-  font-size: 12px; text-align: left; cursor: pointer;
+.owb-projects__section-title {
+  margin: 0; font-size: 13px; font-weight: 600; color: var(--owb-text-primary);
 }
-.owb-project-task:hover { background: var(--owb-bg-hover); }
-.owb-project-task > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.owb-project-task > span:last-child { flex-shrink: 0; font-size: 11px; color: var(--owb-text-tertiary); }
+.owb-projects__search {
+  width: 220px; height: 32px; padding: 0 10px;
+  border-radius: var(--owb-radius-lg); background: var(--owb-bg-secondary);
+}
+.owb-project-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px; align-content: start;
+}
+.owb-project-tile {
+  position: relative; display: flex; align-items: stretch;
+  min-height: 112px;
+  border: 1px solid var(--owb-border-subtle);
+  border-radius: var(--owb-radius-xl);
+  background: var(--owb-bg-secondary);
+  transition: background-color var(--owb-motion-fast), border-color var(--owb-motion-fast);
+}
+.owb-project-tile:hover { background: var(--owb-bg-hover); border-color: var(--owb-border-default); }
+.owb-project-tile__main {
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 10px;
+  padding: 14px 8px 14px 14px; border: none; background: transparent;
+  color: var(--owb-text-primary); text-align: left; cursor: pointer;
+}
+.owb-project-tile__icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex-shrink: 0;
+  border-radius: var(--owb-radius-lg);
+  background: color-mix(in srgb, var(--owb-brand-8) 10%, transparent);
+  color: var(--owb-brand-8);
+}
+.owb-project-tile__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.owb-project-tile__title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.owb-project-tile__title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 600;
+}
+.owb-project-tile__badge {
+  flex-shrink: 0; padding: 1px 5px; border-radius: var(--owb-radius-sm);
+  background: var(--owb-bg-tertiary); color: var(--owb-text-secondary);
+  font-size: 10px; font-weight: 500;
+}
+.owb-project-tile__meta {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font-size: 11px; color: var(--owb-text-tertiary);
+}
+.owb-project-tile__dot {
+  width: 2px; height: 2px; border-radius: 50%; background: currentColor; opacity: 0.5;
+}
+.owb-project-tile__desc {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; font-size: 11.5px; line-height: 1.5; color: var(--owb-text-secondary);
+}
+.owb-project-tile__members {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 2px; font-size: 11px; color: var(--owb-text-tertiary);
+}
+.owb-project-tile__more { position: relative; padding: 8px 8px 0 0; }
+.owb-project-tile__more .owb-icon-btn { width: 26px; height: 26px; }
+.owb-project-tile__ellipsis { font-size: 14px; line-height: 1; letter-spacing: 1px; }
+.owb-project-menu {
+  left: auto; right: 0; top: calc(100% + 2px); z-index: 70;
+  min-width: 132px; padding: 4px;
+}
+.owb-project-menu button {
+  display: flex; align-items: center; width: 100%; padding: 7px 10px;
+  border: none; border-radius: var(--owb-radius-md); background: transparent;
+  color: var(--owb-text-primary); font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.owb-project-menu button:hover { background: var(--owb-bg-hover); }
+.owb-project-menu .owb-menu__danger { color: var(--owb-red-7); }
+.owb-menu-scrim {
+  position: fixed; inset: 0; z-index: 65;
+  border: none; background: transparent; cursor: default;
+}
+.owb-projects__empty { gap: 8px; }
+.owb-modal-backdrop {
+  position: fixed; inset: 0; z-index: 140;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: color-mix(in srgb, #000 34%, transparent);
+}
+.owb-modal {
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--owb-bg-elevated);
+  border: 1px solid var(--owb-border-default);
+  border-radius: var(--owb-radius-2xl);
+  box-shadow: var(--owb-shadow-popup);
+}
+.owb-project-dialog { width: min(420px, calc(100vw - 48px)); padding: 20px; }
+.owb-project-dialog h3 { margin: 0; font-size: 15px; font-weight: 620; }
+.owb-project-dialog__input {
+  width: 100%; height: 34px; padding: 0 10px;
+  border: 1px solid var(--owb-border-default); border-radius: var(--owb-radius-md);
+  background: var(--owb-bg-primary); color: var(--owb-text-primary); font-size: 13px;
+  outline: none;
+}
+.owb-project-dialog__input:focus { border-color: var(--owb-border-focus); }
+.owb-project-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.owb-project-dialog__danger { background: var(--owb-red-7); }
+.owb-project-dialog__danger:hover { background: color-mix(in srgb, var(--owb-red-7) 86%, #000); }
+.owb-template-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px;
+}
+.owb-template {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 10px 12px; border: 1px solid var(--owb-border-subtle);
+  border-radius: var(--owb-radius-lg); background: var(--owb-bg-primary);
+  color: var(--owb-text-primary); text-align: left; cursor: pointer;
+}
+.owb-template:hover { background: var(--owb-bg-hover); }
+.owb-template--on {
+  border-color: var(--owb-brand-8);
+  background: color-mix(in srgb, var(--owb-brand-8) 7%, transparent);
+}
+.owb-template__name {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  width: 100%; font-size: 12.5px; font-weight: 600;
+}
+.owb-template__name svg { color: var(--owb-brand-8); }
+.owb-template__desc { font-size: 11px; color: var(--owb-text-tertiary); line-height: 1.45; }
 
 /* ---- 第三方服务连接 ---- */
 .owb-connection-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
