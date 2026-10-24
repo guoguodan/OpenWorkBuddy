@@ -13,7 +13,7 @@ import {
   type ToolExecutionOptions
 } from 'ai'
 import { z } from 'zod'
-import { listRemoteModels, modelFor, resolveModelName } from './model.js'
+import { listRemoteModels, modelFor, modelForEffort, resolveModelName } from './model.js'
 import { probeServiceEndpoint } from './service-probe.js'
 import { budgetExceededMessage, evaluateTokenBudget } from './budget.js'
 import {
@@ -2169,8 +2169,10 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
   const fallbackModel = configuredFallback ? resolveModelName(configuredFallback) : null
   // 备用模型与主模型相同等于没有备用,不占用一次模型轮次。
   const effectiveFallback = fallbackModel && fallbackModel !== selectedModel ? fallbackModel : null
+  // 档位在本轮开始时锁定,与模型选择一致:中途改设置不影响已发出的请求。
+  const reasoningEffort = workspaceSettings.reasoningEffort
   let usedModel = selectedModel
-  let activeModel = modelFor(usedModel)
+  let activeModel = modelForEffort(usedModel, reasoningEffort)
   let fallbackUsed = false
 
   // 从这里开始才是可取消的模型运行。准备阶段(记忆、提示词)很快,
@@ -2251,7 +2253,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
       stepRequest: for (let round = 0; round < modelRounds; round++) {
         if (round === 1) {
           usedModel = effectiveFallback!
-          activeModel = modelFor(usedModel)
+          activeModel = modelForEffort(usedModel, reasoningEffort)
         }
         for (let attempt = 0; attempt < STREAM_MAX_ATTEMPTS; attempt++) {
           let producedOutput = false
@@ -2321,7 +2323,7 @@ async function runAgentInner(input: RunInput): Promise<'done' | 'failed' | 'inte
               })
               if (!fallbackDecision.fallback) throw err
               usedModel = effectiveFallback!
-              activeModel = modelFor(usedModel)
+              activeModel = modelForEffort(usedModel, reasoningEffort)
               fallbackUsed = true
               emit({
                 type: 'model.fallback',
@@ -2671,6 +2673,7 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
       key !== 'taskTarget' &&
       key !== 'model' &&
       key !== 'fallbackModel' &&
+      key !== 'reasoningEffort' &&
       key !== 'tokenBudget'
     ) {
       throw new Error('未知设置项')
@@ -2683,6 +2686,15 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     }
     if ((key === 'model' || key === 'fallbackModel') && typeof msg.value === 'string' && msg.value.includes('\n')) {
       throw new Error(`${key} 不能包含换行`)
+    }
+    if (
+      key === 'reasoningEffort' &&
+      msg.value !== null &&
+      msg.value !== 'low' &&
+      msg.value !== 'medium' &&
+      msg.value !== 'high'
+    ) {
+      throw new Error('reasoningEffort 必须是 low / medium / high 或 null')
     }
     if (key === 'tokenBudget') {
       if (msg.value !== null && typeof msg.value !== 'number') {

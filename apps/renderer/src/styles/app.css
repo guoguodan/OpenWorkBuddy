@@ -1755,6 +1755,14 @@ input, textarea { font-family: inherit; }
 .owb-composer__model:hover { border-color: var(--owb-border-default); color: var(--owb-text-secondary); }
 .owb-composer__model[aria-expanded='true'] { border-color: var(--owb-border-focus); color: var(--owb-text-primary); }
   .owb-composer__model[aria-disabled='true'] { cursor: default; opacity: 0.7; }
+.owb-composer__effort {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 28px; padding: 0 10px; font-size: 12px; color: var(--owb-text-tertiary);
+  border: 1px solid var(--owb-border-subtle); border-radius: var(--owb-radius-full);
+  background: transparent; white-space: nowrap; cursor: pointer;
+}
+.owb-composer__effort:hover { border-color: var(--owb-border-default); color: var(--owb-text-secondary); }
+.owb-composer__effort[aria-expanded='true'] { border-color: var(--owb-border-focus); color: var(--owb-text-primary); }
 .owb-composer__menu--model { left: auto; right: 0; bottom: calc(100% + 8px); width: 280px; }
 .owb-composer__menu-title {
   padding: 6px 10px 8px; font-size: 12px; font-weight: 500; color: var(--owb-text-secondary);

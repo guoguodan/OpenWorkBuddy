@@ -14,6 +14,7 @@ export const SETTING_KEYS = [
   'taskTarget',
   'model',
   'fallbackModel',
+  'reasoningEffort',
   'tokenBudget',
   'disabledSkills',
   'pinnedSkills'
@@ -22,12 +23,22 @@ export type SettingKey = (typeof SETTING_KEYS)[number]
 
 export type PermissionMode = 'default' | 'fullAccess' | 'readOnly'
 
+/**
+ * 思考强度档位。
+ *
+ * 只有用户显式选择才落库;空值表示"不干预",由模型/网关使用自身默认值。
+ * 这与真实产品的"自定义 高"一致:显示当前生效档位,但不伪造模型能力。
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+
 export interface WorkspaceSettings {
   permissionMode: PermissionMode
   taskTarget: 'local'
   model: string | null
   /** 主模型连续失败且尚未产生输出时使用的备用模型;为空表示不启用降级。 */
   fallbackModel: string | null
+  /** 本轮思考强度;null 表示不向网关显式传参。 */
+  reasoningEffort: ReasoningEffort | null
   /** 单轮 token 硬上限(输入+输出)。0 表示不限制;超限后停止继续调用模型。 */
   tokenBudget: number
   /** 已关闭自动触发的技能名;仅存显式关闭项,默认开启不落库。 */
@@ -41,6 +52,7 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   taskTarget: 'local',
   model: null,
   fallbackModel: null,
+  reasoningEffort: null,
   tokenBudget: 0,
   disabledSkills: [],
   pinnedSkills: []
@@ -77,6 +89,7 @@ export function getWorkspaceSettings(db: AppDatabase, workspaceId: string): Work
     taskTarget: 'local',
     model: map.get('model') ?? null,
     fallbackModel: map.get('fallbackModel') ?? null,
+    reasoningEffort: parseReasoningEffort(map.get('reasoningEffort')),
     tokenBudget: parseTokenBudget(map.get('tokenBudget')),
     disabledSkills: parseNameList(map.get('disabledSkills'), true),
     pinnedSkills: parseNameList(map.get('pinnedSkills'))
@@ -92,6 +105,11 @@ export function parseTokenBudget(raw: string | null | undefined): number {
   const value = Number(raw)
   if (!Number.isFinite(value) || value < 0) return 0
   return Math.trunc(value)
+}
+
+/** 手改的档位值必须收敛到受支持集合,不能让任意字符串进入请求体。 */
+export function parseReasoningEffort(raw: string | null | undefined): ReasoningEffort | null {
+  return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : null
 }
 
 export function setWorkspaceSetting(

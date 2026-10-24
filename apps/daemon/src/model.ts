@@ -98,6 +98,8 @@ export async function listRemoteModels(signal?: AbortSignal): Promise<RemoteMode
  */
 const models = new Map<string, ReturnType<typeof provider>>()
 
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+
 export function resolveModelName(selected?: string | null): string {
   const name = selected?.trim()
   return name ? name : DEFAULT_MODEL_NAME
@@ -109,6 +111,29 @@ export function modelFor(selected?: string | null) {
   if (cached) return cached
   const created = provider(name)
   models.set(name, created)
+  return created
+}
+
+/**
+ * 带思考强度的模型实例。
+ *
+ * 档位是请求级参数,不能写进 provider 的全局配置,否则同一进程里
+ * 一次切档会污染其他会话。缓存键包含档位,避免"高"的实例复用给"低"。
+ * 未指定档位时沿用 modelFor,保持与原行为一致。
+ */
+const effortModels = new Map<string, ReturnType<typeof provider>>()
+
+export function modelForEffort(
+  selected: string | null | undefined,
+  effort: ReasoningEffort | null | undefined
+) {
+  if (!effort) return modelFor(selected)
+  const name = resolveModelName(selected)
+  const key = `${name}::${effort}`
+  const cached = effortModels.get(key)
+  if (cached) return cached
+  const created = provider(name, { reasoningEffort: effort })
+  effortModels.set(key, created)
   return created
 }
 

@@ -379,6 +379,7 @@ interface Window {
           taskTarget: 'local'
           model: string | null
           fallbackModel: string | null
+          reasoningEffort: 'low' | 'medium' | 'high' | null
           tokenBudget: number
           disabledSkills: string[]
           pinnedSkills: string[]
@@ -387,12 +388,16 @@ interface Window {
         model: string
         openSkillsDir: string
       }>
-      set: (input: { key: 'permissionMode' | 'taskTarget' | 'model' | 'fallbackModel' | 'tokenBudget'; value: string | number | null }) => Promise<{
+      set: (input: {
+        key: 'permissionMode' | 'taskTarget' | 'model' | 'fallbackModel' | 'reasoningEffort' | 'tokenBudget'
+        value: string | number | null
+      }) => Promise<{
         settings: {
           permissionMode: 'default' | 'fullAccess' | 'readOnly'
           taskTarget: 'local'
           model: string | null
           fallbackModel: string | null
+          reasoningEffort: 'low' | 'medium' | 'high' | null
           tokenBudget: number
           disabledSkills: string[]
           pinnedSkills: string[]

@@ -3,7 +3,12 @@ import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView
 import { type ArtifactInfo } from './components/ArtifactCards'
 import { ArtifactPanel } from './components/ArtifactPanel'
 import { ArtifactPreview, type TextPreviewInfo } from './components/ArtifactPreview'
-import { Composer, type ComposerAttachment, type PermissionMode } from './components/Composer'
+import {
+  Composer,
+  type ComposerAttachment,
+  type PermissionMode,
+  type ReasoningEffort
+} from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
 import { SkillsHubPanel, type HubSkill } from './components/SkillsHubPanel'
 import { MemoryPanel, type MemoryItem } from './components/MemoryPanel'
@@ -254,6 +259,7 @@ export default function App() {
     taskTarget: 'local',
     model: null,
     fallbackModel: null,
+    reasoningEffort: null,
     tokenBudget: 0
   })
   const [modelLabel, setModelLabel] = useState('')
@@ -1285,6 +1291,21 @@ export default function App() {
     }
   }
 
+  /**
+   * 思考强度是持久化偏好,而不是会话内临时状态:用户调过一次后,
+   * 下次打开应用应仍是同一档位,否则每轮都要重设。
+   */
+  const changeReasoningEffort = async (effort: ReasoningEffort | null) => {
+    try {
+      const r = await window.openwb.settings.set({ key: 'reasoningEffort', value: effort })
+      setSettings(r.settings)
+      const label = effort === 'low' ? '低' : effort === 'medium' ? '中' : effort === 'high' ? '高' : '自动'
+      note('info', `思考强度已设为:${label}`)
+    } catch (err) {
+      note('system', `保存思考强度失败: ${(err as Error).message}`)
+    }
+  }
+
   const changeTokenBudget = async (value: number) => {
     try {
       const r = await window.openwb.settings.set({ key: 'tokenBudget', value })
@@ -1358,6 +1379,7 @@ export default function App() {
       workspacePath={workspacePath}
       permission={settings.permissionMode}
       modelLabel={modelLabel}
+      reasoningEffort={settings.reasoningEffort}
       modelLoading={!settingsLoaded}
       modelOptions={modelOptions}
       modelsLoading={modelsLoading}
@@ -1372,6 +1394,7 @@ export default function App() {
       onPickSkill={setSelectedSkill}
       onPickPermission={(next) => void changePermission(next)}
       onPickModel={(next) => void changeModel(next)}
+      onPickReasoningEffort={(next) => void changeReasoningEffort(next)}
       onOpenWorkspace={() => void openWorkspace()}
       onListFiles={async () => {
         const r = await window.openwb.workspace.files({ limit: 400, maxDepth: 4 })
