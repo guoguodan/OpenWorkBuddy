@@ -5,7 +5,7 @@ import path from 'node:path'
 import { FrameDecoder, assertHello, encodeFrame, PROTOCOL_VERSION } from '@openwb/protocol'
 import { openExternal, openHtmlPreview, openImagePreview, openWithSystem, resolvePreview, type PreviewTarget } from './preview.js'
 import { readTextPreview } from './preview-policy.js'
-import { listWorkspaceFiles } from './workspace-files.js'
+import { listWorkspaceFiles, resolveWorkspaceEntry } from './workspace-files.js'
 import {
   ATTACHMENT_ACCEPT,
   importAttachmentData,
@@ -132,6 +132,21 @@ ipcMain.handle('workspace.files', async (_e, input?: { limit?: number; maxDepth?
     ...(maxDepth !== undefined ? { maxDepth } : {})
   })
   return { workspace: target, files }
+})
+
+/**
+ * 在资源管理器中定位工作区文件/文件夹。
+ *
+ * 只做定位,不启动文件本身,所以即使用户引用了一个可执行文件也不会被运行;
+ * 目标必须通过工作区边界与符号链接校验。
+ */
+ipcMain.handle('workspace.reveal', async (_e, input: { path?: unknown }) => {
+  await daemonReady
+  if (!input || typeof input.path !== 'string' || !input.path) throw new Error('非法路径')
+  const target = resolvedWorkspace ?? resolveWorkspace()
+  const entry = await resolveWorkspaceEntry(target, input.path)
+  shell.showItemInFolder(entry.absolutePath)
+  return { path: entry.relativePath, kind: entry.kind }
 })
 
 ipcMain.handle('modes.list', async () => {
@@ -712,7 +727,13 @@ ipcMain.handle(
       expertId?: string
       scene?: string
       contextPaths?: string[]
-      attachments?: Array<{ path: string; name: string; size?: number; kind?: string }>
+        attachments?: Array<{
+          path: string
+          name: string
+          size?: number
+          kind?: string
+          source?: string
+        }>
     }
   ) => {
   await daemonReady
@@ -749,9 +770,17 @@ ipcMain.handle(
       if (!item || typeof item !== 'object') throw new Error('非法附件')
       if (typeof item.path !== 'string' || !item.path) throw new Error('非法附件路径')
       if (typeof item.name !== 'string' || !item.name) throw new Error('非法附件名称')
-      if (item.kind !== undefined && item.kind !== 'file' && item.kind !== 'image') {
+        if (
+          item.kind !== undefined &&
+          item.kind !== 'file' &&
+          item.kind !== 'image' &&
+          item.kind !== 'folder'
+        ) {
         throw new Error('非法附件类型')
       }
+        if (item.source !== undefined && item.source !== 'upload' && item.source !== 'workspace') {
+          throw new Error('非法附件来源')
+        }
     }
   }
   // client_request_id 由渲染进程生成,主进程原样透传以支持幂等重发

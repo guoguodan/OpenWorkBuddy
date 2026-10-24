@@ -155,6 +155,26 @@
 - 地址只保存 `protocol//host`,查询串、令牌、账号密码不会落库;含内嵌凭据的地址直接判为「连接地址无效」;
 - 失败时卡片显示「连接异常」和具体原因,按钮仍可重新提交或断开。
 
+### 4.3.1 输入框附件与工作区引用
+
+输入框支持三种进入方式,共享同一个 50 项上限:
+
+| 方式 | 数据形态 | 发送后的存储 |
+|---|---|---|
+| `+` 选择或拖拽 | `source: 'upload'` | 复制到 `.openwb/attachments/` |
+| `@` 选择文件 | `source: 'workspace'` | 原地引用,不复制 |
+| `@` 选择文件夹 | `kind: 'folder'` | 原地引用,发送时有界展开 |
+
+约束:
+
+- 单文件 20MB,图片总计 30MB;文本按单文件 64KB、单轮 256KB 预算注入,超出部分只给清单与路径。
+- 工作区引用必须是相对路径;绝对路径、盘符、`..`、NUL 与 `.openwb` 内部目录一律拒绝。
+- 文件夹展开限制深度 4 层、最多 200 个文件,跳过 `.git`、`.openwb`、`node_modules`、`dist`、`out`、`build`、`coverage`、`target`、`vendor`、`release*` 与隐藏文件。
+- 符号链接不跟随;文件被删除或越界时以 `attachment.rejected` 回到界面,不静默吞掉。
+- 文件夹 chip 点击只调用 `workspace.reveal` 定位到资源管理器,不会执行文件内容。
+
+验收:`node tests/e2e/verify-composer-attachments.mjs`(39 项);边界与展开规则由 `apps/daemon/test/attachments.test.ts`、`apps/desktop/test/workspace-files.test.ts` 覆盖。
+
 ### 4.4 消息
 
 - 用户消息:右对齐,浅灰气泡,`16px 16px 0 16px` 圆角

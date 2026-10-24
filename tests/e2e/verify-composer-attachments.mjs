@@ -14,7 +14,7 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -113,6 +113,12 @@ async function waitFor(evaluate, expression, timeoutMs = 20000) {
 const workdir = await mkdtemp(join(tmpdir(), 'owb-attach-ws-'))
 const dataDir = await mkdtemp(join(tmpdir(), 'owb-attach-data-'))
 await writeFile(join(workdir, 'package.json'), '{"name":"attachment-ws"}\n', 'utf8')
+await mkdir(join(workdir, 'docs', 'sub'), { recursive: true })
+await mkdir(join(workdir, 'node_modules', 'pkg'), { recursive: true })
+await writeFile(join(workdir, 'docs', 'notes.md'), '# 工作区笔记\n文件夹引用正文\n', 'utf8')
+await writeFile(join(workdir, 'docs', 'sub', 'extra.txt'), '额外内容\n', 'utf8')
+await writeFile(join(workdir, 'node_modules', 'pkg', 'index.js'), 'SKIP-ME\n', 'utf8')
+await writeFile(join(workdir, '.env'), 'SECRET=1\n', 'utf8')
 
 const app = spawn(electron, [resolve(root, 'apps/desktop'), `--remote-debugging-port=${port}`], {
   cwd: workdir,
@@ -144,6 +150,60 @@ try {
     await evaluate(`Boolean(document.querySelector('[data-testid="attachment-picker-trigger"]'))`),
     '输入框提供添加文件入口'
   )
+
+  // @ 菜单不仅要能选文件,也要能整体引用文件夹。
+  const typeAt = (value) => `(() => {
+    const input = document.querySelector('textarea[data-testid="composer-input"]')
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+    setter.call(input, ${JSON.stringify(value)})
+    input.focus()
+    input.setSelectionRange(input.value.length, input.value.length)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  })()`
+
+  await evaluate(typeAt('@docs'))
+  check(
+    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="composer-picker"]'))`),
+    '@ 打开工作区选择器'
+  )
+  check(
+    await evaluate(
+      `document.querySelector('[data-testid="composer-picker"]')?.textContent?.includes('选择文件和文件夹')`
+    ),
+    '@ 选择器标题与真实产品一致'
+  )
+  check(
+    await waitFor(
+      evaluate,
+      `Boolean(document.querySelector('[data-testid="picker-file"][data-kind="folder"]'))`
+    ),
+    '选择器列出工作区文件夹'
+  )
+  await evaluate(
+    `document.querySelector('[data-testid="picker-file"][data-kind="folder"]')?.click()`
+  )
+  check(
+    await waitFor(
+      evaluate,
+      `document.querySelector('[data-testid="attachment-chip"][data-kind="folder"]')?.textContent?.includes('docs')`
+    ),
+    '选择文件夹后出现文件夹 chip'
+  )
+  check(
+    await evaluate(
+      `!document.querySelector('[data-testid="picker-file"][data-kind="folder"]') && !document.querySelector('[data-testid="attachment-chip"]')?.textContent?.includes('.env')`
+    ),
+    '选择后收起菜单且不暴露隐藏文件'
+  )
+  await evaluate(
+    `document.querySelector('[data-testid="attachment-chip"]')?.querySelector('button')?.click()`
+  )
+  check(
+    await waitFor(evaluate, `document.querySelectorAll('[data-testid="attachment-chip"]').length === 0`),
+    '文件夹引用可以移除'
+  )
+  await evaluate(typeAt(''))
 
   const drag = (type) => `(() => {
     window.__owbDt = window.__owbDt || (() => {
@@ -296,6 +356,47 @@ try {
       12000
     ),
     '附件已丢失时提示无法打开'
+  )
+
+  // 文件夹引用走完整链路:发送 -> 有界展开注入 -> 消息 chip -> 刷新恢复。
+  await evaluate(typeAt('@docs'))
+  await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="picker-file"][data-kind="folder"]'))`)
+  await evaluate(
+    `document.querySelector('[data-testid="picker-file"][data-kind="folder"]')?.click()`
+  )
+  check(
+    await waitFor(evaluate, `Boolean(document.querySelector('[data-testid="attachment-chip"][data-kind="folder"]'))`),
+    '重新选择文件夹用于发送'
+  )
+  await evaluate(typeAt('请总结这个文件夹'))
+  await evaluate(`document.querySelector('button[aria-label="发送"]')?.click()`)
+  check(
+    await waitFor(
+      evaluate,
+      `Array.from(document.querySelectorAll('.owb-status')).some((el) => el.textContent?.includes('已读取 2 个附件'))`,
+      25000
+    ),
+    '文件夹被有界展开并注入附件'
+  )
+  const folderNotice = await evaluate(
+    `Array.from(document.querySelectorAll('.owb-status')).map((el) => el.textContent).join('\\n')`
+  )
+  check(!folderNotice.includes('SKIP-ME'), '依赖目录不会进入上下文', folderNotice.slice(0, 200))
+  check(
+    await evaluate(
+      `document.querySelectorAll('[data-testid="message-attachment"][data-kind="folder"]').length === 1`
+    ),
+    '发送后消息保留文件夹 chip'
+  )
+
+  await send('Page.reload', {}, 15000).catch(() => undefined)
+  check(
+    await waitFor(
+      evaluate,
+      `document.querySelectorAll('[data-testid="message-attachment"][data-kind="folder"]').length === 1`,
+      25000
+    ),
+    '刷新后文件夹引用仍以文件夹形式恢复'
   )
 } finally {
   try {

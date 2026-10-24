@@ -185,6 +185,7 @@ function attachmentListFromContent(content: unknown): ComposerAttachment[] {
     const name = (item as { name?: unknown }).name
     const size = (item as { size?: unknown }).size
     const kind = (item as { kind?: unknown }).kind
+    const source = (item as { source?: unknown }).source
     if (typeof path !== 'string' || !path || typeof name !== 'string' || !name) continue
     if (seen.has(path)) continue
     seen.add(path)
@@ -192,7 +193,8 @@ function attachmentListFromContent(content: unknown): ComposerAttachment[] {
       path,
       name,
       size: typeof size === 'number' && Number.isFinite(size) && size >= 0 ? size : 0,
-      kind: kind === 'image' ? 'image' : 'file'
+      kind: kind === 'image' ? 'image' : kind === 'folder' ? 'folder' : 'file',
+      source: source === 'upload' ? 'upload' : 'workspace'
     })
   }
   return out
@@ -664,7 +666,13 @@ export default function App() {
    */
   const addImportedAttachments = useCallback(
     (result: {
-      attachments: Array<{ path: string; name: string; size: number; kind: 'file' | 'image' }>
+      attachments: Array<{
+        path: string
+        name: string
+        size: number
+        kind: 'file' | 'image'
+        source?: 'upload' | 'workspace'
+      }>
       rejected: Array<{ name: string; reason: string }>
       canceled?: boolean
     }) => {
@@ -674,7 +682,7 @@ export default function App() {
         for (const file of result.attachments) {
           if (next.some((item) => item.path === file.path)) continue
           if (next.length >= MAX_COMPOSER_ATTACHMENTS) break
-          next.push(file)
+          next.push({ ...file, source: file.source ?? 'upload' })
         }
         return next
       })
@@ -748,11 +756,12 @@ export default function App() {
         scene,
         ...(sentAttachments.length > 0
           ? {
-              attachments: sentAttachments.map(({ path, name, size, kind }) => ({
+              attachments: sentAttachments.map(({ path, name, size, kind, source }) => ({
                 path,
                 name,
                 size,
-                kind: kind ?? 'file'
+                kind: kind ?? 'file',
+                source: source ?? 'upload'
               }))
             }
           : {}),
@@ -1116,9 +1125,18 @@ export default function App() {
    * 附件已经是工作区内的副本,预览仍复用 artifact.read 的工作区边界与 2MB 上限;
    * 图片单独走受控图片窗口,其余不支持内嵌预览的格式明确回退到系统程序。
    */
-  const openAttachment = async (attachment: { name: string; path: string; kind?: 'file' | 'image' }) => {
+  const openAttachment = async (attachment: {
+    name: string
+    path: string
+    kind?: 'file' | 'image' | 'folder'
+  }) => {
     if (!attachment.path) return
     try {
+      // 文件夹是原地引用:定位到资源管理器即可,绝不把目录当成文件去读。
+      if (attachment.kind === 'folder') {
+        await window.openwb.workspace.reveal({ path: attachment.path })
+        return
+      }
       if (attachment.kind === 'image') {
         await window.openwb.artifact.preview({
           kind: 'image',
@@ -1363,7 +1381,7 @@ export default function App() {
         setAttachments((list) =>
           list.some((a) => a.path === file.path) || list.length >= MAX_COMPOSER_ATTACHMENTS
             ? list
-            : [...list, file]
+            : [...list, { ...file, source: 'workspace' as const }]
         )
       }
       onAddAttachments={(files) =>
@@ -1372,7 +1390,7 @@ export default function App() {
           for (const file of files) {
             if (next.some((item) => item.path === file.path)) continue
             if (next.length >= MAX_COMPOSER_ATTACHMENTS) break
-            next.push(file)
+            next.push({ ...file, source: 'workspace' as const })
           }
           return next
         })

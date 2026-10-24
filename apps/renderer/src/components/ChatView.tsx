@@ -7,6 +7,7 @@ import {
   IconRefresh,
   IconClock,
   IconFile,
+  IconFolder,
   IconImage,
   IconThumbDown,
   IconThumbUp,
@@ -32,7 +33,13 @@ export interface ChatMessage {
   feedback?: 'like' | 'dislike' | null
   feedbackReason?: string | null
   /** 用户本轮添加的附件。只展示原始文件名,内部存储路径不进入气泡。 */
-  attachments?: Array<{ name: string; path: string; size?: number; kind?: 'file' | 'image' }>
+  attachments?: Array<{
+    name: string
+    path: string
+    size?: number
+    kind?: 'file' | 'image' | 'folder'
+    source?: 'upload' | 'workspace'
+  }>
 }
 
 interface ChatViewProps {
@@ -45,7 +52,11 @@ interface ChatViewProps {
   focusRequest?: { seq: number; nonce: number } | null
   onOpenArtifact: (artifact: ArtifactInfo) => void
   /** 打开用户消息里的附件;路径已由主进程限定在工作区。 */
-  onOpenAttachment?: (attachment: { name: string; path: string; kind?: 'file' | 'image' }) => void
+  onOpenAttachment?: (attachment: {
+    name: string
+    path: string
+    kind?: 'file' | 'image' | 'folder'
+  }) => void
   onShareArtifact?: ((artifact: ArtifactInfo) => void) | undefined
   shareChannelName?: string | null | undefined
   onFeedback?: (message: ChatMessage, feedback: 'like' | 'dislike' | null, reason?: string) => Promise<void>
@@ -451,7 +462,13 @@ export function ChatView({
                               onClick={() => onOpenAttachment?.(file)}
                               data-testid="message-attachment"
                             >
-                              {file.kind === 'image' ? <IconImage size={13} /> : <IconFile size={13} />}
+                              {file.kind === 'image' ? (
+                                <IconImage size={13} />
+                              ) : file.kind === 'folder' ? (
+                                <IconFolder size={13} />
+                              ) : (
+                                <IconFile size={13} />
+                              )}
                               <span className="owb-msg__attachment-name">{file.name}</span>
                             </button>
                           ))}

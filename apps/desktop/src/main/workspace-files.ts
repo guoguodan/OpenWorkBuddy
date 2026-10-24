@@ -1,10 +1,11 @@
-import { readdir, stat } from 'node:fs/promises'
+import { lstat, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 export interface WorkspaceFileEntry {
   path: string
   name: string
   size: number
+  kind: 'file' | 'folder'
 }
 
 export interface ListWorkspaceFilesOptions {
@@ -28,6 +29,47 @@ const SKIPPED_DIRS = new Set([
   'release-old-p8-3d'
 ])
 
+export interface ResolvedWorkspaceEntry {
+  absolutePath: string
+  relativePath: string
+  kind: 'file' | 'folder'
+}
+
+/**
+ * 校验一个用户给出的工作区相对路径,并说明它是文件还是文件夹。
+ *
+ * 定位/预览入口必须走这里:只接受相对路径,拒绝上跳、绝对路径与符号链接,
+ * 并且用 lstat 复核真实类型,避免渲染进程伪造 kind 打开任意位置。
+ */
+export async function resolveWorkspaceEntry(
+  root: string,
+  value: string
+): Promise<ResolvedWorkspaceEntry> {
+  if (typeof value !== 'string' || value.length === 0) throw new Error('路径不能为空')
+  if (value.includes('\0')) throw new Error('路径含非法字符')
+  if (path.isAbsolute(value) || path.win32.isAbsolute(value)) throw new Error('只接受工作区相对路径')
+  const rel = value.replace(/\\/g, '/').replace(/^\.\//, '')
+  const segments = rel.split('/')
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new Error('路径越界')
+  }
+  if (rel === '.openwb' || rel.startsWith('.openwb/')) throw new Error('不能引用内部目录')
+
+  const workspace = path.resolve(root)
+  const absolutePath = path.resolve(workspace, rel)
+  if (absolutePath !== workspace && !absolutePath.startsWith(workspace + path.sep)) {
+    throw new Error('路径越界')
+  }
+  const info = await lstat(absolutePath)
+  if (info.isSymbolicLink()) throw new Error('不支持符号链接')
+  if (!info.isFile() && !info.isDirectory()) throw new Error('不是普通文件或文件夹')
+  return {
+    absolutePath,
+    relativePath: path.relative(workspace, absolutePath).split(path.sep).join('/'),
+    kind: info.isDirectory() ? 'folder' : 'file'
+  }
+}
+
 /**
  * 给 @ 选择器提供工作区内的文件清单。
  *
@@ -43,6 +85,15 @@ export async function listWorkspaceFiles(
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_LIMIT, 2000))
   const maxDepth = Math.max(0, Math.min(options.maxDepth ?? DEFAULT_MAX_DEPTH, 8))
   const files: WorkspaceFileEntry[] = []
+
+  const pushFolder = (abs: string): void => {
+    files.push({
+      path: path.relative(workspace, abs).split(path.sep).join('/'),
+      name: path.basename(abs),
+      size: 0,
+      kind: 'folder'
+    })
+  }
 
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (files.length >= limit) return
@@ -61,8 +112,10 @@ export async function listWorkspaceFiles(
       if (entry.isSymbolicLink()) continue
       const abs = path.join(dir, entry.name)
       if (entry.isDirectory()) {
-        if (depth >= maxDepth) continue
         if (SKIPPED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue
+        // 文件夹本身始终可选:即使它太深、不再继续展开,用户仍可整体引用。
+        pushFolder(abs)
+        if (depth >= maxDepth) continue
         await walk(abs, depth + 1)
         continue
       }
@@ -77,7 +130,8 @@ export async function listWorkspaceFiles(
       files.push({
         path: path.relative(workspace, abs).split(path.sep).join('/'),
         name: entry.name,
-        size
+        size,
+        kind: 'file'
       })
     }
   }

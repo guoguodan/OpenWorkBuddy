@@ -25,7 +25,8 @@ export interface ComposerAttachment {
   path: string
   name: string
   size: number
-  kind?: 'file' | 'image'
+  kind?: 'file' | 'image' | 'folder'
+  source?: 'upload' | 'workspace'
 }
 
 interface ComposerProps {
@@ -392,16 +393,16 @@ export function Composer({
           <div className="owb-composer__drop-card">
             <IconPlus size={24} />
             <strong>松开即可添加文件</strong>
-            <span>支持文档、代码与图片，最多 {MAX_ATTACHMENTS} 个</span>
+            <span>最多支持上传 {MAX_ATTACHMENTS} 个文件，支持常见文件类型</span>
           </div>
         </div>
       ) : null}
       <div className="owb-composer__box">
         {menu === 'file' ? (
-          <div className="owb-composer__picker" role="listbox" aria-label="添加上下文" data-testid="composer-picker">
+          <div className="owb-composer__picker" role="listbox" aria-label="添加文件作为回答背景" data-testid="composer-picker">
             <div className="owb-composer__picker-head">
               <IconFolder size={14} />
-              <span>从工作区添加</span>
+              <span>选择文件和文件夹</span>
               <span className="owb-composer__picker-hint">@ 继续输入可筛选</span>
             </div>
             {filesLoading ? (
@@ -411,8 +412,8 @@ export function Composer({
                 {files.some((f) => attachments.some((a) => a.path === f.path))
                   ? '工作区文件都已添加'
                   : filesLoaded
-                    ? '没有匹配的文件'
-                    : '工作区里还没有文件'}
+                    ? '无搜索结果'
+                    : '当前对话中暂无文件'}
               </div>
             ) : (
               filteredFiles.map((file, index) => (
@@ -422,17 +423,22 @@ export function Composer({
                   role="option"
                   aria-selected={index === activeIndex}
                   data-testid="picker-file"
+                  data-kind={file.kind ?? 'file'}
                   className={`owb-composer__menu-item owb-composer__picker-item${index === activeIndex ? ' owb-composer__picker-item--active' : ''}`}
                   title={file.path}
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => chooseFile(file)}
                 >
                   <span className="owb-composer__picker-name">
-                    <IconFile size={14} />
+                    {file.kind === 'folder' ? <IconFolder size={14} /> : <IconFile size={14} />}
                     {file.name}
                   </span>
                   <span className="owb-composer__picker-path">
-                    {file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : formatSize(file.size)}
+                    {file.kind === 'folder'
+                      ? '文件夹'
+                      : file.path.includes('/')
+                        ? file.path.slice(0, file.path.lastIndexOf('/'))
+                        : formatSize(file.size)}
                   </span>
                 </button>
               ))
@@ -479,7 +485,13 @@ export function Composer({
             <div className="owb-composer__attachments" aria-label="已添加上下文">
               {attachments.map((file) => (
                 <span key={file.path} className="owb-composer__attachment" data-testid="attachment-chip" data-kind={file.kind ?? 'file'} title={file.name}>
-                  {file.kind === 'image' ? <IconImage size={13} /> : <IconFile size={13} />}
+                  {file.kind === 'image' ? (
+                    <IconImage size={13} />
+                  ) : file.kind === 'folder' ? (
+                    <IconFolder size={13} />
+                  ) : (
+                    <IconFile size={13} />
+                  )}
                   <span className="owb-composer__attachment-name">{file.name}</span>
                   <button
                     type="button"
@@ -546,7 +558,7 @@ export function Composer({
             ) : null}
             {attachments.length > 0 ? (
               <span className="owb-composer__hint" data-testid="attachment-count">
-                已添加 {attachments.length} 个文件
+                已添加 {attachments.length} 项
               </span>
             ) : null}
           </div>

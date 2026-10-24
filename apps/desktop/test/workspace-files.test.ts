@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { listWorkspaceFiles } from '../src/main/workspace-files.js'
+import { listWorkspaceFiles, resolveWorkspaceEntry } from '../src/main/workspace-files.js'
 
 let root = ''
 
@@ -52,5 +52,39 @@ describe('listWorkspaceFiles', () => {
   it('纳秒级限制参数不会失控', async () => {
     const files = await listWorkspaceFiles(root, { limit: 999_999, maxDepth: 999 })
     expect(files.length).toBeLessThanOrEqual(2000)
+  })
+
+  it('文件夹本身也出现在清单里,供整体引用', async () => {
+    const files = await listWorkspaceFiles(root)
+    const docs = files.find((f) => f.path === 'docs')
+    expect(docs?.kind).toBe('folder')
+    expect(files.find((f) => f.path === 'readme.md')?.kind).toBe('file')
+    // 依赖与隐藏目录仍然不可选
+    expect(files.some((f) => f.path === 'node_modules')).toBe(false)
+    expect(files.some((f) => f.path === '.git')).toBe(false)
+  })
+})
+
+describe('resolveWorkspaceEntry', () => {
+  it('区分文件与文件夹并返回绝对路径', async () => {
+    const folder = await resolveWorkspaceEntry(root, 'docs')
+    expect(folder.kind).toBe('folder')
+    expect(folder.relativePath).toBe('docs')
+    const file = await resolveWorkspaceEntry(root, 'docs/notes.txt')
+    expect(file.kind).toBe('file')
+    expect(file.absolutePath).toBe(join(root, 'docs', 'notes.txt'))
+  })
+
+  it('拒绝绝对路径、上跳与内部目录', async () => {
+    await expect(resolveWorkspaceEntry(root, '../outside')).rejects.toThrow()
+    await expect(resolveWorkspaceEntry(root, 'docs/../../outside')).rejects.toThrow()
+    await expect(resolveWorkspaceEntry(root, join(root, 'readme.md'))).rejects.toThrow()
+    await expect(resolveWorkspaceEntry(root, '.openwb/attachments/a.txt')).rejects.toThrow()
+  })
+
+  it('拒绝符号链接目标', async () => {
+    await symlink(join(root, 'docs'), join(root, 'link-dir')).catch(() => undefined)
+    const linked = await resolveWorkspaceEntry(root, 'link-dir').catch((err: Error) => err)
+    expect(linked instanceof Error).toBe(true)
   })
 })
