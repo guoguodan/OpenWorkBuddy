@@ -169,6 +169,41 @@ ipcMain.handle('artifact.preview', async (_e, input: PreviewTarget & { confirmed
   return resolved
 })
 
+ipcMain.handle('artifact.rename', async (_e, input: { artifactId?: unknown; title?: unknown }) => {
+  await daemonReady
+  if (!input || typeof input.artifactId !== 'string' || !input.artifactId) throw new Error('缺少 artifactId')
+  if (typeof input.title !== 'string' || !input.title.trim()) throw new Error('标题不能为空')
+  return request<{ artifact: unknown }>({
+    cmd: 'artifact.rename',
+    artifactId: input.artifactId,
+    title: input.title.trim()
+  })
+})
+
+ipcMain.handle('artifact.remove', async (_e, input: { artifactId?: unknown }) => {
+  await daemonReady
+  if (!input || typeof input.artifactId !== 'string' || !input.artifactId) throw new Error('缺少 artifactId')
+  return request<{ artifactId: string }>({ cmd: 'artifact.remove', artifactId: input.artifactId })
+})
+
+/**
+ * 在文件管理器中定位交付物。
+ *
+ * 只接受工作区内的真实文件:路径解析、越界与存在性校验都复用预览策略,
+ * 避免界面上传一个任意系统路径就能让主进程打开资源管理器。
+ */
+ipcMain.handle('artifact.reveal', async (_e, input: { kind?: unknown; path?: unknown }) => {
+  await daemonReady
+  if (!input || input.kind === 'url' || typeof input.path !== 'string' || !input.path) {
+    throw new Error('只有工作区内的文件可以定位')
+  }
+  const workspace = resolvedWorkspace ?? resolveWorkspace()
+  const resolved = await resolvePreview(workspace, { kind: input.kind as PreviewTarget['kind'], path: input.path })
+  const target = resolved.absolutePath
+  if (!target) throw new Error('无法解析交付物路径')
+  shell.showItemInFolder(target)
+  return { path: target }
+})
 ipcMain.handle('conversation.new', async (_e, input?: { title?: string; mode?: string; channelId?: string; colleagueId?: string; projectId?: string; expertId?: string }) => {
   await daemonReady
   return request<{ conversationId: string }>({

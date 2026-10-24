@@ -479,6 +479,9 @@ interface Window {
         shared: boolean
         artifacts: ArtifactInfoLike[]
       }>
+      rename: (input: { artifactId: string; title: string }) => Promise<{ artifact: ArtifactInfoLike }>
+      remove: (input: { artifactId: string }) => Promise<{ artifactId: string }>
+      reveal: (input: { kind: 'file' | 'html' | 'image'; path: string }) => Promise<{ path: string }>
     }
     channel: {
       list: () => Promise<{ channels: ChannelInfo[] }>

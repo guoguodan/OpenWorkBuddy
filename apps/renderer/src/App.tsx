@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatView, type ChatMessage, type ToolCall } from './components/ChatView'
 import { type ArtifactInfo } from './components/ArtifactCards'
+import { ArtifactPanel } from './components/ArtifactPanel'
 import { Composer, type ComposerAttachment, type PermissionMode } from './components/Composer'
 import { ContentHeader } from './components/ContentHeader'
 import { SkillsHubPanel, type HubSkill } from './components/SkillsHubPanel'
@@ -169,6 +170,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [tools, setTools] = useState<ToolCall[]>([])
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([])
+  const [showArtifacts, setShowArtifacts] = useState(false)
   const [notices, setNotices] = useState<SystemLine[]>([])
   const [modes, setModes] = useState<ModeInfo[]>([])
   const [mode, setMode] = useState('craft')
@@ -977,6 +979,41 @@ export default function App() {
     }
   }
 
+  /**
+   * 交付物记录操作。
+   *
+   * 重命名只改展示标题;移除只删除记录。两者都不触碰磁盘文件,
+   * 所以不需要走审批,但仍以 daemon 的数据库结果为准更新本地列表。
+   */
+  const renameArtifact = async (artifact: ArtifactInfo, title: string) => {
+    try {
+      const r = await window.openwb.artifact.rename({ artifactId: artifact.id, title })
+      setArtifacts((list) => list.map((item) => (item.id === artifact.id ? { ...item, title: r.artifact.title } : item)))
+      note('info', `已重命名为「${r.artifact.title}」`)
+    } catch (err) {
+      note('system', `重命名交付物失败: ${(err as Error).message}`)
+    }
+  }
+
+  const removeArtifact = async (artifact: ArtifactInfo) => {
+    try {
+      await window.openwb.artifact.remove({ artifactId: artifact.id })
+      setArtifacts((list) => list.filter((item) => item.id !== artifact.id))
+      note('info', `已从交付物列表移除「${artifact.title}」,工作区文件未删除`)
+    } catch (err) {
+      note('system', `移除交付物失败: ${(err as Error).message}`)
+    }
+  }
+
+  const revealArtifact = async (artifact: ArtifactInfo) => {
+    try {
+      if (!artifact.path || artifact.kind === 'url') return
+      await window.openwb.artifact.reveal({ kind: artifact.kind, path: artifact.path })
+    } catch (err) {
+      note('system', `定位交付物失败: ${(err as Error).message}`)
+    }
+  }
+
   const runSearch = async (q: string): Promise<SearchGroup[]> => {
     const r = await window.openwb.search.query(q)
     return (r.groups ?? []) as SearchGroup[]
@@ -1187,6 +1224,9 @@ export default function App() {
               workspaceLabel={workspaceLabel}
               workspacePath={workspacePath}
               busy={busy}
+              artifactCount={artifacts.length}
+              artifactPanelOpen={showArtifacts}
+              onToggleArtifacts={() => setShowArtifacts((value) => !value)}
               pinned={currentPinned}
               onPin={(pinned) => {
                 if (conversationId) void pinConversation(conversationId, pinned)
@@ -1201,6 +1241,8 @@ export default function App() {
           ) : null}
 
           <div className="owb-main__body">
+            <div className="owb-main__split">
+            <div className="owb-main__content">
             {messages.length === 0 ? (
               <WelcomeView
                 scene={scene}
@@ -1290,6 +1332,21 @@ export default function App() {
                 </div>
               </>
             )}
+          </div>
+
+            {showArtifacts ? (
+              <ArtifactPanel
+                artifacts={artifacts}
+                busy={busy}
+                onClose={() => setShowArtifacts(false)}
+                onOpen={(item) => void openArtifact(item)}
+                onRename={(item, title) => void renameArtifact(item, title)}
+                onRemove={(item) => void removeArtifact(item)}
+                onReveal={(item) => void revealArtifact(item)}
+                onNotify={note}
+              />
+            ) : null}
+            </div>
           </div>
 
           {showMemory ? (

@@ -37,6 +37,8 @@ import {
   insertArtifacts,
   countArtifactsByTask,
   listArtifactsByConversation,
+  renameArtifact,
+  removeArtifact,
   createChannel,
   deleteChannel,
   enqueuePending,
@@ -3110,6 +3112,22 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     return true
   }
 
+  if (msg.cmd === 'artifact.rename') {
+    if (typeof msg.artifactId !== 'string' || !msg.artifactId) throw new Error('缺少 artifactId')
+    if (typeof msg.title !== 'string') throw new Error('缺少标题')
+    const record = renameArtifact(db, msg.artifactId, msg.title)
+    if (!record) throw new Error('交付物不存在')
+    emit({ ...base, type: 'artifact.updated', artifact: record })
+    return true
+  }
+
+  if (msg.cmd === 'artifact.remove') {
+    if (typeof msg.artifactId !== 'string' || !msg.artifactId) throw new Error('缺少 artifactId')
+    const removed = removeArtifact(db, msg.artifactId)
+    if (!removed) throw new Error('交付物不存在')
+    emit({ ...base, type: 'artifact.removed', artifactId: msg.artifactId })
+    return true
+  }
   if (msg.cmd === 'search.query') {
     const query = typeof msg.query === 'string' ? msg.query.slice(0, 200) : ''
     if (query.trim().length === 0) {

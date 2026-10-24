@@ -60,7 +60,10 @@ contextBridge.exposeInMainWorld('openwb', {
   },
   artifact: {
     preview: (input: unknown) => ipcRenderer.invoke('artifact.preview', input),
-    share: (input: unknown) => ipcRenderer.invoke('channel.shareArtifact', input)
+    share: (input: unknown) => ipcRenderer.invoke('channel.shareArtifact', input),
+    rename: (input: unknown) => ipcRenderer.invoke('artifact.rename', input),
+    remove: (input: unknown) => ipcRenderer.invoke('artifact.remove', input),
+    reveal: (input: unknown) => ipcRenderer.invoke('artifact.reveal', input)
   },
   channel: {
     list: () => ipcRenderer.invoke('channel.list'),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconChevron, IconFolder, IconPin } from './Icons'
+import { IconChevron, IconFile, IconFolder, IconPin } from './Icons'
 
 interface ContentHeaderProps {
   title: string
@@ -7,6 +7,9 @@ interface ContentHeaderProps {
   workspaceLabel: string
   workspacePath: string
   busy: boolean
+  artifactCount: number
+  artifactPanelOpen: boolean
+  onToggleArtifacts: () => void
   pinned: boolean
   onPin: (pinned: boolean) => void
   onRename: (title: string) => void
@@ -19,6 +22,9 @@ export function ContentHeader({
   workspaceLabel,
   workspacePath,
   busy,
+  artifactCount,
+  artifactPanelOpen,
+  onToggleArtifacts,
   pinned,
   onPin,
   onRename,
@@ -88,6 +94,19 @@ export function ContentHeader({
             执行中
           </span>
         ) : null}
+        <button
+          type="button"
+          className="owb-content-header__tool"
+          title="交付物"
+          aria-label="交付物"
+          aria-pressed={artifactPanelOpen}
+          data-testid="artifact-panel-trigger"
+          onClick={onToggleArtifacts}
+        >
+          <IconFile size={16} />
+          <span>交付物</span>
+          {artifactCount > 0 ? <span className="owb-content-header__badge">{artifactCount}</span> : null}
+        </button>
         <button
           type="button"
           className="owb-content-header__menu-trigger"

@@ -128,6 +128,31 @@ export function listArtifactsByConversation(db: AppDatabase, conversationId: str
     .map(toArtifactRecord)
 }
 
+/**
+ * 重命名交付物只改展示标题,不改磁盘文件名。
+ *
+ * 交付物路径是 agent 写文件时的真实路径,一旦改动会让历史记录指错文件;
+ * 用户要的是"在我的成果列表里换个易懂的名字",这不需要也不应该动文件。
+ */
+export function renameArtifact(db: AppDatabase, id: string, title: string): ArtifactRecord | null {
+  const next = title.trim()
+  if (!next) throw new Error('标题不能为空')
+  const result = db.update(artifact).set({ title: next }).where(eq(artifact.id, id)).run()
+  if (result.changes === 0) return null
+  const row = db.select().from(artifact).where(eq(artifact.id, id)).get()
+  return row ? toArtifactRecord(row) : null
+}
+
+/**
+ * 移除交付物记录只删清单条目,不删文件。
+ *
+ * 用户点"移除"是想从成果列表里清掉,而不是希望磁盘上的报告消失;
+ * 反向删除文件属于破坏性操作,必须走审批与回收站,不能藏在列表操作里。
+ */
+export function removeArtifact(db: AppDatabase, id: string): boolean {
+  const result = db.delete(artifact).where(eq(artifact.id, id)).run()
+  return result.changes > 0
+}
 export function countArtifactsByTask(db: AppDatabase, taskId: string): number {
   const rows = db
     .select({ n: sql<number>`count(*)` })
