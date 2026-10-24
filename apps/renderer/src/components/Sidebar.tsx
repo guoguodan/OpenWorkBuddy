@@ -13,6 +13,7 @@ import {
   IconMail,
   IconPin,
   IconPlus,
+  IconSparkle,
   IconTool
 } from './Icons'
 import brandIcon from '../assets/brand-icon.svg'
@@ -99,6 +100,7 @@ interface SidebarProps {
   onOpenColleagues: () => void
   onOpenSkills: () => void
   onOpenAutomation: () => void
+  onOpenWorkflows: () => void
   onOpenLibrary: () => void
   onOpenMessages: () => void
   unreadMessages: number
@@ -187,6 +189,7 @@ export function Sidebar({
   onOpenColleagues,
   onOpenSkills,
   onOpenAutomation,
+  onOpenWorkflows,
   onOpenLibrary,
   onOpenMessages,
   unreadMessages,
@@ -606,6 +609,11 @@ export function Sidebar({
         <button className="owb-nav-item" onClick={onOpenAutomation} data-testid="open-automation">
           <IconClock size={17} />
           <span className="owb-nav-item__label">定时任务</span>
+        </button>
+        <button className="owb-nav-item" onClick={onOpenWorkflows} data-testid="open-workflows">
+          <IconSparkle size={17} />
+          <span className="owb-nav-item__label">工作流</span>
+          <span className="owb-nav-beta">BETA</span>
         </button>
         <button className="owb-nav-item" onClick={onOpenLibrary} data-testid="open-library">
           <IconBook size={17} />

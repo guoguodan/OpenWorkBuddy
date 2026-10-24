@@ -1,3 +1,4 @@
+import { readdir } from 'node:fs/promises'
 import type { AppDatabase } from '@openwb/storage'
 import {
   appendEvent,
@@ -139,6 +140,42 @@ export class WorkflowService {
       })),
       issues: result.issues
     }
+  }
+
+  /**
+   * 最近运行列表。
+   *
+   * 以磁盘 run.json 为准而不是内存表:重启后历史仍可见,且 UI 不需要读工作区文件。
+   * running 状态若不在活动表里,说明上次进程退出时没有收尾。这里不篡改 run.json,
+   * 只额外返回 active=false,由界面按“已中断”展示并允许续跑。
+   */
+  async listRuns(limit = 30): Promise<{ runs: Array<Record<string, unknown>>; active: string[] }> {
+    const store = new FileRunStore(this.deps.workspaceRoot)
+    let entries: string[] = []
+    try {
+      entries = await readdir(store.runDir, { withFileTypes: true }).then((list) =>
+        list.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+      )
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { runs: [], active: [] }
+      throw err
+    }
+    const bounded = Math.max(1, Math.min(limit, 100))
+    const records = await Promise.all(
+      entries.map(async (runId) => {
+        try {
+          const record = await store.readRun(runId)
+          return { ...record, active: this.runs.has(runId) }
+        } catch {
+          return null
+        }
+      })
+    )
+    const runs = records
+      .filter((record): record is NonNullable<typeof record> => record !== null)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, bounded)
+    return { runs, active: this.activeRuns() }
   }
 
   /**

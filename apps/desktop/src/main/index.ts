@@ -593,6 +593,50 @@ ipcMain.handle('automation.scan', async (_e, input?: { now?: string; startup?: b
   })
 })
 
+ipcMain.handle('workflow.list', async () => {
+  await daemonReady
+  return request<{ workflows: unknown[]; issues: unknown[] }>({ cmd: 'workflow.list' })
+})
+
+ipcMain.handle('workflow.runs', async (_e, input?: { limit?: number }) => {
+  await daemonReady
+  return request<{ runs: unknown[]; active: string[] }>({
+    cmd: 'workflow.runs',
+    ...(typeof input?.limit === 'number' && Number.isFinite(input.limit) ? { limit: input.limit } : {})
+  })
+})
+
+ipcMain.handle('workflow.run', async (_e, input: Record<string, unknown>) => {
+  await daemonReady
+  if (!input || typeof input.workflowId !== 'string' || !input.workflowId) throw new Error('缺少工作流 ID')
+  if (input.inputs !== undefined && (typeof input.inputs !== 'object' || input.inputs === null || Array.isArray(input.inputs))) {
+    throw new Error('工作流输入必须是对象')
+  }
+  return request<{ runId: string; taskId: string; conversationId: string }>({
+    cmd: 'workflow.run',
+    workflowId: input.workflowId,
+    inputs: input.inputs ?? {},
+    ...(typeof input.conversationId === 'string' && input.conversationId ? { conversationId: input.conversationId } : {}),
+    ...(typeof input.runId === 'string' && input.runId ? { runId: input.runId } : {})
+  })
+})
+
+ipcMain.handle('workflow.resume', async (_e, input: { runId?: string; conversationId?: string }) => {
+  await daemonReady
+  if (!input || typeof input.runId !== 'string' || !input.runId) throw new Error('缺少运行 ID')
+  return request<{ runId: string; taskId: string; conversationId: string }>({
+    cmd: 'workflow.resume',
+    runId: input.runId,
+    ...(typeof input.conversationId === 'string' && input.conversationId ? { conversationId: input.conversationId } : {})
+  })
+})
+
+ipcMain.handle('workflow.cancel', async (_e, runId: string) => {
+  await daemonReady
+  if (typeof runId !== 'string' || !runId) throw new Error('缺少运行 ID')
+  return request<{ runId: string; cancelled: boolean }>({ cmd: 'workflow.cancel', runId })
+})
+
 ipcMain.handle('approval.respond', async (_e, input: { approvalId?: string; approved?: boolean; scope?: string }) => {
   await daemonReady
   if (!daemon?.stdin?.writable) throw new Error('daemon 未就绪')

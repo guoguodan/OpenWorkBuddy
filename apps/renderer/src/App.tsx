@@ -31,6 +31,7 @@ import {
 import { WelcomeView, type SceneId } from './components/WelcomeView'
 import { SettingsPanel, type WorkspaceSettingsInfo } from './components/SettingsPanel'
 import { AutomationPanel } from './components/AutomationPanel'
+import { WorkflowPanel } from './components/WorkflowPanel'
 import { LibraryPanel } from './components/LibraryPanel'
 import { ColleaguesPanel } from './components/ColleaguesPanel'
 import { ProjectsPanel } from './components/ProjectsPanel'
@@ -93,6 +94,7 @@ interface SystemLine {
 type Sheet =
   | 'settings'
   | 'automation'
+  | 'workflow'
   | 'library'
   | 'colleagues'
   | 'projects'
@@ -1483,6 +1485,7 @@ export default function App() {
           onOpenColleagues={() => setSheet('colleagues')}
           onOpenSkills={() => setPanel('skills')}
           onOpenAutomation={() => setSheet('automation')}
+          onOpenWorkflows={() => setSheet('workflow')}
           onOpenLibrary={() => setSheet('library')}
           onOpenMessages={() => setShowMessages(true)}
           unreadMessages={unreadNotifications}
@@ -1711,6 +1714,20 @@ export default function App() {
             <AutomationPanel
               onClose={() => setSheet(null)}
               onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
+            />
+          ) : sheet === 'workflow' ? (
+            <WorkflowPanel
+              onClose={() => setSheet(null)}
+              onNotify={(kind, text) => note(kind === 'info' ? 'info' : 'system', text)}
+              onOpenOutput={(path, title) => {
+                setSheet(null)
+                void openArtifact({
+                  id: `workflow:${path}`,
+                  kind: path.endsWith('.html') ? 'html' : 'file',
+                  title,
+                  path
+                })
+              }}
             />
           ) : sheet === 'library' ? (
             <LibraryPanel

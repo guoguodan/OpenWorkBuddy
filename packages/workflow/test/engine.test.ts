@@ -70,6 +70,26 @@ describe('workflow engine', () => {
     expect(phase?.outputs).toEqual({ angles: 'out:angles' })
   })
 
+  it('records conversation, last phase and outputs for the run list', async () => {
+    const wf = manifest(base())
+    const store = new FileRunStore(dir)
+    const engine = new WorkflowEngine(wf, makeHooks(wf, { store }))
+    const outcome = await engine.run({
+      runId: 'run-meta',
+      inputs: { question: 'q' },
+      workspaceRoot: dir,
+      conversationId: 'conv-1'
+    })
+    expect(outcome.status).toBe('done')
+
+    const record = await store.readRun('run-meta')
+    expect(record.conversationId).toBe('conv-1')
+    expect(record.lastPhase).toBe('write')
+    expect(record.outputs).toEqual([{ name: 'report', path: 'reports/run-meta/report.md' }])
+    expect(record.currentPhase).toBeUndefined()
+    expect(record.modelCalls).toBe(2)
+  })
+
   it('runs parallel phases concurrently (max 4)', async () => {
     let active = 0
     let peak = 0

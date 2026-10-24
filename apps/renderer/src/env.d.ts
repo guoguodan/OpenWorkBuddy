@@ -270,6 +270,43 @@ interface AutomationInfo {
   updatedAt: string
 }
 
+interface WorkflowPhaseInfo {
+  id: string
+  title: string
+  parallel: boolean
+  fanout?: boolean
+  steps: number
+}
+
+interface WorkflowInfo {
+  id: string
+  name: string
+  description: string
+  mode: string
+  phases: WorkflowPhaseInfo[]
+  inputs: Array<{ name: string; required: boolean; description?: string; default?: unknown }>
+  outputs: Array<{ name: string; kind: string; path?: string }>
+  scope: string
+  path: string
+}
+
+interface WorkflowRunInfo {
+  runId: string
+  workflowId: string
+  inputs: Record<string, unknown>
+  status: 'running' | 'done' | 'failed' | 'interrupted'
+  createdAt: string
+  updatedAt: string
+  completedPhases: string[]
+  currentPhase?: string
+  lastPhase?: string
+  errorCode?: string
+  errorMessage?: string
+  modelCalls: number
+  outputs?: Array<{ name: string; path: string }>
+  active: boolean
+}
+
 interface Window {
   openwb: {
     modes: {
@@ -505,6 +542,22 @@ interface Window {
       toggle: (input: { id: string; enabled: boolean }) => Promise<{ id: string; enabled: boolean }>
       remove: (id: string) => Promise<{ id: string }>
       scan: (input?: { now?: string; startup?: boolean }) => Promise<{ claimed: unknown[] }>
+    }
+    workflow: {
+      list: () => Promise<{ workflows: WorkflowInfo[]; issues: Array<{ path: string; reason: string }> }>
+      runs: (input?: { limit?: number }) => Promise<{ runs: WorkflowRunInfo[]; active: string[] }>
+      run: (input: {
+        workflowId: string
+        inputs?: Record<string, unknown>
+        conversationId?: string
+        runId?: string
+      }) => Promise<{ runId: string; taskId: string; conversationId: string }>
+      resume: (input: { runId: string; conversationId?: string }) => Promise<{
+        runId: string
+        taskId: string
+        conversationId: string
+      }>
+      cancel: (runId: string) => Promise<{ runId: string; cancelled: boolean }>
     }
     approval: {
       respond: (input: {

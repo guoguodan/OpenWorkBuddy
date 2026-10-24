@@ -68,6 +68,13 @@ contextBridge.exposeInMainWorld('openwb', {
     remove: (id: string) => ipcRenderer.invoke('automation.delete', id),
     scan: (input?: unknown) => ipcRenderer.invoke('automation.scan', input)
   },
+  workflow: {
+    list: () => ipcRenderer.invoke('workflow.list'),
+    runs: (input?: unknown) => ipcRenderer.invoke('workflow.runs', input),
+    run: (input: unknown) => ipcRenderer.invoke('workflow.run', input),
+    resume: (input: unknown) => ipcRenderer.invoke('workflow.resume', input),
+    cancel: (runId: string) => ipcRenderer.invoke('workflow.cancel', runId)
+  },
   artifact: {
     preview: (input: unknown) => ipcRenderer.invoke('artifact.preview', input),
     read: (input: unknown) => ipcRenderer.invoke('artifact.read', input),

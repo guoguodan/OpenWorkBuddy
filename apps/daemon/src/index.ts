@@ -3670,6 +3670,14 @@ async function handleCommand(msg: Record<string, unknown>, requestId: unknown): 
     return true
   }
 
+  if (msg.cmd === 'workflow.runs') {
+    if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
+    const limit = typeof msg.limit === 'number' && Number.isFinite(msg.limit) ? msg.limit : 30
+    const result = await workflowService.listRuns(limit)
+    emit({ ...base, type: 'workflow.runs', ...result })
+    return true
+  }
+
   if (msg.cmd === 'workflow.run') {
     if (!workflowService) throw new Error(fatal ?? '数据库未就绪')
     if (typeof msg.workflowId !== 'string' || msg.workflowId.length === 0) throw new Error('缺少 workflowId')

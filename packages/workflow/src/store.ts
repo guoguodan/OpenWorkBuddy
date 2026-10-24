@@ -6,6 +6,8 @@ import type { WorkflowManifest } from './manifest.js'
 export interface RunRecord {
   runId: string
   workflowId: string
+  /** 发起运行的会话;UI 可据此跳回任务 */
+  conversationId?: string
   inputs: Record<string, unknown>
   status: 'running' | 'done' | 'failed' | 'interrupted'
   createdAt: string
@@ -16,6 +18,10 @@ export interface RunRecord {
   errorMessage?: string
   /** mock / 真实模型都计数,续跑验收靠它证明上游 phase 未被重复调用 */
   modelCalls: number
+  /** 最近一次完成的 phase,用于运行列表展示进度 */
+  lastPhase?: string
+  /** 已写入的输出产物(相对工作区),续跑/列表不必重新求值表达式 */
+  outputs?: Array<{ name: string; path: string }>
 }
 
 export interface PhaseRecord {

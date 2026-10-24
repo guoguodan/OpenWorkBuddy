@@ -211,6 +211,7 @@ export class WorkflowEngine {
     const record: RunRecord = {
       runId: options.runId,
       workflowId: manifest.id,
+      ...(options.conversationId ? { conversationId: options.conversationId } : {}),
       inputs: options.inputs,
       status: 'running',
       createdAt: prior?.createdAt ?? startedAt,
@@ -274,6 +275,7 @@ export class WorkflowEngine {
             finishedAt: this.now().toISOString(),
             outputs: produced
           }
+          record.lastPhase = phase.id
           await this.hooks.store.writePhase(options.runId, phaseRecord)
           await this.hooks.store.writeRun(record)
           this.emit({ type: 'workflow.phase', runId: options.runId, phaseId: phase.id, status: 'done' }, options.runId)
@@ -344,6 +346,7 @@ export class WorkflowEngine {
     record.updatedAt = this.now().toISOString()
     record.modelCalls = modelCalls
     record.completedPhases = completedPhases
+    if (outputBindings.length > 0) record.outputs = outputBindings
     if (error) {
       record.errorCode = error.code
       record.errorMessage = error.message
